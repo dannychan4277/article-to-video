@@ -24,7 +24,7 @@ def probe(video: Path) -> dict:
         [str(ffprobe), "-v", "error", "-select_streams", "v:0", "-count_frames",
          "-show_entries", "stream=codec_name,width,height,nb_read_frames:format=duration",
          "-of", "json", str(video)],
-        capture_output=True, text=True, check=True,
+        capture_output=True, text=True, encoding="utf-8", check=True,
     ).stdout
     info = json.loads(out)
     s = info["streams"][0]

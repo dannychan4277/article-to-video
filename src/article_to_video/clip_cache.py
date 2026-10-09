@@ -138,6 +138,11 @@ def _remove_stale(paths: VariantPaths, keep: set[str]) -> None:
         for f in d.iterdir():
             if not f.is_file() or f.suffix not in _OUR_SUFFIXES:
                 continue
-            stem = f.stem[len("render-"):] if f.name.startswith("render-") else f.stem
+            if d == paths.logs:
+                if not f.name.startswith("render-"):
+                    continue  # assemble.log 這類不是片段的紀錄，留著
+                stem = f.stem[len("render-"):]
+            else:
+                stem = f.stem
             if stem not in keep:
                 f.unlink()

@@ -60,7 +60,7 @@ def word_time(seg: str, word: str, edge: str = "start", offset: float = 0.0) -> 
 
 def ffprobe(*args: str) -> str:
     exe = find_ffmpeg().with_name("ffprobe")
-    return subprocess.run([str(exe), "-v", "error", *args], capture_output=True, text=True, check=True).stdout
+    return subprocess.run([str(exe), "-v", "error", *args], capture_output=True, text=True, encoding="utf-8", check=True).stdout
 
 
 def frames_rgb(video, first: int, last: int, crop: tuple[int, int, int, int]) -> list[bytes]:
@@ -237,6 +237,13 @@ def test_continuation_starts_fully_drawn(built_project):
     assert sorted(c["kind"] for c in carried) == ["bar", "bar", "title"]
     assert all(c["at"] <= -3 for c in carried)
     assert not any(c["kind"] == "highlight" and c["at"] < 0 for c in spec["cues"])
+
+
+def test_chart_specs_default_the_axis_note_to_traditional_chinese(built_project):
+    """引擎內建的「纵轴未从 0 开始」是簡體；分鏡沒寫 axisNote 時建置要補繁中版。"""
+    for shot in ("SH01", "SH02"):
+        spec = json.loads((built_project.dir / "build" / "16x9" / "specs" / f"{shot}.json").read_text(encoding="utf-8"))
+        assert spec["data"]["axisNote"] == "縱軸未從 0 開始"
 
 
 def test_continuation_group_shares_one_continuous_push(built_project):

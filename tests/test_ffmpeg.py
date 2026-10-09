@@ -57,7 +57,7 @@ def test_found_ffmpeg_can_burn_subtitles(tmp_path):
     proc = subprocess.run(
         [str(ffmpeg), "-v", "error", "-f", "lavfi", "-i", "color=c=white:s=320x180:d=1",
          "-vf", f"subtitles=filename={srt}", "-frames:v", "1", "-y", str(out)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8",
     )
 
     assert proc.returncode == 0, proc.stderr

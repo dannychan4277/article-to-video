@@ -34,7 +34,7 @@ def default_ffmpeg_candidates() -> list[Path]:
     if brew:
         try:
             prefix = subprocess.run(
-                [brew, "--prefix"], capture_output=True, text=True, timeout=15, check=True
+                [brew, "--prefix"], capture_output=True, text=True, encoding="utf-8", timeout=15, check=True
             ).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             prefix = ""

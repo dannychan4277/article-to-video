@@ -1,0 +1,12 @@
+{
+  "name": "article-to-video",
+  "description": "把財經文章做成解說影片的 Claude Code 外掛",
+  "owner": { "name": "Danny Chan" },
+  "plugins": [
+    {
+      "name": "article-to-video",
+      "source": ".",
+      "description": "把自己的財經文章做成解說影片"
+    }
+  ]
+}
