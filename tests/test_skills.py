@@ -216,12 +216,9 @@ def test_next_steps_printed_after_a_build_are_preapproved(built_project):
 
 def test_without_uv_on_the_path_the_printed_commands_use_the_freshly_installed_uv(tmp_path):
     """官方安裝程式剛裝好 uv、這次對話的 PATH 還找不到它：印出來的下一步要寫 ~/.local/bin/uv（skill 也是這樣核准的）。"""
-    import os
     import shutil
-    import subprocess
-    import sys
 
-    from conftest import MINI_PROJECT
+    from conftest import MINI_PROJECT, run_cli
 
     home = tmp_path / "家"
     (home / ".local" / "bin").mkdir(parents=True)
@@ -229,9 +226,7 @@ def test_without_uv_on_the_path_the_printed_commands_use_the_freshly_installed_u
     (home / ".local" / "bin" / "uv").chmod(0o755)
     root = tmp_path / "專案"
     shutil.copytree(MINI_PROJECT, root)
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "HOME": str(home), "PATH": "/usr/bin:/bin"}
-    proc = subprocess.run([sys.executable, "-m", "article_to_video", "checks", str(root), "--tts", "fake"],
-                          capture_output=True, text=True, encoding="utf-8", env=env)
+    proc = run_cli("checks", root, "--tts", "fake", env={"HOME": str(home), "PATH": "/usr/bin:/bin"})
     assert proc.returncode == 1, proc.stdout + proc.stderr  # 還沒出片：叫 Claude 先 build
     [cmd] = printed_commands(proc.stderr)
     assert cmd.startswith("~/.local/bin/uv run --project ") and " build " in cmd

@@ -7,9 +7,7 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -20,9 +18,9 @@ SAMPLE = Path(__file__).resolve().parent.parent / "src" / "article_to_video" / "
 
 
 def run_cli(*args: str, env: dict | None = None) -> subprocess.CompletedProcess:
-    full = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", **(env or {})}
-    return subprocess.run([sys.executable, "-m", "article_to_video", *args], capture_output=True, text=True,
-                          encoding="utf-8", env=full, timeout=300)
+    from conftest import run_cli as run
+
+    return run(*args, env=env, timeout=300)
 
 
 def duration(video: Path) -> float:

@@ -11,10 +11,8 @@ DGS2、DGS10 2023 年日資料平均。預期值在這裡照文章手寫，不�
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
-import sys
 from datetime import date
 from collections.abc import Callable
 from pathlib import Path
@@ -157,9 +155,9 @@ def test_numbers_that_really_are_in_the_article_keep_matching(tmp_path, text, ar
 
 
 def cli(command: str, root: Path) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    return subprocess.run([sys.executable, "-m", "article_to_video", command, str(root), "--tts", "fake"],
-                          capture_output=True, text=True, encoding="utf-8", env=env)
+    from conftest import run_cli
+
+    return run_cli(command, root, "--tts", "fake")
 
 
 def edit_json(path: Path, fn: Callable[[dict], None]) -> None:

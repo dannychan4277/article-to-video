@@ -11,11 +11,8 @@ HTTP 用 127.0.0.1 上的假 FRED：伺服器照 FRED 的 fredgraph.csv 介面�
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import socket
-import subprocess
-import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import date
@@ -112,9 +109,9 @@ def test_line_chart_gets_monthly_averages_of_the_named_series(tmp_path, fred):
 
 def test_cli_builds_a_video_from_a_public_data_chart(tmp_path, fred):
     root = make_project(tmp_path, [chart_shot({"series": "THREEFYTP10", "from": "2024-12-16", "to": "2024-12-20", "every": "day"})])
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    proc = subprocess.run([sys.executable, "-m", "article_to_video", "build", str(root), "--tts", "fake"],
-                          capture_output=True, text=True, encoding="utf-8", env=env)
+    from conftest import run_cli
+
+    proc = run_cli("build", root, "--tts", "fake")
     assert proc.returncode == 0, f"建置失敗：\n{proc.stdout}\n{proc.stderr}"
     assert (root / "成片.mp4").is_file()
     spec = json.loads((root / "build" / "16x9" / "specs" / "SH01.json").read_text(encoding="utf-8"))

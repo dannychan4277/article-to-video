@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -26,19 +24,13 @@ from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.subtitles import SUBTITLE_FONT_FILE, SubtitleLine, check_libass_log, write_ass
 from article_to_video.timeline import FORMAT_9x16
 
-from conftest import MINI_PROJECT, TEST_CHANNEL
+from conftest import MINI_PROJECT, TEST_CHANNEL, run_cli
 from test_build import DUR, FPS, GAP, TAIL, ffprobe, frames_rgb
 from test_render_clip import png_size
 from test_review_page import _Parser
 
 W, H = 1080, 1920
 UI_TOP, UI_BOTTOM, UI_RIGHT = 240, 540, 140
-
-
-def run_cli(*args: str) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    return subprocess.run([sys.executable, "-m", "article_to_video", *args],
-                          capture_output=True, text=True, encoding="utf-8", env=env)
 
 
 def sha(path: Path) -> str:

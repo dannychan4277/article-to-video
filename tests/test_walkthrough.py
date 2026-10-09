@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
 import pytest
+
+from conftest import run_cli
 
 ARTICLE = """殖利率曲線倒掛：短天期為什麼比較高
 
@@ -72,10 +72,6 @@ class Walk:
     opened: list[str] = field(default_factory=list)
 
 
-def _env(**extra: str) -> dict[str, str]:
-    return {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", **extra}
-
-
 def _files(d: Path) -> dict[str, float]:
     return {str(p.relative_to(d)): p.stat().st_mtime_ns for p in d.rglob("*") if p.is_file()}
 
@@ -92,12 +88,10 @@ def walk(tmp_path_factory, videos_dir) -> Walk:
     opened_log = tmp / "opened.txt"
     (fakebin / "open").write_text(f"#!/bin/sh\necho \"$@\" >> '{opened_log}'\n", encoding="utf-8")
     (fakebin / "open").chmod(0o755)
-    opening = {k: v for k, v in _env(PATH=f"{fakebin}{os.pathsep}{os.environ['PATH']}").items()
-               if k != "ARTICLE_TO_VIDEO_NO_OPEN"}
+    opening = {"env": {"PATH": f"{fakebin}{os.pathsep}{os.environ['PATH']}"}, "unset": ("ARTICLE_TO_VIDEO_NO_OPEN",)}
 
-    def run(name: str, *args: str, stdin: str | None = None, env: dict[str, str] | None = None) -> Step:
-        proc = subprocess.run([sys.executable, "-m", "article_to_video", *args], input=stdin,
-                              capture_output=True, text=True, encoding="utf-8", env=env or _env())
+    def run(name: str, *args: str, stdin: str | None = None, env: dict | None = None) -> Step:
+        proc = run_cli(*args, stdin=stdin, **(env or {}))
         w.steps[name] = Step(proc.returncode, proc.stdout, proc.stderr)
         return w.steps[name]
 

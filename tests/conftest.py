@@ -90,17 +90,15 @@ def _block_network():
 TEST_CHANNEL = "測試頻道"
 
 
-def cli_env(**extra: str) -> dict[str, str]:
-    """跑指令列子行程用的環境：輸出一律 UTF-8，再蓋上 extra。"""
-    return {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", **extra}
-
-
-def run_cli(*args: str, env: dict[str, str] | None = None, stdin: str | None = None,
-            cwd: Path | None = None) -> subprocess.CompletedProcess:
-    """用子行程跑指令列（`python -m article_to_video …`，跟 Claude 叫的一樣），stdout、stderr 照 UTF-8 解。
-    env 是要加上去／蓋掉的環境變數。"""
-    return subprocess.run([sys.executable, "-m", "article_to_video", *args], input=stdin, capture_output=True,
-                          text=True, encoding="utf-8", env=cli_env(**(env or {})), cwd=cwd)
+def run_cli(*args: object, env: dict[str, str] | None = None, unset: tuple[str, ...] = (), stdin: str | None = None,
+            cwd: Path | None = None, timeout: float | None = None) -> subprocess.CompletedProcess:
+    """用子行程跑指令列（`python -m article_to_video …`，跟 Claude 叫的一樣），輸出一律 UTF-8。
+    env：要加上去／蓋掉的環境變數（環境在叫的當下才拿：擋網、tmp 資料位置是 session fixture 放進去的）；
+    unset：要拿掉的環境變數（例：測試「會自動打開」時拿掉 ARTICLE_TO_VIDEO_NO_OPEN）。"""
+    full = {k: v for k, v in os.environ.items() if k not in unset}
+    full.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", **(env or {})})
+    return subprocess.run([sys.executable, "-m", "article_to_video", *map(str, args)], input=stdin,
+                          capture_output=True, text=True, encoding="utf-8", env=full, cwd=cwd, timeout=timeout)
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -153,11 +151,7 @@ def built_project(tmp_path_factory, user_data_dir) -> BuiltProject:
     """把 tests/fixtures/mini_project 複製到 tmp（路徑故意帶中文和空白），用 CLI＋假配音層建置一次，整個 session 共用。"""
     root = tmp_path_factory.mktemp("影片") / "解說影片 測試" / "2026-10-09-殖利率曲線"
     shutil.copytree(MINI_PROJECT, root)
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    proc = subprocess.run(
-        [sys.executable, "-m", "article_to_video", "build", str(root), "--tts", "fake"],
-        capture_output=True, text=True, encoding="utf-8", env=env,
-    )
+    proc = run_cli("build", root, "--tts", "fake")
     assert proc.returncode == 0, f"建置失敗：\n{proc.stdout}\n{proc.stderr}"
     return BuiltProject(dir=root, video=root / "成片.mp4", srt=root / "字幕.srt", stdout=proc.stdout)
 
@@ -176,12 +170,8 @@ def previewed_project(tmp_path_factory) -> PreviewedProject:
 
     root = tmp_path_factory.mktemp("影片") / "解說影片 預覽" / "2026-10-09-殖利率曲線"
     shutil.copytree(MINI_PROJECT, root)
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     t0 = time.monotonic()
-    proc = subprocess.run(
-        [sys.executable, "-m", "article_to_video", "preview", str(root), "--tts", "fake"],
-        capture_output=True, text=True, encoding="utf-8", env=env,
-    )
+    proc = run_cli("preview", root, "--tts", "fake")
     seconds = time.monotonic() - t0
     assert proc.returncode == 0, f"預覽失敗：\n{proc.stdout}\n{proc.stderr}"
     return PreviewedProject(dir=root, stdout=proc.stdout, seconds=seconds)

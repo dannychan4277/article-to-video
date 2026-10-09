@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import itertools
-import os
 import subprocess
-import sys
 import wave
 from pathlib import Path
 
@@ -87,9 +85,9 @@ def test_loop_point_has_no_click(tracks):
 
 
 def samples(*args: str) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    return subprocess.run([sys.executable, "-m", "article_to_video", "samples", *args],
-                          capture_output=True, text=True, encoding="utf-8", env=env)
+    from conftest import run_cli
+
+    return run_cli("samples", *args)
 
 
 def test_music_samples_command_writes_one_file_per_track(tracks, tmp_path):

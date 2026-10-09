@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 
 import pytest
 
@@ -26,10 +25,10 @@ ALL_ITEMS = ["macOS", "CPU", "Python", "外掛版本", "Homebrew", "ffmpeg", "Pl
 
 def check_env(*args: str) -> subprocess.CompletedProcess:
     # 環境變數要在叫的當下才拿：conftest 的擋網設定（edge-tts proxy 指死埠）是 session fixture 才放進去的
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    assert env.get("ARTICLE_TO_VIDEO_EDGE_TTS_PROXY", "").startswith("http://127.0.0.1:")
-    return subprocess.run([sys.executable, "-m", "article_to_video", "check-env", *args],
-                          capture_output=True, text=True, encoding="utf-8", env=env, timeout=120)
+    from conftest import run_cli
+
+    assert os.environ.get("ARTICLE_TO_VIDEO_EDGE_TTS_PROXY", "").startswith("http://127.0.0.1:")
+    return run_cli("check-env", *args, timeout=120)
 
 
 class SpeakingCommunicate:

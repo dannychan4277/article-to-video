@@ -10,11 +10,9 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
 import shutil
 import subprocess
-import sys
 import zipfile
 import unicodedata
 from dataclasses import dataclass
@@ -175,9 +173,9 @@ def new_project(base: Path, shots: list[dict] | None = None, article_md: str = A
 
 
 def cli(*args: object) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    return subprocess.run([sys.executable, "-m", "article_to_video", *map(str, args)],
-                          capture_output=True, text=True, encoding="utf-8", env=env)
+    from conftest import run_cli
+
+    return run_cli(*args)
 
 
 TOKEN_RE = re.compile(r"\b(SH\d+:\d+@[0-9a-f]{8})\b")

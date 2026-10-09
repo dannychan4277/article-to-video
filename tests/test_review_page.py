@@ -236,9 +236,9 @@ def test_after_the_final_build_the_page_embeds_the_video(built_project):
 
 
 def run_cli(command: str, root: Path) -> None:
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    proc = subprocess.run([sys.executable, "-m", "article_to_video", command, str(root), "--tts", "fake"],
-                          capture_output=True, text=True, encoding="utf-8", env=env)
+    from conftest import run_cli as run
+
+    proc = run(command, root, "--tts", "fake")
     assert proc.returncode == 0, f"{command} 失敗：\n{proc.stdout}\n{proc.stderr}"
 
 
@@ -317,12 +317,11 @@ def test_cli_opens_the_review_page_in_the_browser_unless_told_not_to(previewed_p
         encoding="utf-8",
     )
     fake_open.chmod(0o755)
-    env = {k: v for k, v in os.environ.items() if k not in ("ARTICLE_TO_VIDEO_NO_OPEN", "CI")}
-    env.update(PATH=f"{bindir}{os.pathsep}{env['PATH']}", PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    from conftest import run_cli as run
 
     def preview(*extra: str, **more_env: str) -> None:
-        proc = subprocess.run([sys.executable, "-m", "article_to_video", "preview", str(root), "--tts", "fake", *extra],
-                              capture_output=True, text=True, encoding="utf-8", env={**env, **more_env})
+        proc = run("preview", root, "--tts", "fake", *extra, unset=("ARTICLE_TO_VIDEO_NO_OPEN", "CI"),
+                   env={"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}", **more_env})
         assert proc.returncode == 0, proc.stderr
 
     preview()

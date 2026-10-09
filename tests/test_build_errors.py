@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -149,10 +147,9 @@ def test_preflight_check_blocks_the_build_before_rendering(tmp_path):
 
 def test_cli_prints_error_in_chinese_without_traceback(tmp_path):
     root = make_project(tmp_path, word_not_found)
-    proc = subprocess.run(
-        [sys.executable, "-m", "article_to_video", "build", str(root), "--tts", "fake"],
-        capture_output=True, text=True, encoding="utf-8",
-    )
+    from conftest import run_cli
+
+    proc = run_cli("build", root, "--tts", "fake")
     assert proc.returncode == 1
     assert "建置失敗" in proc.stderr and "找不到「五點」" in proc.stderr
     assert "Traceback" not in proc.stderr

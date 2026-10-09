@@ -20,11 +20,9 @@ from test_public_data import fred  # noqa: F401 — 127.0.0.1 上的假 FRED（#
 
 
 def cli(*args: str, env: dict | None = None) -> subprocess.CompletedProcess:
-    full_env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", **(env or {})}
-    return subprocess.run(
-        [sys.executable, "-m", "article_to_video", *args],
-        capture_output=True, text=True, encoding="utf-8", env=full_env,
-    )
+    from conftest import run_cli
+
+    return run_cli(*args, env=env)
 
 
 def read_text(z: zipfile.ZipFile, name: str) -> str:

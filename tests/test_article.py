@@ -9,10 +9,8 @@ from __future__ import annotations
 import base64
 import io
 import json
-import os
 import re
 import subprocess
-import sys
 import unicodedata
 import zipfile
 from dataclasses import dataclass
@@ -413,9 +411,9 @@ def test_rerun_replaces_the_previous_extraction(tmp_path, sample_pdfs):
 
 
 def _cli(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    return subprocess.run([sys.executable, "-m", "article_to_video", "extract", *args], input=stdin,
-                          capture_output=True, text=True, encoding="utf-8", env=env)
+    from conftest import run_cli
+
+    return run_cli("extract", *args, stdin=stdin)
 
 
 def test_cli_extracts_a_pdf_and_reports_what_it_found(tmp_path, sample_pdfs):

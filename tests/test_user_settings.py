@@ -8,18 +8,16 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 def run(*args: str, env: dict | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess:
-    full_env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", **(env or {})}
-    return subprocess.run([sys.executable, "-m", "article_to_video", *args], capture_output=True, text=True,
-                          encoding="utf-8", env=full_env, cwd=cwd)
+    from conftest import run_cli
+
+    return run_cli(*args, env=env, cwd=cwd)
 
 
 def show(data_dir: Path) -> dict:

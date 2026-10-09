@@ -59,12 +59,9 @@ def test_cli_turns_pasted_text_into_json_with_shot_ids(tmp_path):
     shot = {"chart": {"data": {"title": "標題", "series": [{"label": "甲", "value": 1}]}, "cues": [{"at": 0, "kind": "title"}]}}
     (root / "shots.json").write_text(json.dumps({"shots": [{"id": "A1", **shot}, {"id": "B2", "start": {"segment": "s01"}, **shot}]},
                                                 ensure_ascii=False), encoding="utf-8")
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    proc = subprocess.run(
-        [sys.executable, "-m", "article_to_video", "feedback", str(root)],
-        input="審片留言｜專案｜第 1 版\n分鏡 2：換成折線圖\n整體意見：可以\n",
-        capture_output=True, text=True, encoding="utf-8", env=env,
-    )
+    from conftest import run_cli
+
+    proc = run_cli("feedback", root, stdin="審片留言｜專案｜第 1 版\n分鏡 2：換成折線圖\n整體意見：可以\n")
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout)
     assert [{k: c[k] for k in ("number", "id", "text")} for c in out["shots"]] == [{"number": 2, "id": "B2", "text": "換成折線圖"}]

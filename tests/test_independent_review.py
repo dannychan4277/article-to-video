@@ -22,11 +22,9 @@ KIT = Path("build") / "16x9" / "independent-review"
 
 
 def run_cli(*args: str, data_dir: Path | None = None) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    if data_dir is not None:
-        env["ARTICLE_TO_VIDEO_DATA"] = str(data_dir)
-    return subprocess.run([sys.executable, "-m", "article_to_video", *args], capture_output=True, text=True,
-                          encoding="utf-8", env=env)
+    from conftest import run_cli as run
+
+    return run(*args, env={"ARTICLE_TO_VIDEO_DATA": str(data_dir)} if data_dir is not None else None)
 
 
 @pytest.fixture(scope="module")

@@ -7,10 +7,7 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -149,9 +146,9 @@ def test_page_loads_nothing_from_the_network(browser, page_url):
 
 
 def _preview(root: Path) -> None:
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    proc = subprocess.run([sys.executable, "-m", "article_to_video", "preview", str(root), "--tts", "fake"],
-                          capture_output=True, text=True, encoding="utf-8", env=env)
+    from conftest import run_cli
+
+    proc = run_cli("preview", root, "--tts", "fake")
     assert proc.returncode == 0, proc.stderr
 
 

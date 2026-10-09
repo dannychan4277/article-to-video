@@ -8,10 +8,8 @@ fail 的沒處理（改掉或明確接受）就擋正式出片。
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +18,8 @@ import pytest
 from article_to_video.auto_checks import CheckReport, require_checks_cleared, run_checks
 from article_to_video.build import BlockedBuild, BuildResult, build_project
 from article_to_video.timeline import VideoFormat
+
+from conftest import run_cli
 
 SMALL = VideoFormat(name="test360", width=640, height=360, fps=30, safe_bottom=47, sub_size=18,
                     sub_margin_v=15, sub_margin_lr=20, sub_pad=4)
@@ -179,12 +179,6 @@ def test_unhandled_failures_block_the_final_build_until_they_are_accepted(lab, t
 
 
 # ---------------------------------------------------------------- 指令列（1080p 的 session 測試專案）
-
-
-def run_cli(*args: str) -> subprocess.CompletedProcess:
-    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    return subprocess.run([sys.executable, "-m", "article_to_video", *args], capture_output=True, text=True,
-                          encoding="utf-8", env=env)
 
 
 @pytest.fixture(scope="module")
