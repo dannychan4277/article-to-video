@@ -103,6 +103,13 @@ def _parser() -> argparse.ArgumentParser:
     bx.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
     bx.add_argument("--jobs", type=int, help="最多同時渲幾個片段的框靜態圖（預設 4）")
     bx.add_argument("--data-dir", help=_DATA_DIR_HELP)
+    ck = sub.add_parser("checks", help="自動檢查（出片之後跑）：每個片段跑 qa、白底片段查字幕帶，結果寫進審片頁")
+    ck.add_argument("project", help="專案資料夾")
+    ck.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
+    ck.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
+    ck.add_argument("--jobs", type=int, help="最多同時跑幾個片段的 qa（預設 4）")
+    ck.add_argument("--data-dir", help=_DATA_DIR_HELP)
+    ck.add_argument("--json", action="store_true", help="最後印 checks.json 的內容（給程式讀）")
     cb = sub.add_parser("confirm-box", help="記下 Claude 看過靜態圖、確認沒問題的框（核對代號從 boxes 指令來）")
     cb.add_argument("project", help="專案資料夾")
     cb.add_argument("tokens", nargs="*", help="核對代號，例 SH02:1@1a2b3c4d（可以一次給好幾個）")
@@ -295,6 +302,48 @@ def _boxes(args: argparse.Namespace) -> int:
     return 0
 
 
+def _refresh_review(plan, data_dir, log) -> None:
+    """自動檢查、獨立審片的結果寫進審片頁：成片還是最新的就照樣內嵌（出片後的樣子），不然是預覽的樣子。"""
+    from article_to_video.auto_checks import current_video
+    from article_to_video.review import default_contributors, make_review
+
+    review = make_review(plan, video=current_video(plan), contributors=default_contributors(data_dir), log=log)
+    log(f"審片頁已更新：{review.page}")
+
+
+def _checks(args: argparse.Namespace) -> int:
+    from article_to_video.auto_checks import clips_not_built, format_report, report_json, run_checks
+    from article_to_video.build import plan_build
+    from article_to_video.issue_report import RunRecord
+
+    rec = RunRecord(args.project, "checks",
+                    {"tts": args.tts, "jobs": args.jobs, "aspect": args.aspect.name if args.aspect else None})
+    log = rec.tee(lambda m: print(m, flush=True))
+    try:
+        plan = plan_build(args.project, tts=args.tts, fmt=args.aspect, data_dir=args.data_dir, log=log)
+        missing = clips_not_built(plan)
+        if missing:
+            raise ProjectError(
+                [f"片段 {cid} 還沒渲，或分鏡改過之後還沒重新出片" for cid in missing],
+                title="自動檢查要在出片之後跑",
+                hint=f"先跑 build（python -m article_to_video build \"{args.project}\"），出片成功再跑 checks。",
+            )
+        report = run_checks(plan, jobs=args.jobs, log=log)
+        log(format_report(plan, report))
+        _refresh_review(plan, args.data_dir, log)
+    except KNOWN_ERRORS as e:
+        rec.finish(e)
+        print(f"自動檢查失敗：{e}", file=sys.stderr)
+        return 1
+    except BaseException as e:
+        rec.finish(e, unexpected=True)
+        raise
+    rec.finish()
+    if args.json:
+        print(json.dumps(report_json(plan, report), ensure_ascii=False, indent=1))
+    return 0
+
+
 def _describe(values: dict) -> str:
     from article_to_video.music import TRACKS
     from article_to_video.user_settings import ASPECTS
@@ -378,12 +427,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"完成：{res.video}（{res.duration:.2f} 秒）")
                 print(f"字幕檔：{res.srt}")
                 failed = "成片做好了，但審片頁沒更新"
-                review = make_review(res.plan, video=res.video, contributors=default_contributors(), jobs=args.jobs,
+                review = make_review(res.plan, video=res.video, contributors=default_contributors(args.data_dir), jobs=args.jobs,
                                      log=log)
             else:
                 from article_to_video.review import preview_project
 
-                review = preview_project(args.project, tts=args.tts, contributors=default_contributors(),
+                review = preview_project(args.project, tts=args.tts, contributors=default_contributors(args.data_dir),
                                          jobs=args.jobs, data_dir=args.data_dir, fmt=args.aspect, log=log)
                 if review.plan is not None:
                     log(summary_line(review.plan))
@@ -392,7 +441,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             rec.finish(e)
             print(f"{failed}：{e}", file=sys.stderr)
             try:
-                review = make_review(e.plan, contributors=default_contributors(), jobs=args.jobs, log=log)
+                review = make_review(e.plan, contributors=default_contributors(args.data_dir), jobs=args.jobs, log=log)
                 print(f"審片頁已更新（被擋下的原因標在卡片上）：{review.page}")
             except KNOWN_ERRORS as e2:
                 print(f"審片頁也沒更新：{e2}", file=sys.stderr)
@@ -409,6 +458,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command in ("boxes", "confirm-box"):
         return _boxes(args)
+    if args.command == "checks":
+        return _checks(args)
     if args.command == "feedback":
         from pathlib import Path
 

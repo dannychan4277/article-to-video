@@ -84,13 +84,14 @@ Contributor = Callable[[BuildPlan], ReviewExtras]
 """審片頁的資料來源：拿到建置計畫（分鏡、時間軸、每個片段的 spec），回傳要加在卡片上的東西。預覽和出片都會呼叫。"""
 
 
-def default_contributors() -> list[Contributor]:
-    """指令列（preview、build）預設用的資料來源：數字對帳（#5）、Vox 框核對（#8）；自動檢查（#11）做好後加在這裡
-    （函式內 import，免得循環匯入）。"""
+def default_contributors(data_dir: str | os.PathLike | None = None) -> list[Contributor]:
+    """指令列（preview、build、checks、review-record）預設用的資料來源：數字對帳（#5）、Vox 框核對（#8）、
+    自動檢查與獨立審片（#11；data_dir＝使用者資料位置，看獨立審片有沒有關掉）。函式內 import，免得循環匯入。"""
+    from article_to_video.auto_checks import checks_contributor
     from article_to_video.boxes import boxes_contributor
     from article_to_video.numbers import number_review
 
-    return [number_review, boxes_contributor]
+    return [number_review, boxes_contributor, checks_contributor]
 
 
 def _quiet(_: str) -> None:

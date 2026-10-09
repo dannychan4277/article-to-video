@@ -11,6 +11,7 @@
       article/           文章原檔、擷取文字與原圖（文章擷取那張票放）
       public_data/       公有數據快照（<系列代號>.json：數字＋擷取日期）；抓過之後重建不用網路，刪掉就重抓
       box_checks.json    Claude 核對過的 Vox 框（依框的內容雜湊記，見 boxes.py）；不在 build/ 裡，刪 build/ 不會掉
+      check_log.json     獨立審片每一輪的結果、每個問題的處理（改好了／接受不改；見 check_log.py）；刪 build/ 不會掉
       成片.mp4           燒好字幕的成片（16:9）
       審片頁.html        給作者看的審片頁（預覽與出片都會更新）
       字幕.srt           字幕檔（檔名故意跟成片不同：同名 .srt 會被播放器自動疊上去，變成兩層字幕）
@@ -19,7 +20,9 @@
         narration/       配音層快取（依「配音層｜聲音｜語速｜文字」）與 timing.json
         vox/             原文剪報圖（excerpt-<內容雜湊>.png，跟比例無關；excerpt.py）
         16x9/、9x16/     各畫面比例的產物：specs/、clips/、logs/、fonts/、stills/、boxes/（Vox 框的靜態圖）、
-                         timeline.json、review.json、subs.*、narration.wav、soundtrack.wav
+                         timeline.json、review.json、subs.*、narration.wav、soundtrack.wav、
+                         checks/（自動檢查：qa、字幕帶的快取）、checks.json（自動檢查彙整）、
+                         independent-review/（給獨立審片 agent 的素材，見 independent_review.py）
 
 設定檔都是 UTF-8 JSON，由 Claude 寫、這裡驗證。驗證錯誤一次列出全部問題，每條都指出哪個分鏡、哪個欄位。
 """
@@ -194,6 +197,11 @@ class ProjectPaths:
     def box_checks(self) -> Path:
         """Claude 核對過的 Vox 框（依框的內容雜湊記；框改了雜湊就變，要重新核對）。"""
         return self.root / "box_checks.json"
+
+    @property
+    def check_log(self) -> Path:
+        """檢查紀錄：獨立審片每一輪的結果，和每個問題的處理（改好了／接受不改）；見 check_log.py。"""
+        return self.root / "check_log.json"
 
     @property
     def build(self) -> Path:

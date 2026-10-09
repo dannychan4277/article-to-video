@@ -152,3 +152,45 @@ def test_only_clips_that_changed_are_checked_again(lab, tmp_path):
 
 def test_the_end_card_has_no_subtitles_so_its_low_text_is_not_a_band_problem(lab):
     assert [f for f in lab.report.findings if f.clip_id == "end.card"] == []
+
+
+# ---------------------------------------------------------------- 指令列（1080p 的 session 測試專案）
+
+
+def run_cli(*args: str) -> subprocess.CompletedProcess:
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    return subprocess.run([sys.executable, "-m", "article_to_video", *args], capture_output=True, text=True,
+                          encoding="utf-8", env=env)
+
+
+@pytest.fixture(scope="module")
+def checked(built_project, tmp_path_factory) -> tuple[Path, subprocess.CompletedProcess]:
+    """session 建好的測試專案複製一份，跑一次 checks。"""
+    root = tmp_path_factory.mktemp("檢查過") / "2026-10-09-殖利率曲線"
+    shutil.copytree(built_project.dir, root)
+    proc = run_cli("checks", str(root), "--tts", "fake")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return root, proc
+
+
+def test_checks_command_reports_every_shot_and_writes_the_summary(checked):
+    root, proc = checked
+    summary = json.loads((root / "build" / "16x9" / "checks.json").read_text(encoding="utf-8"))
+    assert [(s["number"], s["id"], s["status"]) for s in summary["shots"]] == [(1, "SH01", "ok"), (2, "SH02", "ok")]
+    assert sorted(c["clip"] for c in summary["clips"]) == ["SH01", "SH02", "end.card"]
+    assert all(c["qa"]["checked"] for c in summary["clips"])
+    assert [c["clip"] for c in summary["clips"] if c["band"]["checked"]] == ["SH01", "SH02"]  # 白底、有字幕的片段
+    assert summary["findings"] == [] and summary["blocking"] == []
+    assert "分鏡 1" in proc.stdout and "分鏡 2" in proc.stdout
+
+
+def test_the_review_page_shows_the_checks_on_every_card_and_on_top(checked):
+    from test_review_page import read_review
+
+    root, _ = checked
+    page = read_review(root)
+    assert page.attrs["data-stage"] == "final" and page.videos  # 成片還是最新的：照樣內嵌
+    for card in page.cards:
+        assert "qa" in card.slots.get("checks", ""), card.slots
+        assert "字幕帶" in card.slots["checks"]
+    assert "自動檢查" in page.page_slots.get("checks", "")

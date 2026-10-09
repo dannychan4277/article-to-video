@@ -25,19 +25,35 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from article_to_video.check_log import load_log, now, resolution
 from article_to_video.clip_cache import clip_hash
 from article_to_video.clips import QA_SCRIPT, _absolutize_images
 from article_to_video.ffmpeg import find_ffmpeg
+from article_to_video.review_page import timecode
 
 if TYPE_CHECKING:
     from article_to_video.build import BuildPlan
+    from article_to_video.review import ReviewExtras
     from article_to_video.timeline import ClipPlan
 
-__all__ = ["CHECK_LABELS", "CheckReport", "ClipCheck", "Finding", "run_checks"]
+__all__ = [
+    "CHECK_LABELS",
+    "CheckReport",
+    "ClipCheck",
+    "Finding",
+    "checks_contributor",
+    "checks_json",
+    "clips_not_built",
+    "current_video",
+    "format_report",
+    "load_check_report",
+    "report_json",
+    "run_checks",
+]
 
 Log = Callable[[str], None]
 
@@ -114,10 +130,21 @@ class Finding:
     times: tuple[tuple[float, float], ...]
     """成片裡的時段（秒）。"""
     message: str
+    resolution: dict[str, Any] | None = None
+    """check_log.json 裡的處理紀錄（接受不改）；None＝還沒處理。"""
 
     @property
     def label(self) -> str:
         return CHECK_LABELS[self.check]
+
+    @property
+    def severity(self) -> str:
+        return "必修" if self.status == "fail" else "該修"
+
+    @property
+    def blocking(self) -> bool:
+        """fail 而且還沒處理：擋正式出片。"""
+        return self.status == "fail" and self.resolution is None
 
 
 @dataclass(frozen=True)
@@ -146,6 +173,18 @@ class CheckReport:
     """這次真的跑了 qa 的片段。"""
     cached: list[str] = field(default_factory=list)
     """沿用快取的片段。"""
+
+    @property
+    def unchecked(self) -> list[str]:
+        """還沒有 qa 結果的片段（片段改過、還沒重跑 checks）。"""
+        return [c.clip_id for c in self.clips if c.qa is None]
+
+    @property
+    def blocking(self) -> list[Finding]:
+        return [f for f in self.findings if f.blocking]
+
+    def for_shot(self, shot_id: str) -> list[Finding]:
+        return [f for f in self.findings if shot_id in f.shot_ids]
 
 
 # ---------------------------------------------------------------- qa
@@ -287,6 +326,7 @@ def _scan_band(plan: BuildPlan, cp: ClipPlan, ffmpeg: Path) -> dict[str, Any]:
 
 
 def _check_band(plan: BuildPlan, cp: ClipPlan, ffmpeg: Path | None) -> dict[str, Any] | None:
+    """ffmpeg＝None：只讀快取（審片頁、出片前的檢查用），沒查過的回 {"pending": True}。"""
     if not _band_px(cp):
         return None
     path = plan.paths.root / "checks" / "band" / f"{cp.id}.json"
@@ -294,7 +334,9 @@ def _check_band(plan: BuildPlan, cp: ClipPlan, ffmpeg: Path | None) -> dict[str,
     cached = _read_json(path)
     if isinstance(cached, dict) and cached.get("key") == key and isinstance(cached.get("result"), dict):
         return cached["result"]
-    if ffmpeg is None or not _clip_is_current(plan, cp):
+    if ffmpeg is None:
+        return {"top": int(cp.spec["height"]) - _band_px(cp), "pending": True}
+    if not _clip_is_current(plan, cp):
         return {"top": int(cp.spec["height"]) - _band_px(cp), "error": "這個片段還沒渲好（先出片再檢查）"}
     result = _scan_band(plan, cp, ffmpeg)
     if "error" not in result:
@@ -305,7 +347,7 @@ def _check_band(plan: BuildPlan, cp: ClipPlan, ffmpeg: Path | None) -> dict[str,
 
 def _band_findings(cc: ClipCheck) -> list[tuple[str, str, list[tuple[float, float]], str]]:
     b = cc.band
-    if not b:
+    if not b or b.get("pending"):
         return []
     if b.get("error"):
         return [("band", "fail", [], f"字幕帶檢查沒跑成：{b['error']}")]
@@ -457,20 +499,15 @@ def _shots_at(plan: BuildPlan, cc: ClipCheck, times: Sequence[tuple[float, float
     return tuple(hit) or cc.shot_ids
 
 
+
+
 # ---------------------------------------------------------------- 執行
 
 
-def run_checks(plan: BuildPlan, *, jobs: int | None = None, log: Log = _quiet) -> CheckReport:
-    """每個片段跑 qa（有快取、並行），彙整成 CheckReport。"""
+def _collect(plan: BuildPlan, *, run: bool, jobs: int | None, log: Log) -> CheckReport:
     t0 = time.monotonic()
     fps = plan.timeline.fps
     root = _qa_dir(plan)
-    root.mkdir(parents=True, exist_ok=True)
-    keep = {cp.id for cp in plan.clips}
-    for d in root.iterdir():
-        if d.is_dir() and d.name not in keep:
-            shutil.rmtree(d)
-
     results: dict[str, dict[str, Any]] = {}
     todo: list[tuple[ClipPlan, str]] = []
     cached: list[str] = []
@@ -483,19 +520,231 @@ def run_checks(plan: BuildPlan, *, jobs: int | None = None, log: Log = _quiet) -
         else:
             todo.append((cp, key))
 
-    if todo:
-        n_jobs = jobs or min(4, max(1, (os.cpu_count() or 2) // 2))
-        log(f"qa：{len(todo)} 個片段要跑（{len(cached)} 個用快取，最多同時 {n_jobs} 個）")
-        with ThreadPoolExecutor(max_workers=max(1, min(n_jobs, len(todo)))) as pool:
-            futures = {cp.id: pool.submit(_run_qa, cp, root / cp.id, plan.project.root, key) for cp, key in todo}
-            for cid, fut in futures.items():
-                results[cid] = fut.result()
-    ffmpeg = find_ffmpeg()
+    if run:
+        root.mkdir(parents=True, exist_ok=True)
+        keep = {cp.id for cp in plan.clips}
+        for d in root.iterdir():
+            if d.is_dir() and d.name not in keep:
+                shutil.rmtree(d)
+        if todo:
+            n_jobs = jobs or min(4, max(1, (os.cpu_count() or 2) // 2))
+            log(f"qa：{len(todo)} 個片段要跑（{len(cached)} 個用快取，最多同時 {n_jobs} 個）…")
+            with ThreadPoolExecutor(max_workers=max(1, min(n_jobs, len(todo)))) as pool:
+                futures = {cp.id: pool.submit(_run_qa, cp, root / cp.id, plan.project.root, key) for cp, key in todo}
+                for cid, fut in futures.items():
+                    results[cid] = fut.result()
+        else:
+            log(f"qa：{len(cached)} 個片段都沒變，用快取")
+    ffmpeg = find_ffmpeg() if run else None
     clips = [
         ClipCheck(clip_id=cp.id, shot_ids=tuple(cp.shot_ids), grammar=cp.grammar, start=cp.start_frame / fps,
                   end=cp.end_frame / fps, hash=clip_hash(cp), qa=results.get(cp.id), qa_dir=root / cp.id,
                   band=_check_band(plan, cp, ffmpeg))
         for cp in plan.clips
     ]
-    return CheckReport(format=plan.format.name, clips=clips, findings=_findings(plan, clips),
-                       seconds=round(time.monotonic() - t0, 2), ran=[cp.id for cp, _ in todo], cached=cached)
+    book = load_log(plan.project.root)
+    found = [replace(f, resolution=resolution(book, f.token)) for f in _findings(plan, clips)]
+    return CheckReport(format=plan.format.name, clips=clips, findings=found, seconds=round(time.monotonic() - t0, 2),
+                       ran=[cp.id for cp, _ in todo] if run else [], cached=cached)
+
+
+def run_checks(plan: BuildPlan, *, jobs: int | None = None, log: Log = _quiet) -> CheckReport:
+    """每個片段跑 qa、白底片段跑字幕帶檢查（有快取、並行），彙整成 CheckReport，寫 build/<比例>/checks.json。
+    字幕帶檢查看的是渲好的片段（出片之後才有）；片段還沒渲好的，那一項記成 fail「先出片再檢查」。"""
+    report = _collect(plan, run=True, jobs=jobs, log=log)
+    checks_json(plan).write_text(json.dumps(report_json(plan, report), ensure_ascii=False, indent=1), encoding="utf-8")
+    return report
+
+
+def load_check_report(plan: BuildPlan) -> CheckReport:
+    """只讀快取、不跑任何東西（審片頁、出片前的檢查用）：片段沒變的拿上次的結果，改過的算還沒檢查。"""
+    return _collect(plan, run=False, jobs=None, log=_quiet)
+
+
+def checks_json(plan: BuildPlan) -> Path:
+    return plan.paths.root / "checks.json"
+
+
+def clips_not_built(plan: BuildPlan) -> list[str]:
+    """還沒渲、或渲的是舊內容的片段 id（自動檢查要在出片之後跑）。"""
+    return [cp.id for cp in plan.clips if not _clip_is_current(plan, cp)]
+
+
+def current_video(plan: BuildPlan) -> Path | None:
+    """成片還是不是現在這份分鏡設定做出來的：每個片段都是最新的、成片比它們都新。是就回傳成片路徑。"""
+    video = plan.project.paths.video(plan.format.name)
+    if not video.is_file() or not plan.paths.final_stamp.is_file() or clips_not_built(plan):
+        return None
+    newest = max((plan.paths.clips / f"{cp.id}.sha256").stat().st_mtime for cp in plan.clips)
+    return video if video.stat().st_mtime >= newest else None
+
+
+# ---------------------------------------------------------------- 輸出
+
+
+def _shot_numbers(plan: BuildPlan) -> dict[str, int]:
+    return {st.shot.id: st.shot.number for st in plan.timeline.shots}
+
+
+def _where(plan: BuildPlan, f: Finding) -> str:
+    nums = _shot_numbers(plan)
+    shots = "、".join(f"分鏡 {nums[s]}" for s in f.shot_ids if s in nums) or "片尾卡"
+    if f.times:
+        shots += "（" + "、".join(f"{timecode(a)}–{timecode(b)}" for a, b in f.times[:3]) + "）"
+    return shots
+
+
+def _shot_status(findings: Sequence[Finding], checked: bool) -> str:
+    if not checked:
+        return "unchecked"
+    if any(f.blocking for f in findings):
+        return "fail"
+    return "warn" if findings else "ok"
+
+
+def report_json(plan: BuildPlan, report: CheckReport) -> dict[str, Any]:
+    """checks.json 的內容（給主 skill 讀）。"""
+    nums = _shot_numbers(plan)
+    root = plan.project.root
+    fps = plan.timeline.fps
+
+    def rel(p: Path) -> str:
+        return os.path.relpath(p, root).replace(os.sep, "/")
+
+    clips = []
+    for c in report.clips:
+        qa: dict[str, Any] = {"checked": c.qa is not None}
+        if c.qa is not None:
+            if c.qa.get("error"):
+                qa["error"] = c.qa["error"]
+            else:
+                qa.update({
+                    "motionPct": c.qa.get("motion_pct"), "stillPairsPct": c.qa.get("still_pairs_pct"),
+                    "spikes": len(c.qa.get("spikes_at_lt") or []), "deterministic": c.qa.get("deterministic"),
+                    "framing": len(c.qa.get("framing") or []), "pageErrors": len(c.qa.get("page_errors") or []),
+                })
+            sheet = c.qa_dir / f"{c.clip_id}.jpg"
+            if sheet.is_file():
+                qa["sheet"] = rel(sheet)
+        band: dict[str, Any] = {"checked": bool(c.band) and not c.band.get("pending") and "error" not in c.band}
+        if c.band:
+            band.update({k: v for k, v in c.band.items() if k in ("top", "hits", "seconds", "error")})
+        else:
+            band["skipped"] = ("Vox 剪報的牛皮紙紋理不適合，看 qa 的框景" if c.grammar == VOX
+                               else "這段沒有字幕" if c.grammar == CARD else "不用查")
+        clips.append({"clip": c.clip_id, "shots": list(c.shot_ids), "grammar": c.grammar,
+                      "start": round(c.start, 3), "end": round(c.end, 3), "hash": c.hash, "qa": qa, "band": band})
+    shots = []
+    for st in plan.timeline.shots:
+        fs = report.for_shot(st.shot.id)
+        checked = all(c.qa is not None for c in report.clips if st.shot.id in c.shot_ids)
+        shots.append({"number": st.shot.number, "id": st.shot.id, "start": round(st.start_frame / fps, 3),
+                      "end": round(st.end_frame / fps, 3), "status": _shot_status(fs, checked),
+                      "findings": [f.token for f in fs]})
+    findings = [{
+        "token": f.token, "source": f.source, "check": f.check, "label": f.label, "status": f.status,
+        "severity": f.severity, "clip": f.clip_id, "shots": [nums[s] for s in f.shot_ids if s in nums],
+        "shotIds": list(f.shot_ids), "times": [list(t) for t in f.times], "message": f.message,
+        "resolution": f.resolution,
+    } for f in report.findings]
+    return {
+        "version": 1, "aspect": report.format, "checkedAt": now(), "seconds": report.seconds,
+        "qaRan": report.ran, "qaCached": report.cached, "unchecked": report.unchecked,
+        "clips": clips, "shots": shots, "findings": findings, "blocking": [f.token for f in report.blocking],
+    }
+
+
+def format_report(plan: BuildPlan, report: CheckReport) -> str:
+    """指令列印給 Claude 看的彙整：每個分鏡一行，有問題的下面逐條列（含代號、對照圖）。"""
+    root = plan.project.root
+    fps = plan.timeline.fps
+    lines = [f"自動檢查（{plan.format.label}）：{len(report.clips)} 個片段，qa 這次跑了 {len(report.ran)} 個、"
+             f"{len(report.cached)} 個用快取，花 {report.seconds:.1f} 秒"]
+
+    def block(fs: Sequence[Finding], sheets: Sequence[Path]) -> None:
+        for f in fs:
+            mark = "已接受" if f.resolution else f.severity + ("，擋出片" if f.blocking else "")
+            when = "、".join(f"{timecode(a)}–{timecode(b)}" for a, b in f.times[:3])
+            lines.append(f"    {f.label}（{mark}）{when + '：' if when else '：'}{f.message}")
+            lines.append(f"      代號 {f.token}")
+        for s in sheets:
+            lines.append(f"    對照圖（四幀＋運動熱圖）：{s}")
+
+    for st in plan.timeline.shots:
+        fs = report.for_shot(st.shot.id)
+        clips = [c for c in report.clips if st.shot.id in c.shot_ids]
+        status = _shot_status(fs, all(c.qa is not None for c in clips))
+        mark = {"ok": "✓", "warn": "!", "fail": "✗", "unchecked": "?"}[status]
+        lines.append(f"  {mark} 分鏡 {st.shot.number}（{st.shot.id}）{timecode(st.start_frame / fps)}–"
+                     f"{timecode(st.end_frame / fps)}" + ("　還沒檢查" if status == "unchecked" else ""))
+        block(fs, [c.qa_dir / f"{c.clip_id}.jpg" for c in clips if fs and (c.qa_dir / f"{c.clip_id}.jpg").is_file()])
+    loose = [c for c in report.clips if not c.shot_ids]
+    for c in loose:
+        fs = [f for f in report.findings if f.clip_id == c.clip_id]
+        mark = {"ok": "✓", "warn": "!", "fail": "✗", "unchecked": "?"}[_shot_status(fs, c.qa is not None)]
+        lines.append(f"  {mark} 片尾卡 {timecode(c.start)}–{timecode(c.end)}")
+        block(fs, [c.qa_dir / f"{c.clip_id}.jpg"] if fs and (c.qa_dir / f"{c.clip_id}.jpg").is_file() else [])
+    bad = report.blocking
+    if bad:
+        lines.append(f"有 {len(bad)} 項必修沒處理，正式出片會被擋下。先打開對照圖看：真的有問題就改分鏡再出片"
+                     "（改過的片段會自動重查）；看過確定沒問題、要保留，就記下接受的理由：")
+        lines.append(f"  python -m article_to_video resolve \"{root}\" {' '.join(f.token for f in bad)} --accept \"理由\"")
+    else:
+        lines.append("沒有擋出片的問題。" if report.findings or not report.unchecked else "")
+    lines.append(f"彙整：{checks_json(plan)}")
+    return "\n".join(ln for ln in lines if ln)
+
+
+def checks_contributor(plan: BuildPlan) -> ReviewExtras:
+    """審片頁：每張卡的「checks」欄列這個分鏡的 qa、字幕帶、停太久；頁首一區自動檢查的總結。只讀快取。"""
+    from article_to_video.review import CardSection, CheckItem, ReviewExtras  # 避免循環匯入
+
+    report = load_check_report(plan)
+
+    def item(f: Finding) -> CheckItem:
+        when = "、".join(f"{timecode(a)}–{timecode(b)}" for a, b in f.times[:3])
+        if f.resolution:
+            return CheckItem(f"{f.label}：{f.message}", detail=f"已接受：{f.resolution.get('note', '')}"
+                             + (f"（{when}）" if when else ""), status="info", label="已接受")
+        return CheckItem(f"{f.label}：{f.message}", detail=when, status="block" if f.blocking else "warn",
+                         label=f.severity)
+
+    cards: dict[str, list] = {}
+    for st in plan.timeline.shots:
+        sid = st.shot.id
+        clips = [c for c in report.clips if sid in c.shot_ids]
+        fs = report.for_shot(sid)
+        items: list = []
+        if any(c.qa is None for c in clips):
+            items.append(CheckItem("還沒跑自動檢查", detail="出片之後 Claude 會跑；改過的分鏡要重跑", status="info"))
+        else:
+            qa_fs = [f for f in fs if f.source == "qa"]
+            items += [item(f) for f in qa_fs] or [CheckItem("qa：確定性、動態、跳變、框景都沒問題", status="ok")]
+            band_fs = [f for f in fs if f.source == "band"]
+            if any(c.band is not None for c in clips):
+                items += [item(f) for f in band_fs] or [CheckItem("字幕帶：沒有東西壓到字幕", status="ok")]
+            else:
+                items.append(CheckItem("字幕帶：Vox 剪報不查（牛皮紙紋理會誤報，字有沒有被字幕蓋到看 qa）", status="info"))
+        items += [item(f) for f in fs if f.source == "hold"]
+        cards[sid] = [CardSection("checks", "自動檢查", items)]
+
+    bad, warn = report.blocking, [f for f in report.findings if not f.blocking]
+    nums = _shot_numbers(plan)
+    if report.unchecked and len(report.unchecked) == len(report.clips):
+        page_items = [CheckItem("還沒跑", detail="出片之後 Claude 會跑 qa 和字幕帶檢查", status="info")]
+        note = ""
+    else:
+        page_items = [CheckItem(f"{_where(plan, f)}　{f.label}：{f.message}", status="block", label="必修")
+                      for f in bad]
+        page_items += [CheckItem(f"{_where(plan, f)}　{f.label}：{f.message}",
+                                 status="info" if f.resolution else "warn",
+                                 label="已接受" if f.resolution else f.severity) for f in warn]
+        if not page_items:
+            page_items = [CheckItem(f"{len(report.clips)} 個片段都沒問題", status="ok")]
+        if report.unchecked:
+            names = "、".join(f"分鏡 {nums[s]}" for c in report.clips if c.qa is None for s in c.shot_ids if s in nums)
+            page_items.append(CheckItem(f"還沒檢查：{names or '片尾卡'}", detail="改過之後還沒重跑", status="info"))
+        note = (f"有 {len(bad)} 項必修沒處理，正式出片會被擋下。" if bad else "")
+    page = [CardSection("checks", "自動檢查（qa、字幕帶）", page_items,
+                        note=note + "機器把每個片段重渲一遍，查畫面有沒有卡住、閃一下、字被切掉或被字幕蓋住。")]
+    return ReviewExtras(cards=cards, page=page)
