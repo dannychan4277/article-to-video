@@ -1,0 +1,20 @@
+[project]
+name = "article-to-video"
+version = "0.1.0"
+description = "把作者自己的財經文章做成解說影片的 Claude Code 外掛（財經圖表、Vox 剪報、zh-TW AI 配音）"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright==1.63.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

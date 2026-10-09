@@ -1,0 +1,29 @@
+{
+  "grammar": "t3_finance_chart",
+  "duration": 3,
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "safe": { "bottom": 140 },
+  "data": {
+    "title": "兩年期美債殖利率：2023 年平均 4.58%，圖中六年最高",
+    "unit": "美國兩年期公債殖利率，年平均（%）",
+    "source": "資料來源：FRED（DGS2），聖路易聯邦準備銀行",
+    "chart": "bar",
+    "decimals": 2,
+    "push": 0.012,
+    "series": [
+      { "label": "2019", "value": 1.97 },
+      { "label": "2020", "value": 0.39 },
+      { "label": "2021", "value": 0.27, "text": "谷底 0.27" },
+      { "label": "2022", "value": 2.99 },
+      { "label": "2023", "value": 4.58, "color": "#E3120B" },
+      { "label": "2024", "value": 4.37 }
+    ]
+  },
+  "cues": [
+    { "at": 0, "kind": "title" },
+    { "at": 0.3, "kind": "bar" },
+    { "at": 1.7, "kind": "highlight", "text": "4.58%", "sub": "2023 年平均，圖中最高", "data": { "index": 4 } }
+  ]
+}
