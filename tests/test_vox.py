@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import zipfile
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,7 @@ from article_to_video.build import BlockedBuild, build_project, plan_build
 from article_to_video.clips import FONTS_DIR
 from article_to_video.end_card import END_CARD_ID
 from article_to_video.ffmpeg import find_ffmpeg
+from article_to_video.issue_report import create_report, reproduce_report
 from article_to_video.numbers import check_numbers, reconcile
 from article_to_video.project import ProjectError
 from article_to_video.timeline import FORMAT_9x16, VideoFormat
@@ -405,6 +407,19 @@ def test_portrait_vox_keeps_the_boxes_clear_of_the_platform_ui(scenario, tmp_pat
         ys, xs = np.nonzero((a[..., 0] > 150) & (a[..., 1] > 130) & (a[..., 2] < 90))
         assert len(xs) > 2000, png
         assert xs.max() < f.width - f.safe_right and f.safe_top <= ys.min() and ys.max() < f.height - f.safe_bottom, png
+
+
+def test_reporting_an_issue_packs_the_vox_material_but_not_the_whole_article(scenario, tmp_path):
+    """回報問題：Vox 分鏡貼出來的原圖和剪報那一段要打包（不然維護者那台排不出 Vox 片段），文章全文不打包。"""
+    rep = create_report(scenario.dir, shots=["SH03"], out_dir=tmp_path)
+    with zipfile.ZipFile(rep.zip_path) as z:
+        names = set(z.namelist())
+        article = json.loads(z.read("project/article/article.json"))
+        assert z.read("project/article/images/圖1.png") == (scenario.dir / "article/images/圖1.png").read_bytes()
+    assert "project/article/text.txt" not in names and not any("source" in n for n in names)
+    assert [p["n"] for p in article["paragraphs"]] == [4]  # 只有剪報那一段
+    res = reproduce_report(rep.zip_path, out_dir=tmp_path / "重現", shots=["SH01"])
+    assert res.errors == []  # 解開就排得出整支片（含 Vox 分鏡）的計畫
 
 
 # ---------------------------------------------------------------- 數字對帳：Vox 畫面上的字

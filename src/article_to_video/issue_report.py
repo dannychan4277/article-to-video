@@ -275,6 +275,47 @@ def _raw_segment_texts(paths: ProjectPaths) -> set[str]:
     return {v for v in segs.values() if isinstance(v, str)} if isinstance(segs, dict) else set()
 
 
+def _pack_vox_article(paths: ProjectPaths) -> dict[str, bytes]:
+    """Vox 分鏡貼出來的文章原圖、原文剪報那幾段 → 精簡版 article/（{相對專案的路徑: 內容}）。
+
+    建置會解析所有 Vox 分鏡（不只出錯的那個），所以每個 Vox 分鏡用到的都要帶；但只帶畫面上貼出來的東西：
+    article.json 只留那幾張圖和剪報引用的段落，不放 text.txt、原檔（文章全文不出作者的電腦）。
+    """
+    try:
+        shots = json.loads(paths.shots.read_text(encoding="utf-8"))["shots"]
+        doc = json.loads((paths.article / "article.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    cues = [c for s in shots if isinstance(s, dict) and isinstance(s.get("vox"), dict)
+            for c in s["vox"].get("cues") or [] if isinstance(c, dict)]
+    if not cues:
+        return {}
+    figures = {c.get("image") for c in cues if c.get("kind") == "image"}
+    paragraphs = doc.get("paragraphs") or []
+    used: set[int] = set()
+    for c in cues:
+        if c.get("kind") != "excerpt":
+            continue
+        if isinstance(c.get("paragraph"), int):
+            used.add(c["paragraph"])
+        elif isinstance(c.get("quote"), str):
+            used |= {p.get("n") for p in paragraphs if c["quote"] in str(p.get("text", ""))}
+    images = [i for i in doc.get("images") or [] if (i.get("label") or f"圖{i.get('n')}") in figures]
+    out: dict[str, bytes] = {}
+    for img in images:
+        f = paths.article / str(img.get("file", ""))
+        if f.is_file():
+            out[f"article/{img['file']}"] = f.read_bytes()
+    slim = {
+        "version": doc.get("version"),
+        "note": "回報問題用的精簡版：只有 Vox 分鏡貼出來的原圖和剪報那幾段，不是全文",
+        "paragraphs": [p for p in paragraphs if p.get("n") in used],
+        "images": images,
+    }
+    out["article/article.json"] = json.dumps(slim, ensure_ascii=False, indent=1).encode("utf-8")
+    return out
+
+
 def _pack_images(paths: ProjectPaths, target: Sequence[str]) -> tuple[str, dict[str, Path], dict[str, str]]:
     """出錯分鏡引用到的圖片（任何指到圖片檔的字串）→ 要打包的圖。
 
@@ -463,6 +504,11 @@ def create_report(
                 files[f"{PROJECT_DIR}/{arcname}"] = src.read_bytes()
             if external:
                 manifest["externalImages"] = external
+            # Vox 分鏡（#8）：貼出來的原圖與剪報那幾段（精簡版 article/），重現時才排得出 Vox 片段；不放全文
+            for arcname, data in _pack_vox_article(paths).items():
+                files[f"{PROJECT_DIR}/{arcname}"] = data
+        if paths.box_checks.is_file():  # Vox 框核對紀錄（出片被擋時看得出哪些框核對過）
+            add_text(f"{PROJECT_DIR}/{paths.box_checks.name}", paths.box_checks.read_text(encoding="utf-8"))
         for variant in sorted(paths.build.glob("*/timeline.json")) if paths.build.is_dir() else []:
             vdir = variant.parent
             add_text(f"{PROJECT_DIR}/build/{vdir.name}/timeline.json", variant.read_text(encoding="utf-8"))
