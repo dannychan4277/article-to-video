@@ -2,14 +2,14 @@
 
 規則（全部量化到幀，fps 預設 30）：
 - 段落起點：第一段 0；下一段＝上一段起點＋上一段音檔長度＋段間留白（settings.gap）。
-- 旁白結束＝最後一段起點＋長度；片尾從這裡開始，長 settings.tail 秒。總幀數＝round((旁白結束＋片尾) × fps)。
+- 旁白結束＝最後一段起點＋長度；片尾卡從這裡開始，長 settings.tail 秒。總幀數＝round((旁白結束＋片尾) × fps)。
 - 錨點 → 秒數：
     沒寫 word：開頭＝段落起點；唸完＝這段最後一個詞唸完。
     有 word、edge=start：包含 word 第一個字的那個 TTS 詞開始唸的時刻，再提早 settings.lead（預設 0.15 秒，畫面先出來看起來才同步）。
     有 word、edge=end：包含 word 最後一個字的那個 TTS 詞唸完的時刻（不提早）。
   最後加上 offset。
-- 分鏡起訖：第一個分鏡從 0 開始；其他從自己的 start 錨點；結束＝下一個分鏡的起點，最後一個分鏡一路到片尾結束
-  （片尾目前是「最後一個分鏡停著」；片尾卡那張票改成獨立片段，見 Outro）。相鄰分鏡用同一個幀號接，首尾相接沒有縫。
+- 分鏡起訖：第一個分鏡從 0 開始；其他從自己的 start 錨點；結束＝下一個分鏡的起點，最後一個分鏡到旁白結束
+  （接著是片尾卡，自己一個片段，見 end_card.py）。相鄰分鏡用同一個幀號接，首尾相接沒有縫。
 - cue 的 at：數字＝片段內秒數原樣（可為負：接續分鏡用）；錨點＝換成片段內的幀再除以 fps。
   錨點落在分鏡開始前一點點（不超過 lead＋1 幀，通常是段落開頭的詞被提早）就夾到 0；更早或落在分鏡結束之後都報錯。
 - 接續分鏡（continues: true）：沿用上一個分鏡的 data（自己只能改 highlight），上一個分鏡的 cue 除了標註（highlight）
@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from article_to_video.brand import apply_brand
+from article_to_video.end_card import END_CARD_ID, plan_end_card
 from article_to_video.narration import SegmentAudio
 from article_to_video.project import Anchor, Cue, Project, ProjectError, Shot
 
@@ -109,11 +111,13 @@ class ShotTiming:
 
 @dataclass(frozen=True)
 class Outro:
-    """片尾時段。kind="hold"：最後一個分鏡停著（現在）；片尾卡那張票改成 "card"，自己渲一個片段。"""
+    """片尾時段：旁白唸完之後的片尾卡（kind="card"），自己一個片段（id＝clip）。"""
 
     start_frame: int
     frames: int
-    kind: str = "hold"
+    kind: str = "card"
+    clip: str = END_CARD_ID
+    """片尾卡的片段 id（end_card.END_CARD_ID）。"""
 
 
 @dataclass(frozen=True)
@@ -140,7 +144,8 @@ class Timeline:
             "totalFrames": self.total_frames,
             "duration": round(self.duration, 6),
             "narrationEnd": round(self.narration_end, 6),
-            "outro": {"kind": self.outro.kind, "startFrame": self.outro.start_frame, "frames": self.outro.frames},
+            "outro": {"kind": self.outro.kind, "clip": self.outro.clip, "startFrame": self.outro.start_frame,
+                      "frames": self.outro.frames},
             "segments": {k: {"start": round(s.start, 6), "duration": round(s.duration, 6), "text": s.audio.text}
                          for k, s in self.segments.items()},
             "shots": [
@@ -210,6 +215,7 @@ def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: Vid
     last = segs[list(segs)[-1]]
     narration_end = last.end
     total = _frame(narration_end + s.tail, fps)
+    outro_start = _frame(narration_end, fps)
     problems: list[str] = []
 
     starts: list[int] = []
@@ -230,7 +236,7 @@ def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: Vid
     shots: list[ShotTiming] = []
     for n, shot in enumerate(project.shots):
         f0 = starts[n]
-        f1 = starts[n + 1] if n + 1 < len(starts) else total
+        f1 = starts[n + 1] if n + 1 < len(starts) else outro_start
         if f1 <= f0:
             if n + 1 < len(starts):
                 nxt = project.shots[n + 1]
@@ -239,7 +245,10 @@ def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: Vid
                     f"切入點（{f0 / fps:.2f} 秒），{shot.id} 的長度變成 {(f1 - f0) / fps:.2f} 秒。分鏡要照旁白順序排、切入點要往後"
                 )
             else:
-                problems.append(f"{shot.label} 的切入點（{f0 / fps:.2f} 秒）在影片結束（{total / fps:.2f} 秒）之後")
+                problems.append(
+                    f"{shot.label} 的切入點（{f0 / fps:.2f} 秒）沒有早於旁白唸完（{outro_start / fps:.2f} 秒）；"
+                    "旁白唸完就接片尾卡，最後一個分鏡要在那之前切入"
+                )
             shots.append(ShotTiming(shot, f0, max(f0, f1)))
             continue
         cues: list[CueTiming] = []
@@ -254,7 +263,7 @@ def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: Vid
     if problems:
         raise ProjectError(problems, title="時間軸對不起來")
     return Timeline(fps=fps, segments=segs, shots=shots, narration_end=narration_end,
-                    outro=Outro(start_frame=_frame(narration_end, fps), frames=total - _frame(narration_end, fps)),
+                    outro=Outro(start_frame=outro_start, frames=total - outro_start),
                     total_frames=total)
 
 
@@ -306,6 +315,8 @@ class ClipPlan:
     spec: dict[str, Any]
     images: list[Path] = field(default_factory=list)
     """spec 引用的圖片（算快取雜湊用）。"""
+    sources: list[str] = field(default_factory=list)
+    """這個片段畫面上用到的資料出處，片尾卡會彙整列出（見 end_card.merge_sources）。"""
 
     @property
     def grammar(self) -> str:
@@ -348,7 +359,7 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
         if shot.chart is None:
             raise ProjectError(f"{shot.label} 是 Vox 分鏡，這版的建置還不支援 Vox，先改成財經圖表分鏡")
         data, _ = effective_chart(project.shots, n)
-        data = prepare_chart_data(data)
+        data = apply_brand(prepare_chart_data(data), project.settings.brand_color)
         g0, g1, head = chains[shot.id]
         chain_secs = (g1 - g0) / fps
         total_push = head_push.get(head)
@@ -366,7 +377,10 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
             "data": data,
             "cues": cues,
         }
-        plans.append(ClipPlan(id=shot.id, shot_ids=[shot.id], start_frame=st.start_frame, end_frame=st.end_frame, spec=spec))
+        source = data.get("source")
+        plans.append(ClipPlan(id=shot.id, shot_ids=[shot.id], start_frame=st.start_frame, end_frame=st.end_frame, spec=spec,
+                              sources=[source] if isinstance(source, str) and source.strip() else []))
+    plans.append(plan_end_card(project, timeline, fmt, plans))
     return plans
 
 

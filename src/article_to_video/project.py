@@ -5,7 +5,9 @@
     <專案>/
       narration.json     旁白稿：{"segments": {"s01": "…", "s02": "…"}}，物件順序＝播放順序
       shots.json         分鏡設定：{"shots": [ {分鏡}, … ]}
-      settings.json      設定快照（選填）：聲音、語速、配音層、段間留白、片尾長度…
+      settings.json      設定快照（選填）：建置參數（配音層、段間留白、片尾卡秒數…）＋第一次建置時從使用者設定
+                         複製來的頻道名、logo、品牌色、聲音、語速、配樂、預設比例（user_settings.py）
+      logo.png           片尾卡的 logo（設定快照的一部分，從使用者資料位置複製進來；沒設 logo 就沒有）
       article/           文章原檔、擷取文字與原圖（文章擷取那張票放）
       public_data/       公有數據快照（<系列代號>.json：數字＋擷取日期）；抓過之後重建不用網路，刪掉就重抓
       成片.mp4           燒好字幕的成片（16:9）
@@ -13,7 +15,7 @@
       字幕.srt           字幕檔（檔名故意跟成片不同：同名 .srt 會被播放器自動疊上去，變成兩層字幕）
       build/             建置產物，可整個刪掉重來
         narration/       配音層快取（依「配音層｜聲音｜語速｜文字」）與 timing.json
-        16x9/            這個畫面比例的產物：specs/、clips/、logs/、fonts/、stills/、timeline.json、review.json、subs.*、narration.wav
+        16x9/            這個畫面比例的產物：specs/、clips/、logs/、fonts/、stills/、timeline.json、review.json、subs.*、narration.wav、soundtrack.wav
 
 設定檔都是 UTF-8 JSON，由 Claude 寫、這裡驗證。驗證錯誤一次列出全部問題，每條都指出哪個分鏡、哪個欄位。
 """
@@ -62,7 +64,8 @@ CHART_DATA_KEYS = frozenset({
     "highlight", "colors", "upDown", "xAxis", "xTicks", "axisNote", "push", "publicData",
 })
 CHART_CUE_KINDS = frozenset({"title", "bar", "line", "candle", "highlight", "number"})
-SETTINGS_KEYS = frozenset({"voice", "rate", "tts", "gap", "lead", "tail"})
+SETTINGS_KEYS = frozenset({"voice", "rate", "tts", "gap", "lead", "tail",
+                           "channel", "logo", "brand_color", "music", "aspect"})
 
 _KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 _RATE_RE = re.compile(r"^[+-]\d{1,3}%$")
@@ -125,6 +128,11 @@ class VariantPaths:
     @property
     def narration_wav(self) -> Path:
         return self.root / "narration.wav"
+
+    @property
+    def soundtrack(self) -> Path:
+        """旁白＋配樂混好的立體聲音軌（設定不要配樂時沒有這個檔）。"""
+        return self.root / "soundtrack.wav"
 
     @property
     def concat_list(self) -> Path:
@@ -206,8 +214,19 @@ class Settings:
     """每段旁白之後的留白秒數（下一段的起點＝上一段起點＋長度＋留白）。"""
     lead: float = 0.15
     """錨點對到詞的「開頭」時，畫面提早這麼多秒出現，看起來才同步。"""
-    tail: float = 1.2
-    """片尾長度：最後一段旁白唸完後還停多久（之後換成片尾卡）。"""
+    tail: float = 5.0
+    """片尾卡秒數：最後一段旁白唸完之後接片尾卡，停這麼久（算進成片長度）。"""
+    # 以下是從使用者設定複製來的快照（user_settings.SNAPSHOT_KEYS，加上 voice、rate）
+    channel: str = ""
+    """頻道名（片尾卡上的名字）。"""
+    logo: str | None = None
+    """logo 檔（相對專案資料夾）。"""
+    brand_color: str | None = None
+    """品牌色 #RRGGBB，套到財經圖表主色；None＝預設紅黑白。"""
+    music: str = "calm"
+    """配樂（music.TRACKS 的名字）或 "none"。"""
+    aspect: str = "16x9"
+    """預設比例（直式那張票用）。"""
 
 
 @dataclass(frozen=True)
@@ -361,10 +380,21 @@ def _load_settings(raw: Any, overrides: Mapping[str, Any], problems: _Problems) 
         problems.add(f"語速「{s.rate}」格式不對，要寫成像 \"+5%\"、\"-10%\" 這樣")
     if s.tts not in TTS_ENGINES:
         problems.add(f"配音層「{s.tts}」不存在（可用：{'、'.join(TTS_ENGINES)}）")
-    for name, lo, hi in (("gap", 0.0, 5.0), ("lead", 0.0, 1.0), ("tail", 0.0, 30.0)):
+    for name, lo, hi in (("gap", 0.0, 5.0), ("lead", 0.0, 1.0), ("tail", 1.0, 30.0)):
         v = getattr(s, name)
         if not _is_number(v) or not lo <= v <= hi:
             problems.add(f"settings.json 的 {name} 要是 {lo:g}～{hi:g} 之間的秒數（現在是 {v!r}）")
+    from article_to_video.user_settings import SettingsError, normalize_value  # 避免循環匯入
+
+    for name in ("channel", "brand_color", "music", "aspect"):
+        v = getattr(s, name)
+        try:
+            if normalize_value(name, v) != v:
+                problems.add(f"settings.json 的 {name} 要寫成 {normalize_value(name, v)!r}（現在是 {v!r}）")
+        except SettingsError as e:
+            problems.add(f"settings.json 的 {name}：{e}")
+    if s.logo is not None and not isinstance(s.logo, str):
+        problems.add("settings.json 的 logo 要是專案資料夾裡的圖檔名（例 \"logo.png\"），或 null")
     return s
 
 

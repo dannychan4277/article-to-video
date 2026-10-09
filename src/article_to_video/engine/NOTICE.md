@@ -15,6 +15,7 @@
 | `qa.py`、`subzone_gate.py` | 片段驗收（穩定、動感、框景）、字幕帶圖形檢查 |
 | `audio/synth_template.py` | 程式作曲範本（上游 `scripts/audio/synth_艺术史速通.py`，內容沒改） |
 | `examples/t3_finance_chart.json` | 外掛自己寫的繁中財經圖表範例（數字取自 FRED 公開資料 DGS2） |
+| `clips/a2v_end_card.js` | **外掛自己寫的**片尾卡語法（不是花叔原版）：頻道名＋logo、資料來源、免責與 AI 配音聲明，沿用引擎的字型與版式工具 |
 
 沒帶的：其他語法與場景、示範片、參考影片、上游的範例資料、花叔的卡通形象與角色素材（`toon.js`、`rig_huashu.js` 等，上游明訂不隨 MIT），以及這兩種片段用不到的字型。
 
@@ -44,3 +45,5 @@ Vox 剪報 `clips/y2_vox.js`：
 - `qa.py`：`--project` 預設是本資料夾（qa.py 跟引擎放在一起）；spec、`qa.json`、`qa.md` 用 UTF-8 讀寫。
 - `subzone_gate.py`：`--ffmpeg <路徑>` 指定 ffmpeg。
 - `audio/synth_template.py` 只改了檔名。注意它會把輸出寫在腳本旁邊、需要 `soundfile`，要用請先複製出去再改。
+- `clips/t3_finance_chart.js`：`data.colors.brand` 品牌色，取代「當品牌用的紅」（頂端色條、小旗、角標、標註圓點、大數字、折線預設色）；沒寫就是原本的紅 `#E3120B`。折線下方漸層改跟著線的顏色（原本寫死紅色）。K 線漲跌的紅綠不變。
+- 配樂：外掛的 `article_to_video/music.py` 照 `audio/synth_template.py` 的樂器與混音做法改寫（加法合成、撥弦、ADSR、鋸齒鋪底、合成殘響、電平對齊與軟限幅），改用 numpy 頻域濾波、不需要 scipy／soundfile，編曲另寫成三首 8 小節可循環的原創樂句。範本檔本身沒動。

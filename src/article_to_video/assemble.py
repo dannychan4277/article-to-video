@@ -2,7 +2,7 @@
 
 - 旁白音軌：段落之間不會重疊（留白 ≥ 0），所以直接用標準庫把每段 WAV 擺到「段落起點」那個樣本，
   中間補靜音，總長補到跟畫面一樣長。逐樣本對齊，不經 ffmpeg 混音。
-  （配樂那張票在 assemble_video 加一路墊樂、壓在旁白下面。）
+  配樂在這之後由 soundtrack.mix_soundtrack 混進來（壓在旁白下面），assemble_video 拿到的是混好的音軌。
 - 接片＋燒字幕＋混音一次跑完：concat 片段（同一套渲染參數）→ subtitles 濾鏡（fontsdir 指外掛附帶字型）→
   H.264＋AAC。ffmpeg 在建置資料夾裡執行、用相對路徑，專案路徑有中文、空白、冒號都不用跳脫。
 - 燒完讀 libass 紀錄，確認字幕用的是附帶字型（subtitles.check_libass_log）。
@@ -77,7 +77,7 @@ def assemble_video(
     fps: int,
     log_path: Path,
 ) -> None:
-    """clips、narration、ass、fonts_dir 都要在 workdir 底下（會用相對路徑給 ffmpeg）。"""
+    """clips、narration（音軌：只有旁白，或旁白＋配樂混好的）、ass、fonts_dir 都要在 workdir 底下（會用相對路徑給 ffmpeg）。"""
     _prepare_fonts(fonts_dir)
 
     def rel(p: Path) -> str:

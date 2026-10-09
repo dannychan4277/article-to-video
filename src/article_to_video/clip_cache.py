@@ -1,6 +1,6 @@
 """片段快取＋並行渲染：只重渲內容有變的片段，刪掉已經不存在的分鏡留下的舊檔。
 
-快取鍵（sha256）＝ 快取版本 ＋ spec（圖片路徑換成圖片內容的雜湊，所以專案搬家不會失效）
+快取鍵（sha256）＝ 快取版本 ＋ spec（cue.image、data.image 的路徑換成圖片內容的雜湊，所以專案搬家不會失效）
                ＋ 這個片段用到的引擎檔（render.py、clip.html、clip.js、clips/<語法>.js、lib/*.js、字型）。
 檔案：specs/<片段>.json（實際給引擎的 spec）、clips/<片段>.mp4、clips/<片段>.sha256（渲成功才寫）、logs/render-<片段>.log。
 """
@@ -55,11 +55,14 @@ def _file_digest(path: Path) -> str:
 
 def clip_hash(plan: ClipPlan) -> str:
     spec = copy.deepcopy(plan.spec)
-    for cue in spec.get("cues") or []:
-        img = cue.get("image") if isinstance(cue, dict) else None
+    holders = [cue for cue in spec.get("cues") or [] if isinstance(cue, dict)]
+    if isinstance(spec.get("data"), dict):
+        holders.append(spec["data"])  # data.image：片尾卡的 logo
+    for holder in holders:
+        img = holder.get("image")
         if isinstance(img, str) and img and not img.startswith(("data:", "http:", "https:")):
             p = Path(img)
-            cue["image"] = "sha256:" + (_file_digest(p) if p.is_file() else f"missing:{img}")
+            holder["image"] = "sha256:" + (_file_digest(p) if p.is_file() else f"missing:{img}")
     payload = json.dumps(spec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     h = hashlib.sha256()
     for part in (CACHE_VERSION, payload, engine_fingerprint(plan.grammar)):

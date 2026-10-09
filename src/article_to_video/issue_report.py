@@ -212,6 +212,18 @@ def _engine_with_full_cache(paths: ProjectPaths) -> tuple[str | None, list[Path]
     return None, []
 
 
+def _snapshot_logo(paths: ProjectPaths) -> Path | None:
+    """設定快照裡的 logo 檔（只認專案資料夾裡的檔名，例 logo.png）。"""
+    try:
+        logo = json.loads(paths.settings.read_text(encoding="utf-8")).get("logo")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(logo, str) or not logo or Path(logo).name != logo:
+        return None
+    f = paths.root / logo
+    return f if f.is_file() else None
+
+
 def _write_silence(path: Path, seconds: float, rate: int = 48000) -> None:
     with wave.open(str(path), "wb") as w:
         w.setnchannels(1)
@@ -428,6 +440,10 @@ def create_report(
         for f in (paths.narration, paths.settings):
             if f.is_file():
                 add_text(f"{PROJECT_DIR}/{f.name}", f.read_text(encoding="utf-8"))
+        # 片尾卡的 logo（設定快照的一部分，#9）：沒帶的話維護者那台重現時片尾卡會說 logo 不見了
+        logo = _snapshot_logo(paths)
+        if logo is not None:
+            files[f"{PROJECT_DIR}/{logo.name}"] = logo.read_bytes()
         # 公有數據快照（公有領域、很小）：維護者那台不用重抓，數字也跟作者那台一樣
         for f in sorted(paths.public_data.glob("*.json")) if paths.public_data.is_dir() else []:
             add_text(f"{PROJECT_DIR}/public_data/{f.name}", f.read_text(encoding="utf-8"))

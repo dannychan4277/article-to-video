@@ -169,7 +169,7 @@ FPS = 30
 SH01_END = 5.7  # s02「曲線」開頭 3.7＋2.15−0.15（假配音規則）
 BAR2_AT = 3.75  # s02「十年期」開頭＋0.1 秒：第二根柱開始長
 HIGHLIGHT_AT = 2.75  # s01「四點五八」唸完：標註出現
-VIDEO_END = 8.4
+NARRATION_END = 7.2  # s02 起點 3.7＋長度 3.5：之後是片尾卡（#9），不屬於任何分鏡
 
 
 def png_rgb(path: Path, crop: tuple[int, int, int, int]) -> bytes:
@@ -195,7 +195,7 @@ SECOND_BAR = (1100, 300, 450, 440)  # 第二根柱在畫面右半邊
 
 def test_first_still_of_each_card_is_the_shots_finished_state(previewed_project):
     page = read_review(previewed_project.dir)
-    ends = {"SH01": SH01_END, "SH02": VIDEO_END}
+    ends = {"SH01": SH01_END, "SH02": NARRATION_END}
     for card in page.cards:
         _, t = card.stills[0]
         assert abs(t - (ends[card.id] - 1 / FPS)) < 0.5 / FPS, f"分鏡 {card.number} 的第一張不是最後一幀：{t}"
@@ -217,7 +217,7 @@ def test_cards_also_show_the_moment_just_before_each_later_beat(previewed_projec
 
 def test_each_card_shows_where_the_shot_sits_in_the_video(previewed_project):
     page = read_review(previewed_project.dir)
-    assert [c.timecode.strip() for c in page.cards] == ["0:00.0–0:05.7", "0:05.7–0:08.4"]
+    assert [c.timecode.strip() for c in page.cards] == ["0:00.0–0:05.7", "0:05.7–0:07.2"]
 
 
 # ---------------------------------------------------------------- 出片之後

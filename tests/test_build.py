@@ -246,6 +246,88 @@ def test_chart_specs_default_the_axis_note_to_traditional_chinese(built_project)
         assert spec["data"]["axisNote"] == "縱軸未從 0 開始"
 
 
+# ---------------------------------------------------------------- 片尾卡
+
+
+def _timeline(built_project) -> dict:
+    return json.loads((built_project.dir / "build" / "16x9" / "timeline.json").read_text(encoding="utf-8"))
+
+
+def test_end_card_follows_the_narration_and_counts_in_the_length(built_project):
+    """片尾＝最後一段旁白唸完後的片尾卡，長 tail 秒；最後一個分鏡停在片尾卡開始的地方。"""
+    tl = _timeline(built_project)
+    outro = tl["outro"]
+    narration_end = SEG_START["s02"] + DUR["s02"]  # 7.2 秒
+    assert outro["kind"] == "card"
+    assert abs(outro["startFrame"] - narration_end * FPS) <= 1
+    assert abs(outro["frames"] - TAIL * FPS) <= 1
+    assert outro["startFrame"] + outro["frames"] == tl["totalFrames"]
+    assert tl["shots"][-1]["endFrame"] == outro["startFrame"]
+
+
+def test_end_card_lists_name_sources_and_disclaimers(built_project):
+    from conftest import TEST_CHANNEL
+
+    spec_path = built_project.dir / "build" / "16x9" / "specs" / f"{_timeline(built_project)['outro']['clip']}.json"
+    shown = json.dumps(json.loads(spec_path.read_text(encoding="utf-8")), ensure_ascii=False)
+    for needle in (TEST_CHANNEL, "FRED（DGS2、DGS10），年平均自算", "僅供教育，非投資建議", "配音為 AI 合成"):
+        assert needle in shown
+    assert "來源：FRED" not in shown  # 圖上的「來源：」前綴拿掉，卡上統一寫「資料來源」
+
+
+def _gray_small(rgb: bytes, w: int, h: int):
+    import numpy as np
+
+    a = np.frombuffer(rgb, dtype=np.uint8).reshape(h, w, 3).astype(np.float32)
+    return a.reshape(h // 8, 8, w // 8, 8, 3).mean(axis=(1, 3))
+
+
+def test_final_video_ends_on_the_end_card(built_project, tmp_path):
+    """成片最後一幀＝片尾卡（跟引擎直接渲的靜幀比）；片尾卡開始前一幀還是圖表（有柱子）。"""
+    import numpy as np
+
+    from article_to_video.clips import render_stills
+
+    tl = _timeline(built_project)
+    outro = tl["outro"]
+    spec = built_project.dir / "build" / "16x9" / "specs" / f"{outro['clip']}.json"
+    t_local = (outro["frames"] - 1) / FPS
+    still = render_stills(spec, tmp_path, [t_local]).path
+    expected = subprocess.run([str(find_ffmpeg()), "-v", "error", "-i", str(still), "-f", "rawvideo",
+                               "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
+    last = tl["totalFrames"] - 1
+    [got] = frames_rgb(built_project.video, last, last, (0, 0, 1920, 1080))
+    diff = np.abs(_gray_small(got, 1920, 1080) - _gray_small(expected, 1920, 1080))
+    assert diff.mean() < 2.0 and diff.max() < 40, (diff.mean(), diff.max())
+
+    bars = (1100, 300, 450, 440)
+    before, after = frames_rgb(built_project.video, outro["startFrame"] - 1, outro["startFrame"] + 1, bars)[::2]
+    assert _bluish(before) > 500
+    assert _bluish(after) == 0
+
+
+# ---------------------------------------------------------------- 配樂
+
+
+def audio_db(video, a: float, b: float) -> float:
+    """成片 a～b 秒的聲音電平（dBFS RMS，立體聲兩聲道一起算）。"""
+    import numpy as np
+
+    raw = subprocess.run([str(find_ffmpeg()), "-v", "error", "-i", str(video), "-vn", "-ac", "2", "-ar", "48000",
+                          "-f", "s16le", "-"], capture_output=True, check=True).stdout
+    x = np.frombuffer(raw, dtype="<i2").astype(np.float64).reshape(-1, 2)[round(a * 48000): round(b * 48000)] / 32768
+    return float(20 * np.log10(np.sqrt(np.mean(np.square(x))) + 1e-12))
+
+
+def test_music_plays_softly_under_the_narration_and_comes_up_on_the_end_card(built_project):
+    """假配音層是靜音，成片裡聽到的就只有配樂：旁白時段有配樂、但壓得很低；片尾卡時明顯大聲。"""
+    under = audio_db(built_project.video, 1.0, 3.0)
+    assert -70 < under < -30
+    outro = _timeline(built_project)["outro"]["startFrame"] / FPS  # 7.2 秒
+    end_card = audio_db(built_project.video, outro + 0.3, outro + 0.45)
+    assert end_card >= under + 6
+
+
 def test_continuation_group_shares_one_continuous_push(built_project):
     vdir = built_project.dir / "build" / "16x9"
     a = json.loads((vdir / "specs" / "SH01.json").read_text(encoding="utf-8"))["data"]

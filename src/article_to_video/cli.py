@@ -1,16 +1,26 @@
 """指令列：`uv run --project <外掛根目錄> python -m article_to_video <子指令> …`
 
 子指令：
-  preview <專案資料夾> [--tts edge|fake] [--jobs N] [--no-open]   預覽：只出分鏡靜態圖＋審片頁（不渲整支片）
-  build <專案資料夾> [--tts edge|fake] [--jobs N] [--no-open]     建置成片＋字幕檔，審片頁內嵌成片
+  preview <專案資料夾> [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]   預覽：只出分鏡靜態圖＋審片頁（不渲整支片）
+  build <專案資料夾> [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]     建置成片＋字幕檔，審片頁內嵌成片
   feedback <專案資料夾> [--file 檔]                   審片頁複製出來的留言（stdin）→ JSON（格式見 feedback.py）
+  extract <專案資料夾> <文章檔|->                   擷取文章到 <專案>/article/（- ＝從標準輸入讀貼上的文字）
   report-issue [專案資料夾] [--shot 分鏡]… [--note 文字] [--out-dir 資料夾]
                                                   回報問題：打包 zip（預設放桌面）
   reproduce-issue <zip> [--out 資料夾] [--shot 分鏡]…   （維護者用）從回報的 zip 重渲出錯的分鏡
+  settings show [--json] [--data-dir D] [--project P]               看使用者設定（或某支片的設定快照）
+  settings set [--channel …] [--logo 圖檔|none] [--brand-color #RRGGBB|none] [--voice 曉臻|曉雨|雲哲]
+               [--rate +5%] [--music calm|pulse|minimal|none] [--aspect 16:9|9:16] [--data-dir D] [--project P]
+                                                                     改使用者設定；加 --project 只改那支片的快照
+  samples music --out 資料夾 [--seconds 20] [--data-dir D]           每首配樂一個試聽檔 music-<名字>.wav
+  samples voice --out 資料夾 [--rate +5%] [--text …] [--tts edge|fake] 每個聲音一個試聽檔 voice-<代號>.wav（edge 要連網）
 
 preview、build 做完會用 macOS 的 open 在預設瀏覽器打開審片頁；--no-open 或環境變數
 ARTICLE_TO_VIDEO_NO_OPEN=1（測試、CI）就不打開。preview、build 的輸出與錯誤記在
 <專案>/build/last-run.{log,json}（只留最後一次），回報問題時打包。
+
+--data-dir：使用者資料位置，主 skill 傳 ${CLAUDE_PLUGIN_DATA}；沒給就看環境變數，再沒有就用
+~/Library/Application Support/article-to-video（見 user_settings.py）。
 
 錯誤一律印繁中說明到 stderr、結束碼 1（不印 Python traceback）。
 """
@@ -18,6 +28,7 @@ ARTICLE_TO_VIDEO_NO_OPEN=1（測試、CI）就不打開。preview、build 的輸
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 
@@ -25,9 +36,22 @@ from article_to_video.assemble import AssemblyError
 from article_to_video.clips import ClipRenderError
 from article_to_video.ffmpeg import FFmpegNotFoundError
 from article_to_video.narration import TTS_ENGINES, NarrationError
-from article_to_video.project import ProjectError
+from article_to_video.project import ZH_TW_VOICES, ProjectError
+from article_to_video.user_settings import SettingsError
 
-KNOWN_ERRORS = (ProjectError, NarrationError, ClipRenderError, FFmpegNotFoundError, AssemblyError)
+KNOWN_ERRORS = (ProjectError, NarrationError, ClipRenderError, FFmpegNotFoundError, AssemblyError, SettingsError)
+
+_SET_OPTIONS = {  # 選項 → 設定鍵
+    "channel": "頻道名（片尾卡上的名字）",
+    "logo": "logo 圖檔路徑（PNG／JPG／WebP），none＝拿掉",
+    "brand_color": "品牌色色碼，例 #1A5FB4；none＝圖表用預設紅黑白",
+    "voice": "聲音：曉臻、曉雨、雲哲（或 zh-TW-…Neural 代號）",
+    "rate": "語速，例 +5%、-10%",
+    "music": "配樂：calm（沉穩鋼琴）、pulse（新聞脈動）、minimal（極簡電子）、none",
+    "aspect": "預設比例：16:9（橫式）或 9:16（直式）",
+}
+_DATA_DIR_HELP = "使用者資料位置（主 skill 傳 ${CLAUDE_PLUGIN_DATA}）"
+VOICE_SAMPLE = "大家好，歡迎來到我的頻道。今天用三分鐘，帶你看懂殖利率曲線在說什麼。"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -38,14 +62,19 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
     b.add_argument("--jobs", type=int, help="最多同時渲幾個片段（預設 3）")
     b.add_argument("--no-open", action="store_true", help="做完不要自動在瀏覽器打開審片頁")
+    b.add_argument("--data-dir", help=_DATA_DIR_HELP)
     v = sub.add_parser("preview", help="只出分鏡靜態圖與審片頁（不渲整支片）")
     v.add_argument("project", help="專案資料夾（裡面有 narration.json、shots.json）")
     v.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
     v.add_argument("--jobs", type=int, help="最多同時渲幾個分鏡的靜態圖（預設 4）")
     v.add_argument("--no-open", action="store_true", help="做完不要自動在瀏覽器打開審片頁")
+    v.add_argument("--data-dir", help=_DATA_DIR_HELP)
     f = sub.add_parser("feedback", help="把審片頁「複製給 Claude」的文字（從 stdin 讀）解析成 JSON")
     f.add_argument("project", help="專案資料夾（用來把分鏡編號對到分鏡 id）")
     f.add_argument("--file", help="從這個檔讀，不從 stdin 讀")
+    e = sub.add_parser("extract", help="擷取文章全文與原圖到 <專案>/article/")
+    e.add_argument("project", help="專案資料夾（沒有會自動建立）")
+    e.add_argument("source", help="文章檔（.pdf .docx .txt .md .html 或 Google 文件的網頁 .zip）；- ＝從標準輸入讀貼上的文字")
     r = sub.add_parser("report-issue", help="回報問題：把錯誤紀錄、分鏡設定、出錯畫面、環境檢查打包成 zip（預設放桌面）")
     r.add_argument("project", nargs="?", help="出問題的專案資料夾（沒有專案就只打包環境檢查）")
     r.add_argument("--shot", action="append", default=[], help="出錯的分鏡：id（SH03）或編號（3），可重複；不給就從最後一次建置的錯誤找")
@@ -55,6 +84,31 @@ def _parser() -> argparse.ArgumentParser:
     x.add_argument("zip", help="作者傳來的回報 zip")
     x.add_argument("--out", help="解開到哪裡（預設 zip 旁邊、同名資料夾）")
     x.add_argument("--shot", action="append", default=[], help="只重渲這些分鏡（預設是回報裡出錯的分鏡）")
+
+    s = sub.add_parser("settings", help="看或改使用者設定")
+    ss = s.add_subparsers(dest="action", required=True)
+    show = ss.add_parser("show", help="看設定")
+    show.add_argument("--json", action="store_true", help="印 JSON（給程式讀）")
+    show.add_argument("--data-dir", help=_DATA_DIR_HELP)
+    show.add_argument("--project", help="看這支片的設定快照")
+    st = ss.add_parser("set", help="改設定")
+    for key, help_ in _SET_OPTIONS.items():
+        st.add_argument("--" + key.replace("_", "-"), dest=key, help=help_)
+    st.add_argument("--data-dir", help=_DATA_DIR_HELP)
+    st.add_argument("--project", help="只改這支片的設定快照（不動使用者設定）")
+
+    sm = sub.add_parser("samples", help="產生試聽檔（安裝時挑聲音、挑配樂用）")
+    sms = sm.add_subparsers(dest="what", required=True)
+    pm = sms.add_parser("music", help="每首配樂一個試聽檔")
+    pm.add_argument("--out", required=True, help="試聽檔放哪個資料夾")
+    pm.add_argument("--seconds", type=float, default=20.0, help="每個試聽檔幾秒（預設 20）")
+    pm.add_argument("--data-dir", help=_DATA_DIR_HELP)
+    pvv = sms.add_parser("voice", help="每個聲音一個試聽檔（edge-tts 要連網）")
+    pvv.add_argument("--out", required=True, help="試聽檔放哪個資料夾")
+    pvv.add_argument("--rate", default=None, help="語速（預設用使用者設定）")
+    pvv.add_argument("--text", default=VOICE_SAMPLE, help="試聽唸的句子")
+    pvv.add_argument("--tts", choices=sorted(TTS_ENGINES), default="edge")
+    pvv.add_argument("--data-dir", help=_DATA_DIR_HELP)
     return p
 
 
@@ -66,6 +120,87 @@ def _show_review(page, *, no_open: bool) -> None:
         return
     if not open_in_browser(page):
         print("沒能自動打開審片頁，請在 Finder 找到上面這個檔案，點兩下打開。")
+
+
+def _samples(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    if args.what == "music":
+        from article_to_video.music import TRACKS, write_preview
+
+        for name, track in TRACKS.items():
+            f = write_preview(name, out / f"music-{name}.wav", args.seconds, args.data_dir)
+            print(f"{track.label}（{name}）：{track.mood}\n  {f}")
+        return 0
+
+    from article_to_video.narration import get_tts_engine, narrate
+    from article_to_video.user_settings import load_user_settings, normalize_value, resolve_data_dir
+
+    rate = normalize_value("rate", args.rate) if args.rate else load_user_settings(args.data_dir).rate
+    cache = resolve_data_dir(args.data_dir) / "previews" / "voice-cache"
+    for vid, name in ZH_TW_VOICES.items():
+        audio = narrate({"sample": args.text}, engine=get_tts_engine(args.tts), voice=vid, rate=rate, cache_dir=cache)
+        f = out / f"voice-{vid}.wav"
+        f.write_bytes(audio["sample"].audio.read_bytes())
+        print(f"{name}（{vid}）：\n  {f}")
+    return 0
+
+
+def _describe(values: dict) -> str:
+    from article_to_video.music import TRACKS
+    from article_to_video.user_settings import ASPECTS
+
+    music = values.get("music")
+    lines = [
+        f"頻道名：{values.get('channel') or '（還沒設定：片尾卡要用，請設定）'}",
+        f"logo：{values.get('logo') or '（沒有）'}",
+        f"品牌色：{values.get('brand_color') or '（沒設定：圖表用預設紅黑白）'}",
+        f"聲音：{ZH_TW_VOICES.get(values.get('voice'), '?')}（{values.get('voice')}）",
+        f"語速：{values.get('rate')}",
+        f"配樂：{'不要配樂' if music == 'none' else f'{TRACKS[music].label}（{music}）' if music in TRACKS else music}",
+        f"預設比例：{ASPECTS.get(values.get('aspect'), values.get('aspect'))}",
+    ]
+    return "\n".join("  " + ln for ln in lines)
+
+
+def _settings(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from article_to_video.project import SETTINGS_FILE
+    from article_to_video.user_settings import (
+        SNAPSHOT_KEYS, load_user_settings, resolve_data_dir, update_project_settings, update_user_settings,
+    )
+
+    if args.action == "set":
+        changes = {k: getattr(args, k) for k in _SET_OPTIONS if getattr(args, k) is not None}
+        if not changes:
+            print("沒有要改的設定（例：settings set --voice 曉雨）", file=sys.stderr)
+            return 1
+        if args.project:
+            snap = update_project_settings(args.project, changes)
+            print(f"已更新這支片的設定快照：{Path(args.project) / SETTINGS_FILE}")
+            print(_describe({k: snap.get(k) for k in SNAPSHOT_KEYS}))
+        else:
+            us = update_user_settings(changes, args.data_dir)
+            print(f"已更新使用者設定：{resolve_data_dir(args.data_dir) / 'settings.json'}")
+            print(_describe(us.to_json()))
+        return 0
+
+    if args.project:
+        path = Path(args.project) / SETTINGS_FILE
+        values = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        where = f"這支片的設定快照（{path}）"
+    else:
+        values = load_user_settings(args.data_dir).to_json()
+        where = f"使用者設定（{resolve_data_dir(args.data_dir) / 'settings.json'}）"
+    if args.json:
+        print(json.dumps(values, ensure_ascii=False, indent=1))
+    else:
+        print(where)
+        print(_describe(values))
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -88,7 +223,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 from article_to_video.build import build_project
                 from article_to_video.review import make_review
 
-                res = build_project(args.project, tts=args.tts, jobs=args.jobs, log=log)
+                res = build_project(args.project, tts=args.tts, jobs=args.jobs, data_dir=args.data_dir, log=log)
                 print(f"完成：{res.video}（{res.duration:.2f} 秒）")
                 print(f"字幕檔：{res.srt}")
                 failed = "成片做好了，但審片頁沒更新"
@@ -98,7 +233,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 from article_to_video.review import preview_project
 
                 review = preview_project(args.project, tts=args.tts, contributors=default_contributors(),
-                                         jobs=args.jobs, log=log)
+                                         jobs=args.jobs, data_dir=args.data_dir, log=log)
         except KNOWN_ERRORS as e:
             rec.finish(e)
             print(f"{failed}：{e}", file=sys.stderr)
@@ -110,7 +245,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         _show_review(review.page, no_open=args.no_open)
         return 0
     if args.command == "feedback":
-        import json
         from pathlib import Path
 
         from article_to_video.feedback import parse_feedback, project_shot_ids
@@ -131,6 +265,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         print(json.dumps(out, ensure_ascii=False, indent=1))
         return 0
+    if args.command == "extract":
+        from article_to_video.article import run_extract
+
+        return run_extract(args.project, args.source)
     if args.command == "report-issue":
         from article_to_video.issue_report import create_report
 
@@ -170,4 +308,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("重現出錯誤：\n" + "\n\n".join(res.errors), file=sys.stderr)
             return 1
         return 0
+    if args.command == "settings":
+        try:
+            return _settings(args)
+        except SettingsError as e:
+            print(f"設定失敗：{e}", file=sys.stderr)
+            return 1
+    if args.command == "samples":
+        try:
+            return _samples(args)
+        except KNOWN_ERRORS as e:
+            print(f"試聽檔產生失敗：{e}", file=sys.stderr)
+            return 1
     return 2
