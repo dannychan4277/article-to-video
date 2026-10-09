@@ -33,13 +33,37 @@ _PREFIX_RE = re.compile(r"^\s*(?:資料來源|数据来源|資料出處|來源|�
 _GROUP_RE = re.compile(r"^(?P<name>[^（(]+?)\s*[（(](?P<items>[^（()）]+)[）)](?P<rest>.*)$")
 
 
+_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z][A-Z0-9]*)?$")
+"""數列代號，例 DGS10、THREEFYTP10。"""
+_FIGURE_RE = re.compile(r"^圖\s*(\d+)$")
+_PARAGRAPH_RE = re.compile(r"^第\s*(\d+)\s*段$")
+
+
+def _references(items: list[str]) -> bool:
+    """括號裡每一項都是代號、圖號或段號（可以合併的那種），不是說明文字。"""
+    return bool(items) and all(_CODE_RE.match(x) or _FIGURE_RE.match(x) or _PARAGRAPH_RE.match(x) for x in items)
+
+
+def _format_references(items: list[str]) -> str:
+    """代號照第一次出現的順序；圖號、段號各自從小排到大：「圖1、圖2、第 4、16、19 段」。"""
+    codes = [x for x in items if _CODE_RE.match(x)]
+    figures = sorted({int(m[1]) for x in items if (m := _FIGURE_RE.match(x))})
+    paragraphs = sorted({int(m[1]) for x in items if (m := _PARAGRAPH_RE.match(x))})
+    parts = codes + [f"圖{n}" for n in figures]
+    if paragraphs:
+        parts.append(f"第 {'、'.join(map(str, paragraphs))} 段")
+    return "、".join(parts)
+
+
 def merge_sources(texts: Iterable[str]) -> list[str]:
     """圖上的來源列 → 片尾卡的來源清單。
 
     - 拿掉「來源：」「資料來源：」這類前綴（卡上統一有「資料來源」小標）。一列就是一個出處
       （公有數據自動寫的來源行用「；」分欄：「FRED，聯準會（DGS10）；月平均；2026-10-09 擷取」，不拆）。
     - 一模一樣的只留一個，順序照第一次出現。
-    - 同一個出處、括號裡列代號的合併：「FRED（DGS2）」＋「FRED（DGS10）」→「FRED（DGS2、DGS10）」（括號後面的說明要一樣）。
+    - 同一個出處、括號裡只列代號／圖號／段號的合併（括號後面的說明要一樣）：「FRED（DGS2）」＋「FRED（DGS10）」→
+      「FRED（DGS2、DGS10）」；Vox 的「作者原文（第 4 段）」「作者原文（圖1）」→「作者原文（圖1、第 4 段）」。
+    - 括號裡是說明文字的（圖表自己寫的「作者原文（FRED 日資料年平均）」）照原樣一列，不拆、不跟別人併。
     """
     entries: list[str] = []
     for raw in texts:
@@ -52,17 +76,17 @@ def merge_sources(texts: Iterable[str]) -> list[str]:
     groups: dict[tuple[str, str], list[str]] = {}
     for t in entries:
         m = _GROUP_RE.match(t)
-        if not m:
+        items = [x.strip() for x in re.split(r"[、,，]", m["items"]) if x.strip()] if m else []
+        if not m or not _references(items):
             merged.append(t)
             continue
         key = (m["name"].strip(), m["rest"])
-        items = [x.strip() for x in re.split(r"[、,，]", m["items"]) if x.strip()]
         if key in groups:
             groups[key].extend(x for x in items if x not in groups[key])
         else:
             groups[key] = list(dict.fromkeys(items))
             merged.append(key)
-    return [f"{k[0]}（{'、'.join(groups[k])}）{k[1]}" if isinstance(k, tuple) else k for k in merged]
+    return [f"{k[0]}（{_format_references(groups[k])}）{k[1]}" if isinstance(k, tuple) else k for k in merged]
 
 
 def missing_channel_error(project_root: Path, data_dir: str | os.PathLike | None = None) -> ProjectError:
