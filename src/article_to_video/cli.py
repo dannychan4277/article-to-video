@@ -6,6 +6,8 @@
   settings set [--channel …] [--logo 圖檔|none] [--brand-color #RRGGBB|none] [--voice 曉臻|曉雨|雲哲]
                [--rate +5%] [--music calm|pulse|minimal|none] [--aspect 16:9|9:16] [--data-dir D] [--project P]
                                                                      改使用者設定；加 --project 只改那支片的快照
+  preview music --out 資料夾 [--seconds 20] [--data-dir D]           每首配樂一個試聽檔 music-<名字>.wav
+  preview voice --out 資料夾 [--rate +5%] [--text …] [--tts edge|fake] 每個聲音一個試聽檔 voice-<代號>.wav（edge 要連網）
 
 --data-dir：使用者資料位置，主 skill 傳 ${CLAUDE_PLUGIN_DATA}；沒給就看環境變數，再沒有就用
 ~/Library/Application Support/article-to-video（見 user_settings.py）。
@@ -59,7 +61,49 @@ def _parser() -> argparse.ArgumentParser:
         st.add_argument("--" + key.replace("_", "-"), dest=key, help=help_)
     st.add_argument("--data-dir")
     st.add_argument("--project", help="只改這支片的設定快照（不動使用者設定）")
+
+    pv = sub.add_parser("preview", help="產生試聽檔（安裝時挑聲音、挑配樂用）")
+    ps = pv.add_subparsers(dest="what", required=True)
+    pm = ps.add_parser("music", help="每首配樂一個試聽檔")
+    pm.add_argument("--out", required=True, help="試聽檔放哪個資料夾")
+    pm.add_argument("--seconds", type=float, default=20.0, help="每個試聽檔幾秒（預設 20）")
+    pm.add_argument("--data-dir")
+    pvv = ps.add_parser("voice", help="每個聲音一個試聽檔（edge-tts 要連網）")
+    pvv.add_argument("--out", required=True)
+    pvv.add_argument("--rate", default=None, help="語速（預設用使用者設定）")
+    pvv.add_argument("--text", default=VOICE_SAMPLE, help="試聽唸的句子")
+    pvv.add_argument("--tts", choices=sorted(TTS_ENGINES), default="edge")
+    pvv.add_argument("--data-dir")
     return p
+
+
+VOICE_SAMPLE = "大家好，歡迎來到我的頻道。今天用三分鐘，帶你看懂殖利率曲線在說什麼。"
+
+
+def _preview(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    if args.what == "music":
+        from article_to_video.music import TRACKS, write_preview
+
+        for name, track in TRACKS.items():
+            f = write_preview(name, out / f"music-{name}.wav", args.seconds, args.data_dir)
+            print(f"{track.label}（{name}）：{track.mood}\n  {f}")
+        return 0
+
+    from article_to_video.narration import get_tts_engine, narrate
+    from article_to_video.user_settings import load_user_settings, normalize_value, resolve_data_dir
+
+    rate = normalize_value("rate", args.rate) if args.rate else load_user_settings(args.data_dir).rate
+    cache = resolve_data_dir(args.data_dir) / "previews" / "voice-cache"
+    for vid, name in ZH_TW_VOICES.items():
+        audio = narrate({"sample": args.text}, engine=get_tts_engine(args.tts), voice=vid, rate=rate, cache_dir=cache)
+        f = out / f"voice-{vid}.wav"
+        f.write_bytes(audio["sample"].audio.read_bytes())
+        print(f"{name}（{vid}）：\n  {f}")
+    return 0
 
 
 def _describe(values: dict) -> str:
@@ -141,5 +185,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _settings(args)
         except SettingsError as e:
             print(f"設定失敗：{e}", file=sys.stderr)
+            return 1
+    if args.command == "preview":
+        try:
+            return _preview(args)
+        except KNOWN_ERRORS as e:
+            print(f"試聽檔產生失敗：{e}", file=sys.stderr)
             return 1
     return 2
