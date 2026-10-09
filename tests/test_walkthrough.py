@@ -71,7 +71,7 @@ class Walk:
     mtimes: dict[str, dict[str, float]] = field(default_factory=dict)
     opened: list[str] = field(default_factory=list)
     pages: dict[str, str] = field(default_factory=dict)
-    """那一步做完時的審片頁（HTML）。"""
+    """那一步做完時的審片頁（HTML），或版本紀錄（review.json，名字結尾 -state）。"""
 
 
 def _files(d: Path) -> dict[str, float]:
@@ -129,6 +129,7 @@ def walk(tmp_path_factory, videos_dir) -> Walk:
                                       encoding="utf-8")
     run("lint2", "lint", str(p))
     run("preview2", "preview", str(p), "--no-open", "--data-dir", str(data))
+    w.pages["preview2-state"] = (p / "build" / "16x9" / "review.json").read_text(encoding="utf-8")
     w.mtimes["after"] = {**{f"stills/{k}": v for k, v in _files(p / "build" / "16x9" / "stills").items()},
                          **{f"narration/{k}": v for k, v in _files(p / "build" / "narration").items()}}
     # 6. 作者點頭之前不能出片：版本對不上、這支片還沒做過獨立審片（預設開著的使用者設定）
@@ -194,7 +195,7 @@ def test_second_preview_redraws_only_the_changed_shot_and_revoices_only_the_chan
     pv = walk.steps["preview2"]
     assert pv.code == 0, pv.err
     assert "第 2 版" in pv.out and "（SH02）：" in pv.out and "（SH01）：" not in pv.out
-    state = json.loads((walk.project / "build" / "16x9" / "review.json").read_text(encoding="utf-8"))
+    state = json.loads(walk.pages["preview2-state"])
     assert state["version"] == 2 and state["changed"] == ["SH02"]
     before, after = walk.mtimes["before"], walk.mtimes["after"]
     sh01 = [k for k in before if k.startswith("stills/SH01/")]
