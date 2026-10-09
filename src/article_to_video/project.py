@@ -385,6 +385,18 @@ def load_project(root: str | Path, *, overrides: Mapping[str, Any] | None = None
     return Project(paths=paths, segments=segments, shots=shots, settings=settings)
 
 
+def load_narration(root: str | Path, *, overrides: Mapping[str, Any] | None = None) -> Project:
+    """只讀旁白稿與設定快照（配音在寫分鏡之前，那時還沒有 shots.json）：shots 是空的。錯誤同 load_project。"""
+    paths = ProjectPaths(Path(root).absolute())
+    if not paths.root.is_dir():
+        raise ProjectError(f"找不到專案資料夾 {paths.root}")
+    problems = _Problems()
+    segments = _load_segments(_read_json(paths.narration, "旁白稿"), problems)
+    settings = _load_settings(_read_json(paths.settings, "設定快照", required=False), overrides or {}, problems)
+    problems.raise_if_any()
+    return Project(paths=paths, segments=segments, shots=[], settings=settings)
+
+
 def _load_segments(raw: Any, problems: _Problems) -> dict[str, str]:
     if not isinstance(raw, dict) or not isinstance(raw.get("segments"), dict):
         problems.add('narration.json 要長這樣：{"segments": {"s01": "第一段旁白", "s02": "…"}}')

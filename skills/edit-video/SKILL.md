@@ -19,6 +19,7 @@ allowed-tools:
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings *)
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-frames *)
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video extract *)
+  - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video narrate *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video projects *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video outline *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video feedback *)
@@ -36,6 +37,7 @@ allowed-tools:
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-frames *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video extract *)
+  - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video narrate *)
   - Read(~/Movies/解說影片/**)
   - Edit(~/Movies/解說影片/**)
 ---
@@ -83,6 +85,12 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video feedback "<專
 
 ```
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video lint "<專案>"
+```
+
+  再配音（只重配改到的段），看新的秒數調錨點、框和下一件的間隔：
+
+```
+uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video narrate "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
 - **只改他說的**：沒提到的分鏡、旁白段一個字都不要動——沒動的不會重配音、不會重渲，也不會被標成「這版改過」。

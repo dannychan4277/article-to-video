@@ -90,6 +90,19 @@ def _block_network():
 TEST_CHANNEL = "測試頻道"
 
 
+def cli_env(**extra: str) -> dict[str, str]:
+    """跑指令列子行程用的環境：輸出一律 UTF-8，再蓋上 extra。"""
+    return {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", **extra}
+
+
+def run_cli(*args: str, env: dict[str, str] | None = None, stdin: str | None = None,
+            cwd: Path | None = None) -> subprocess.CompletedProcess:
+    """用子行程跑指令列（`python -m article_to_video …`，跟 Claude 叫的一樣），stdout、stderr 照 UTF-8 解。
+    env 是要加上去／蓋掉的環境變數。"""
+    return subprocess.run([sys.executable, "-m", "article_to_video", *args], input=stdin, capture_output=True,
+                          text=True, encoding="utf-8", env=cli_env(**(env or {})), cwd=cwd)
+
+
 @pytest.fixture(autouse=True, scope="session")
 def videos_dir(tmp_path_factory):
     """影片資料夾（新專案、出片的位置）一律放 tmp，絕不寫進真正的 ~/Movies/解說影片；子行程也吃得到。"""

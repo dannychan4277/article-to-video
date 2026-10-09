@@ -17,6 +17,7 @@ allowed-tools:
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video open-review *)
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-frames *)
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video extract *)
+  - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video narrate *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video projects *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video new *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video lint *)
@@ -32,6 +33,7 @@ allowed-tools:
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video open-review *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-frames *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video extract *)
+  - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video narrate *)
   - Read(~/Movies/解說影片/**)
   - Edit(~/Movies/解說影片/**)
 ---
@@ -83,27 +85,38 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video lint "<專案>
 
 改到「要改 0 項」為止；「看一下」的逐條判斷。lint 查不到的（用詞、有沒有加主張）自己對照文章逐句查。
 
-## 4. 寫分鏡
+## 4. 配音（寫分鏡之前）
+
+```
+uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video narrate "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
+```
+
+要連網（edge-tts），約十幾秒。它印出：
+
+- **總長**：不在 2–4 分鐘就回第 3 步調旁白，再配一次（只有改到的段會重配）。
+- **每段在成片裡從幾秒起、多長**，和**每個詞開始唸的秒數**。寫分鏡時用它：錨點的 `word` 要是旁白裡的字；
+  一句一個畫面事件、約 5 秒沒有新東西就太久；Vox 的框跟下一件素材至少隔 2 秒——直接拿這些秒數算，不要猜。
+
+## 5. 寫分鏡
 
 照 `${CLAUDE_PLUGIN_ROOT}/skills/make-video/references/storyboard-rules.md`（一句一張圖、圖型有變化、標註寫意思…）、
 `${CLAUDE_PLUGIN_ROOT}/skills/make-video/references/vox-rules.md`（講到文章的圖就用 Vox）寫 `<專案>/shots.json`，
 格式見 `formats.md`。用公有數據畫走勢時第一次要連網。
 
-## 5. 預覽：配音、分鏡靜態圖、數字對帳（先不給作者看）
+## 6. 預覽：分鏡靜態圖、數字對帳（先不給作者看）
 
 ```
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video preview "<專案>" --no-open --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-- 設定寫錯會一次列出全部問題（哪個分鏡、哪個欄位），照著改再跑。
-- 看「總長」：不在 2–4 分鐘就回去調旁白。
+- 設定寫錯會一次列出全部問題（哪個分鏡、哪個欄位），照著改再跑。配音用第 4 步配好的，不會重配。
 - 看「數字對帳」那行：有「找不到出處」的數字，改成文章裡的數字，或在那個分鏡宣告算式（`derived`）。
   對帳的規則：正負號要跟文章一樣；四捨五入只能少寫幾位、至少留兩位有效數字（4.58 寫成 4.6 可以，寫成 5 不行）；
   詞裡的中文數字（十年期、兩年期）不算數字，對不到它。差值、變號、換單位都是推算，要宣告算式。
 - 它會印每個分鏡完成狀態那張靜態圖的路徑：**每一張都用 Read 看**，照 storyboard-rules.md 最後的檢查清單。
   有問題改 shots.json 再預覽（只有改到的分鏡會重渲，幾秒鐘）。
 
-## 6. 框核對（有 Vox 框才要）
+## 7. 框核對（有 Vox 框才要）
 
 ```
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video boxes "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
@@ -115,7 +128,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video boxes "<專案
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video confirm-box "<專案>" SH05:1@xxxxxxxx --note "框在哪個數字上"
 ```
 
-## 7. 建置審片用的成片 → 自動檢查 → 獨立審片
+## 8. 建置審片用的成片 → 自動檢查 → 獨立審片
 
 這一步的成片只在專案資料夾裡給審片用，**還不是出片**（作者點頭之後才出片）。
 
@@ -124,7 +137,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video build "<專案
 ```
 
 第一次要渲每個片段，3 分鐘的片要幾分鐘：用 Bash 的背景執行（run_in_background），等的時候跟作者說一聲。
-被擋下（數字對帳、框核對）就照訊息改、回到第 5 步。
+被擋下（數字對帳、框核對）就照訊息改、回到第 6 步。
 接著照 `${CLAUDE_PLUGIN_ROOT}/skills/make-video/references/checks-and-review.md` 做完：
 
 ```
@@ -148,16 +161,16 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-prep "<
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-record "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-必修改好之後記下來。你覺得不用改的要留給作者決定（第 8 步問他）；還有沒處理的必修時 build 會被擋，
-這時先做第 8 步（審片頁用靜態圖給他看），他決定了再回來 build：
+必修改好之後記下來。你覺得不用改的要留給作者決定（第 9 步問他）；還有沒處理的必修時 build 會被擋，
+這時先做第 9 步（審片頁用靜態圖給他看），他決定了再回來 build：
 
 ```
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video resolve "<專案>" R1-2 --fixed "怎麼改的"
 ```
 
-改了分鏡或旁白就回到第 5 步（預覽、看改到的靜態圖），再 build、checks；改得多再審一輪。
+改了旁白就回到第 4 步（配音，看秒數、調錨點），只改分鏡就回到第 6 步（預覽、看改到的靜態圖），再 build、checks；改得多再審一輪。
 
-## 8. 打開審片頁給作者看
+## 9. 打開審片頁給作者看
 
 ```
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video open-review "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
@@ -181,6 +194,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video open-review "<
 
 ## 大概要多久（Danny 的 Mac 量的，給作者一個預期）
 
-- 預覽：第一次 20 個分鏡約 15 秒（配音要連網再加十幾秒），之後只改幾個分鏡幾秒鐘。
+- 配音：3 分鐘的旁白第一次十幾秒（要連網），之後只重配改到的段。
+- 預覽：第一次 20 個分鏡約 15 秒，之後只改幾個分鏡幾秒鐘。
 - 第一次建置 3 分鐘的片：幾分鐘（圖表片段一個約 5 秒；Vox 剪報段落慢很多，一段可能半分鐘以上）。
 - 自動檢查第一次約 1 分鐘；獨立審片素材約 10 秒，加上審片員看片的時間。

@@ -238,6 +238,15 @@ def test_without_uv_on_the_path_the_printed_commands_use_the_freshly_installed_u
     assert_preapproved(cmd)
 
 
+def test_the_main_skill_voices_the_narration_before_writing_the_storyboard():
+    """規格的流程：配音 → 分鏡 → 分鏡靜態圖。Claude 寫錨點、算框的間隔時要知道每個詞在第幾秒。"""
+    _, _, body = parse_skill("make-video")
+    narrate = body.index("article_to_video narrate")
+    shots = body.index("寫 `<專案>/shots.json`")
+    preview = body.index("article_to_video preview")
+    assert body.index("article_to_video lint") < narrate < shots < preview
+
+
 def test_json_formats_in_the_skill_docs_are_valid_projects(tmp_path):
     """formats.md 的 narration.json、shots.json 範例照抄就是能讀的專案（Claude 照著寫不會一開始就錯）。"""
     from article_to_video.project import load_project

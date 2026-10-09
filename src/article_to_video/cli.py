@@ -27,6 +27,8 @@
   resolve <專案資料夾> <代號>… (--fixed 說明 | --accept 理由) [--by 作者|Claude]
                                                   記下必修的處理：改好了（獨立審片）或接受不改；記了就不再擋出片
   lint <專案資料夾>                                 旁白規則檢查（narration.json；規則見 lint.py）；有要改的結束碼 1
+  narrate <專案資料夾> [--tts edge|fake] [--data-dir D]
+                                                  配音（寫分鏡之前）：每段配好音，印總長、每段起點與長度、每個詞開始唸的秒數
   feedback <專案資料夾> [--file 檔]                   審片頁複製出來的留言（stdin）→ JSON（格式見 feedback.py）：
                                                   每則對到分鏡 id、種類、畫面上的字、唸到的旁白段與文字
   outline <專案資料夾>                              每個分鏡的編號、種類、畫什麼、唸哪幾個旁白段（照編號改舊片時用）
@@ -185,6 +187,10 @@ def _parser() -> argparse.ArgumentParser:
     pj.add_argument("query", nargs="?", default="", help="只列標題含這幾個字的")
     pj.add_argument("--root", help="影片資料夾（預設 ~/Movies/解說影片）")
     pj.add_argument("--json", action="store_true", help="印 JSON（給程式讀）")
+    na = sub.add_parser("narrate", help="配音（寫分鏡之前）：每段旁白配好音，印出每段的起點、長度與每個詞開始唸的秒數")
+    na.add_argument("project", help="專案資料夾（裡面有 narration.json；還不用有 shots.json）")
+    na.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
+    na.add_argument("--data-dir", help=_DATA_DIR_HELP)
     ln = sub.add_parser("lint", help="旁白規則檢查：narration.json 每個旁白段的字數、斷句、數字寫法、套話、開場")
     ln.add_argument("project", help="專案資料夾（裡面有 narration.json）")
     ol = sub.add_parser("outline", help="列出每個分鏡：編號、種類、畫什麼、唸哪幾個旁白段（照分鏡編號改的時候用）")
@@ -432,6 +438,27 @@ def _samples(args: argparse.Namespace) -> int:
         f = out / f"voice-{vid}.wav"
         f.write_bytes(audio["sample"].audio.read_bytes())
         print(f"{name}（{vid}）：\n  {f}")
+    return 0
+
+
+def _narrate(args: argparse.Namespace) -> int:
+    """配音（寫分鏡之前）：印總長、每段起點與長度、每個詞開始唸的秒數。"""
+    from article_to_video.build import format_voicing, voice_narration
+    from article_to_video.issue_report import RunRecord
+
+    rec = RunRecord(args.project, "narrate", {"tts": args.tts})
+    log = rec.tee(lambda m: print(m, flush=True))
+    try:
+        voicing = voice_narration(args.project, tts=args.tts, data_dir=args.data_dir, log=log)
+    except KNOWN_ERRORS as e:
+        rec.finish(e)
+        print(f"配音失敗：{e}", file=sys.stderr)
+        return 1
+    except BaseException as e:
+        rec.finish(e, unexpected=True)
+        raise
+    log(format_voicing(voicing))
+    rec.finish()
     return 0
 
 
@@ -747,6 +774,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         rec.finish()
         _show_review(review.page, no_open=args.no_open, version=review.version)
         return 0
+    if args.command == "narrate":
+        return _narrate(args)
     if args.command == "publish":
         return _publish(args)
     if args.command == "open-review":

@@ -26,17 +26,20 @@ from article_to_video.end_card import missing_channel_error
 from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.music import TRACKS, ensure_track
 from article_to_video.narration import SegmentAudio, get_tts_engine, narrate, write_timing
-from article_to_video.project import Project, ProjectError, VariantPaths, load_project
+from article_to_video.project import Project, ProjectError, VariantPaths, load_narration, load_project
 from article_to_video.public_data import PublicChart, resolve_public_data
 from article_to_video.subtitles import (
     SUBTITLE_FONT_FAMILY, missing_subtitle_glyphs, subtitle_lines, write_ass, write_srt,
 )
 from article_to_video.soundtrack import mix_soundtrack
-from article_to_video.timeline import FORMATS, ClipPlan, Timeline, VideoFormat, build_timeline, plan_clips
+from article_to_video.timeline import (
+    FORMATS, ClipPlan, SegmentTiming, Timeline, VideoFormat, build_timeline, plan_clips, segment_timings,
+)
 from article_to_video.user_settings import snapshot_into_project
 from article_to_video.vox import VoxPlan, resolve_vox
 
-__all__ = ["BlockedBuild", "BuildPlan", "BuildResult", "build_project", "plan_build"]
+__all__ = ["BlockedBuild", "BuildPlan", "BuildResult", "Voicing", "build_project", "format_voicing", "plan_build",
+           "voice_narration"]
 
 Log = Callable[[str], None]
 
@@ -89,6 +92,88 @@ def _quiet(_: str) -> None:
     pass
 
 
+def _snapshot(project_dir: str | os.PathLike, data_dir: str | os.PathLike | None, log: Log) -> None:
+    """專案還沒有設定快照（或缺欄位）就從使用者設定補上。"""
+    added = snapshot_into_project(project_dir, data_dir)
+    if added:
+        log(f"設定快照：從使用者設定補上 {'、'.join(added)}（之後改使用者設定不會影響這支片）")
+
+
+def _voice(project: Project, ffmpeg: Path | None, log: Log) -> dict[str, SegmentAudio]:
+    """配音層：字幕字型涵蓋檢查 → 每段配音（有快取）→ timing.json。配音（narrate）和建置計畫共用這一段。"""
+    missing = missing_subtitle_glyphs(project.segments)
+    if missing:
+        raise ProjectError(
+            [f"旁白段 {k} 有字幕字型沒有的字：{chars}" for k, chars in missing.items()],
+            title="旁白有字幕打不出來的字",
+            hint=f"字幕字型是外掛附帶的 {SUBTITLE_FONT_FAMILY}（常用繁體、簡體字都有）。修法：把這些字換成常用字，或改寫那句旁白。",
+        )
+    s = project.settings
+    engine = get_tts_engine(s.tts)
+    cached_n = 0
+
+    def seg_done(key: str, cached: bool) -> None:
+        nonlocal cached_n
+        cached_n += cached
+
+    audio = narrate(project.segments, engine=engine, voice=s.voice, rate=s.rate,
+                    cache_dir=project.paths.narration_cache, ffmpeg=ffmpeg, on_segment=seg_done)
+    write_timing(audio, project.paths.narration_cache / "timing.json")
+    log(f"配音（{engine.name}，{s.voice}，語速 {s.rate}）：{len(audio)} 段，{len(audio) - cached_n} 段新配、{cached_n} 段用快取")
+    return audio
+
+
+@dataclass(frozen=True)
+class Voicing:
+    """配音的結果（寫分鏡之前）：每段在成片裡的起點、長度、每個詞的時間點。"""
+
+    project: Project
+    segments: dict[str, SegmentTiming]
+
+    @property
+    def narration_end(self) -> float:
+        return list(self.segments.values())[-1].end
+
+    @property
+    def duration(self) -> float:
+        """成片大概多長：旁白＋片尾（分鏡不影響長度）。"""
+        return self.narration_end + self.project.settings.tail
+
+
+def voice_narration(
+    project_dir: str | os.PathLike,
+    *,
+    tts: str | None = None,
+    data_dir: str | os.PathLike | None = None,
+    log: Log = _quiet,
+) -> Voicing:
+    """配音（指令列 narrate）：寫完旁白稿、還沒寫分鏡就配。只要 narration.json 與設定快照（沒有就從使用者設定補）；
+    跟預覽、建置同一個快取，之後 preview／build 不會重配。"""
+    _snapshot(project_dir, data_dir, log)
+    project = load_narration(project_dir, overrides={"tts": tts})
+    audio = _voice(project, None, log)
+    return Voicing(project, segment_timings(project, audio))
+
+
+def _clock(t: float) -> str:
+    m, s = divmod(t, 60)
+    return f"{int(m)}:{s:04.1f}"
+
+
+def format_voicing(v: Voicing) -> str:
+    """narrate 印給 Claude 的：總長、每段的起點與長度、每個詞在成片裡開始唸的秒數（寫錨點、算框和下一件的間隔用）。"""
+    s = v.project.settings
+    lines = [f"總長 {v.duration:.1f} 秒（{_clock(v.duration)}）：旁白 {v.narration_end:.1f} 秒＋片尾 {s.tail:g} 秒。"
+             "不在 2–4 分鐘就先改旁白，再寫分鏡。",
+             "每段在成片裡從幾秒起、多長；底下是每個詞開始唸的秒數（成片裡的時間）。"
+             f"每個詞的起訖（每段從 0 算）在 {v.project.paths.narration_cache / 'timing.json'}："]
+    for key, seg in v.segments.items():
+        a = seg.audio
+        lines.append(f"{key}（{seg.start:.2f} 秒起，{seg.duration:.2f} 秒）{a.text}")
+        lines.append("  " + "｜".join(f"{a.text[w.start_char:w.end_char]} {seg.start + w.start:.2f}" for w in a.words))
+    return "\n".join(lines)
+
+
 def plan_build(
     project_dir: str | os.PathLike,
     *,
@@ -103,9 +188,7 @@ def plan_build(
     fmt：畫面比例（timeline.FORMATS；指令列 --aspect）。不給就用設定快照的 aspect（使用者設定的預設比例），
     都沒有就是 16:9。產物分開放在 build/<比例>/，兩種比例可以並存。
     """
-    added = snapshot_into_project(project_dir, data_dir)
-    if added:
-        log(f"設定快照：從使用者設定補上 {'、'.join(added)}（之後改使用者設定不會影響這支片）")
+    _snapshot(project_dir, data_dir, log)
     project = load_project(project_dir, overrides={"tts": tts})
     if not project.settings.channel.strip():  # 片尾卡要用；配音、抓公有數據之前就先講
         raise missing_channel_error(project.root, data_dir)
@@ -115,26 +198,7 @@ def plan_build(
     if fmt is None:
         fmt = FORMATS[s.aspect]
 
-    missing = missing_subtitle_glyphs(project.segments)
-    if missing:
-        raise ProjectError(
-            [f"旁白段 {k} 有字幕字型沒有的字：{chars}" for k, chars in missing.items()],
-            title="旁白有字幕打不出來的字",
-            hint=f"字幕字型是外掛附帶的 {SUBTITLE_FONT_FAMILY}（常用繁體、簡體字都有）。修法：把這些字換成常用字，或改寫那句旁白。",
-        )
-
-    engine = get_tts_engine(s.tts)
-    cached_n = 0
-
-    def seg_done(key: str, cached: bool) -> None:
-        nonlocal cached_n
-        cached_n += cached
-
-    audio = narrate(project.segments, engine=engine, voice=s.voice, rate=s.rate,
-                    cache_dir=project.paths.narration_cache, ffmpeg=ffmpeg, on_segment=seg_done)
-    write_timing(audio, project.paths.narration_cache / "timing.json")
-    log(f"配音（{engine.name}，{s.voice}，語速 {s.rate}）：{len(audio)} 段，{len(audio) - cached_n} 段新配、{cached_n} 段用快取")
-
+    audio = _voice(project, ffmpeg, log)
     timeline = build_timeline(project, audio, fmt)
     clips = plan_clips(project, timeline, fmt)
     vp = project.paths.variant(fmt.name)

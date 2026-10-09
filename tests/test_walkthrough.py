@@ -1,5 +1,5 @@
-"""照主 skill 的順序把指令列走一遍（#13）：new → lint → preview → 給作者看 → 審片留言 → 改 → 只重渲改到的 →
-作者點頭 → publish（建置＋自動檢查＋放進「影片／解說影片／日期-標題」）。
+"""照主 skill 的順序把指令列走一遍（#13）：new → lint → narrate（配音，寫分鏡之前）→ 寫分鏡 → preview → 給作者看 →
+審片留言 → 改 → 只重渲改到的 → 作者點頭 → publish（建置＋自動檢查＋放進「影片／解說影片／日期-標題」）。
 
 Claude 寫 JSON 的那幾步由測試代寫（照 skills/make-video/references/formats.md 的格式）。配音用假配音層。
 文章是自己寫的；數字是 FRED DGS2／DGS10 2023 年日資料的年平均（4.58／3.96，相差 0.62，跟其他測試同一組）。
@@ -113,9 +113,11 @@ def walk(tmp_path_factory, videos_dir) -> Walk:
     # 2. Claude 寫旁白 → 旁白規則檢查
     (p / "narration.json").write_text(json.dumps({"segments": NARRATION}, ensure_ascii=False), encoding="utf-8")
     run("lint", "lint", str(p))
-    # 3. Claude 寫分鏡（測試專案：假配音、片尾短一點）→ 預覽：配音＋分鏡靜態圖＋數字對帳，先不給作者看
-    (p / "shots.json").write_text(json.dumps(SHOTS, ensure_ascii=False), encoding="utf-8")
+    # 3. 配音（測試專案：假配音、片尾短一點）：還沒有分鏡，拿到總長與每個詞的秒數
     (p / "settings.json").write_text(json.dumps({"tts": "fake", "tail": 1.2}), encoding="utf-8")
+    run("narrate", "narrate", str(p), "--data-dir", str(data))
+    # 4. Claude 照秒數寫分鏡 → 預覽：分鏡靜態圖＋數字對帳（配音用第 3 步的），先不給作者看
+    (p / "shots.json").write_text(json.dumps(SHOTS, ensure_ascii=False), encoding="utf-8")
     run("preview", "preview", str(p), "--no-open", "--data-dir", str(data))
     # 4. 檢查都做完了，打開審片頁給作者看
     run("open-review", "open-review", str(p), "--data-dir", str(data), env=opening)
@@ -155,6 +157,14 @@ def test_narration_passes_the_rules_before_voicing(walk):
     for name in ("lint", "lint2"):
         assert walk.steps[name].code == 0, walk.steps[name].out
         assert "要改 0 項" in walk.steps[name].out
+
+
+def test_narration_is_voiced_before_the_storyboard_is_written(walk):
+    st = walk.steps["narrate"]
+    assert st.code == 0, st.err
+    assert "總長" in st.out and "s01（0.00 秒起" in st.out and "s02（" in st.out
+    assert "2 段新配" in st.out
+    assert "0 段新配、2 段用快取" in walk.steps["preview"].out  # 預覽用的就是那份配音
 
 
 def test_first_preview_is_checked_before_the_author_sees_it(walk):

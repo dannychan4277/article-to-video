@@ -183,3 +183,35 @@ def test_fake_engine_ignores_voice_but_returns_known_word_times(tmp_path):
     syn = FakeTTS().synthesize("走高。", voice="x", rate="+0%", out_stem=tmp_path / "a")
     assert isinstance(syn, Synthesis)
     assert syn.words == [WordTiming(0, 1, 0.1, 0.3), WordTiming(1, 2, 0.3, 0.5)]
+
+
+# ---------------------------------------------------------------- 配音在分鏡之前（指令列 narrate）
+
+
+def test_narration_is_voiced_before_any_storyboard_exists(tmp_path):
+    """寫完旁白稿就配音：還沒有 shots.json，印出每段在成片裡的起點、長度和每個詞開始唸的秒數（寫錨點、算框的間隔用），
+    之後預覽直接用這份配音、不再重配。預期時間照假配音層的規則（test_build.fake_times）自己算。"""
+    from article_to_video.build import plan_build
+
+    from conftest import run_cli
+    from test_build import DUR, GAP, NARRATION, SEG_START, TAIL, fake_times
+
+    root = tmp_path / "專案"
+    shutil.copytree(MINI_PROJECT, root)
+    (root / "shots.json").unlink()
+    proc = run_cli("narrate", str(root), "--tts", "fake")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    out = proc.stdout
+    total = DUR["s01"] + GAP + DUR["s02"] + TAIL
+    assert f"總長 {total:.1f} 秒" in out
+    for seg in ("s01", "s02"):
+        assert f"{seg}（{SEG_START[seg]:.2f} 秒起，{DUR[seg]:.2f} 秒）" in out
+    starts, _, _ = fake_times(NARRATION["s02"])
+    i = NARRATION["s02"].index("倒")
+    assert f"倒 {SEG_START['s02'] + starts[i]:.2f}" in out  # 詞在成片裡開始唸的秒數
+    assert (root / "build" / "narration" / "timing.json").is_file()
+
+    (root / "shots.json").write_text((MINI_PROJECT / "shots.json").read_text(encoding="utf-8"), encoding="utf-8")
+    logged: list[str] = []
+    plan_build(root, tts="fake", log=logged.append)
+    assert any("0 段新配、2 段用快取" in line for line in logged), logged

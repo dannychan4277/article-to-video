@@ -44,6 +44,7 @@ __all__ = [
     "build_timeline",
     "effective_chart",
     "plan_clips",
+    "segment_timings",
     "video_format",
 ]
 
@@ -268,13 +269,19 @@ def _describe(a: Anchor) -> str:
     return f"{a.segment}「{a.word}」{'開頭' if a.edge == 'start' else '唸完'}"
 
 
-def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: VideoFormat = FORMAT_16x9) -> Timeline:
-    s, fps = project.settings, fmt.fps
+def segment_timings(project: Project, audio: Mapping[str, SegmentAudio]) -> dict[str, SegmentTiming]:
+    """每段旁白在成片裡的起點：第一段 0，下一段＝上一段起點＋長度＋段間留白（settings.gap）。"""
     segs: dict[str, SegmentTiming] = {}
     t = 0.0
     for key in project.segments:
         segs[key] = SegmentTiming(key, t, audio[key])
-        t += audio[key].duration + s.gap
+        t += audio[key].duration + project.settings.gap
+    return segs
+
+
+def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: VideoFormat = FORMAT_16x9) -> Timeline:
+    s, fps = project.settings, fmt.fps
+    segs = segment_timings(project, audio)
     last = segs[list(segs)[-1]]
     narration_end = last.end
     total = _frame(narration_end + s.tail, fps)
