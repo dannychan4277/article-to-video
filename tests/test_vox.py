@@ -24,13 +24,14 @@ import pytest
 from PIL import Image, ImageDraw, ImageFont
 
 from article_to_video.article import extract_article
-from article_to_video.boxes import box_statuses
+from article_to_video.boxes import box_statuses, confirm_boxes, project_boxes
 from article_to_video.build import BlockedBuild, build_project, plan_build
 from article_to_video.clips import FONTS_DIR
+from article_to_video.end_card import END_CARD_ID
 from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.numbers import check_numbers, reconcile
 from article_to_video.project import ProjectError
-from article_to_video.timeline import VideoFormat
+from article_to_video.timeline import FORMAT_9x16, VideoFormat
 
 FPS = 30
 GAP = 0.4
@@ -185,6 +186,7 @@ class Scenario:
     dir: Path
     video: Path
     specs: Path
+    plan: object
     preview: subprocess.CompletedProcess
     blocked: subprocess.CompletedProcess
     listing: subprocess.CompletedProcess
@@ -203,7 +205,7 @@ def scenario(tmp_path_factory) -> Scenario:
     assert listing.returncode == 0, listing.stderr
     confirmed = cli("confirm-box", root, *TOKEN_RE.findall(listing.stdout))
     res = build_project(root, tts="fake", fmt=SMALL)
-    return Scenario(dir=root, video=res.video, specs=res.plan.paths.specs, preview=preview, blocked=blocked,
+    return Scenario(dir=root, video=res.video, specs=res.plan.paths.specs, plan=res.plan, preview=preview, blocked=blocked,
                     listing=listing, confirmed=confirmed)
 
 
@@ -269,6 +271,11 @@ def test_continued_vox_shot_has_no_cut(scenario):
     assert mean_diff(fr[hard - 1], fr[hard]) > 20
 
 
+def test_article_material_is_credited_on_the_end_card(scenario):
+    [card] = [c for c in scenario.plan.clips if c.id == END_CARD_ID]
+    assert "作者原文（圖1、第 4 段）" in card.spec["data"]["sources"]
+
+
 def test_vox_camera_drifts_slowly_while_holding_on_an_image(scenario):
     """圖貼好之後、下一件素材來之前，鏡頭停在圖上慢慢推近：畫面在動，但動得很少。"""
     a, b = frame(SEG_START["s02"] + 0.7), frame(SEG_START["s02"] + 1.4)  # 框在 1.6 秒才來
@@ -328,6 +335,23 @@ def test_checking_every_box_unblocks_the_final_build(scenario):
     assert scenario.video.is_file()
 
 
+def test_box_followed_too_soon_by_the_next_item_blocks_the_final_build(tmp_path):
+    """框跟下一件素材至少隔 2 秒：SH03 的剪報改成一切進來就貼，SH02 的框之後只隔 1.9 秒 → 正式出片擋下。"""
+    shots = scenario_shots()
+    shots[2]["vox"]["cues"][0]["at"] = 0
+    root = new_project(tmp_path, shots)
+    confirm_boxes(root, [b.token for b in project_boxes(root)[1]])  # 框本身核對過，只剩時間不夠
+    gaps = {s.box.id: s.gap for s in box_statuses(plan_build(root, tts="fake"))}
+    expected = SEG_START["s03"] - word_time("s02", "三點九六")
+    assert expected < 2 and abs(gaps["SH02:1"] - expected) <= 1 / FPS
+    assert gaps["SH03:1"] >= 2
+    with pytest.raises(BlockedBuild) as e:
+        build_project(root, tts="fake", fmt=SMALL)
+    msg = str(e.value)
+    assert "SH02:1" in msg and "2 秒" in msg
+    assert "SH03:1" not in msg and "✗ 還沒核對" not in msg
+
+
 def edit_box(root: Path, shot_id: str, **changes: object) -> None:
     doc = json.loads((root / "shots.json").read_text(encoding="utf-8"))
     for shot in doc["shots"]:
@@ -363,6 +387,26 @@ def test_box_over_a_legend_swatch_gets_a_warning(tmp_path):
     assert warned["SH02:2"] == []  # 深藍色的數字
 
 
+def test_portrait_vox_keeps_the_boxes_clear_of_the_platform_ui(scenario, tmp_path):
+    """直式：框的靜態圖照直式渲（1080×1920），螢光筆在平台介面區與字幕帶之外。核對過的框不用因為換比例重核
+    （核對的是「框在原圖的哪裡」，跟比例無關）。"""
+    root = tmp_path / "直式"
+    shutil.copytree(scenario.dir, root)
+    out = cli("boxes", root, "--aspect", "9:16", "--tts", "fake")
+    assert out.returncode == 0, out.stderr
+    assert "✗ 還沒核對" not in out.stdout and out.stdout.count("✓ 已核對") == len(BOX_IDS)
+    f = FORMAT_9x16
+    screens = [p for p in still_paths(out.stdout) if "畫面" in p.name]
+    assert len(screens) == len(BOX_IDS) and all("9x16" in str(p) for p in screens)
+    for png in screens:
+        with Image.open(png) as im:
+            assert im.size == (1080, 1920)
+            a = np.asarray(im.convert("RGB")).astype(int)
+        ys, xs = np.nonzero((a[..., 0] > 150) & (a[..., 1] > 130) & (a[..., 2] < 90))
+        assert len(xs) > 2000, png
+        assert xs.max() < f.width - f.safe_right and f.safe_top <= ys.min() and ys.max() < f.height - f.safe_bottom, png
+
+
 # ---------------------------------------------------------------- 數字對帳：Vox 畫面上的字
 
 def test_numbers_on_vox_cards_and_clippings_are_reconciled(tmp_path):
@@ -388,6 +432,45 @@ def test_numbers_on_vox_cards_and_clippings_are_reconciled(tmp_path):
     with pytest.raises(BlockedBuild) as e:
         build_project(root, tts="fake", fmt=SMALL, preflight=[check_numbers])
     assert "索引卡" in str(e.value) and "3.1" in str(e.value)
+
+
+# ---------------------------------------------------------------- 寫錯的 Vox 分鏡設定：繁中說明哪個分鏡哪裡錯
+
+
+def _cues(shots: list[dict], i: int) -> list[dict]:
+    return shots[i]["vox"]["cues"]
+
+
+def _box_alone(sh: list[dict]) -> None:
+    _cues(sh, 1)[:] = [_cues(sh, 1)[1]]
+
+
+BAD_SETUPS = {
+    "沒有這張圖": (lambda sh: _cues(sh, 1)[0].update(image="圖9"), "文章裡沒有「圖9」"),
+    "引文不在文章裡": (lambda sh: _cues(sh, 2)[0].update(quote="不存在的句子"), "找不到「不存在的句子」"),
+    "框前面沒有圖": (_box_alone, "前面沒有圖或剪報"),
+    "原圖用 find": (lambda sh: (_cues(sh, 1)[1].pop("rect"), _cues(sh, 1)[1].update(find="3.96")), "find 只能找剪報"),
+    "框沒錨在詞上": (lambda sh: _cues(sh, 1)[1].update(at=1.0), "錨在旁白唸到那個數字的詞上"),
+    "框超出原圖": (lambda sh: _cues(sh, 1)[1].update(rect=[1150, 700, 100, 100]), "超出 圖1 的範圍"),
+    "框和圖中間插文字卡": (lambda sh: _cues(sh, 1).insert(1, {"at": 0.5, "kind": "point", "text": "看這裡"}),
+                    "中間不能插文字卡"),
+    "沒照出場順序": (lambda sh: _cues(sh, 1).append(
+        {"at": {"segment": "s02", "word": "第一張圖"}, "kind": "point", "text": "第一張圖"}), "照出場順序"),
+    "Vox 接續財經圖表": (lambda sh: sh[1].update(continues=True), "Vox 分鏡只能接續 Vox 分鏡"),
+    "負的時間": (lambda sh: _cues(sh, 1)[0].update(at=-1), "不能是負的"),
+    "寫成 highlight": (lambda sh: _cues(sh, 1)[1].update(kind="highlight"), "kind\": \"box"),
+}
+
+
+@pytest.mark.parametrize("case", list(BAD_SETUPS))
+def test_mistakes_in_a_vox_shot_are_explained_in_plain_chinese(tmp_path, case):
+    change, expected = BAD_SETUPS[case]
+    shots = scenario_shots()
+    change(shots)
+    with pytest.raises(ProjectError) as e:
+        plan_build(new_project(tmp_path, shots), tts="fake")
+    assert expected in str(e.value)
+    assert "分鏡 SH0" in str(e.value)
 
 
 # ---------------------------------------------------------------- 原文剪報

@@ -50,7 +50,8 @@ return {
       const pts = CL.stringPts(pa, pb, 0.06); return { a: pa, b: pb, pts, cum: DG.cum(pts), at: b.q.at }; });
     // 相机关键帧：每件到场前 ≈0.9s 起追过去（长尾），在它的 at 之前落定；高亮时推近那一块
     const Hs = H - ctx.safe.top - ctx.safe.bottom;                           // 让开字幕带后的可用高度；画面中心同步下移/上移（draw 里平移）
-    const zFor = it => clamp(Math.min(W * 0.82 / it.w, Hs * 0.8 / it.h), 0.5, 1.6);
+    const Ws = W - ctx.safe.left - ctx.safe.right;                           // [article-to-video 內嵌] 左右也照樣讓開（直式：短影音平台右側的按鈕欄）；safe 沒寫左右時＝W，跟原版一樣
+    const zFor = it => clamp(Math.min(Ws * 0.82 / it.w, Hs * 0.8 / it.h), 0.5, 1.6);
     keys = []; let last = null;
     const hls = ctx.of('highlight');
     const events = [...items.map(it => ({ at: it.q.at, it })), ...hls.map(h => ({ at: h.at, h }))].sort((a, b) => a.at - b.at);
@@ -66,12 +67,12 @@ return {
         const im = ctx.IMG[curItem.q.image], R = e.h.data.rect, ib = imgBox(curItem, im, u);
         const cx = curItem.x + (ib.x + (R[0] + R[2] / 2) * ib.w) - curItem.w / 2, cy = curItem.y + (ib.y + (R[1] + R[3] / 2) * ib.h) - curItem.h / 2;
         const rw = R[2] * ib.w, rh = R[3] * ib.h;
-        let zFit = Math.min(W * 0.8 / (rw * 1.4 + 32 * u), Hs * 0.8 / (rh * 1.44 + 20 * u));   // 红圈（下面 drawItem 的椭圆）推近后整圈留在画里，左右各留一成（审片：0.9 时手抖的圈和运动模糊仍会出画）
-        if (R[2] >= 0.5) zFit = Math.min(zFit, Math.max(last.z, W * 0.96 / curItem.w));          // 框占了半张图以上：推近只会把这张图两侧的字切掉，不推
-        const z = Math.min(clamp(Math.min(W * (ctx.portrait ? 0.78 : 0.55) / rw, Hs * 0.55 / rh), last.z, last.z * 2.6), zFit);   // 竖屏宽是瓶颈：框推到约八成画宽
+        let zFit = Math.min(Ws * 0.8 / (rw * 1.4 + 32 * u), Hs * 0.8 / (rh * 1.44 + 20 * u));   // 红圈（下面 drawItem 的椭圆）推近后整圈留在画里，左右各留一成（审片：0.9 时手抖的圈和运动模糊仍会出画）
+        if (R[2] >= 0.5) zFit = Math.min(zFit, Math.max(last.z, Ws * 0.96 / curItem.w));          // 框占了半张图以上：推近只会把这张图两侧的字切掉，不推
+        const z = Math.min(clamp(Math.min(Ws * (ctx.portrait ? 0.78 : 0.55) / rw, Hs * 0.55 / rh), last.z, last.z * 2.6), zFit);   // 竖屏宽是瓶颈：框推到约八成画宽
         // 框的起点（荧光笔从左缘扫起）在当前镜头里看得见：先画、at+0.2 再推近；看不见（上一次推近后它在画外）：
         // 先把镜头移过去、at 前一帧到位，再揭开——否则揭开那一帧在画外，观众晚 0.2s 以上才看到（2026-10 竖屏实测晚 7 帧）
-        const x0 = cx - rw / 2, inView = Math.abs(x0 - last.x) * last.z < W / 2 - 20 * u && Math.abs(cy - last.y) * last.z < Hs / 2 - rh * last.z / 2;
+        const x0 = cx - rw / 2, inView = Math.abs(x0 - last.x) * last.z < Ws / 2 - 20 * u && Math.abs(cy - last.y) * last.z < Hs / 2 - rh * last.z / 2;
         const t0 = inView ? Math.max(last.t + 0.1, e.at + 0.2) : Math.max(last.t + 0.1, e.at - 0.8), t1 = inView ? t0 + 1.0 : Math.max(t0 + 0.35, e.at - 1 / ctx.FPS);
         keys.push({ t: t0, x: last.x, y: last.y, z: last.z }); keys.push({ t: t1, x: cx, y: cy, z, ease: MO.sineInOut });
         last = keys[keys.length - 1];
@@ -85,7 +86,7 @@ return {
   draw(c, t, ctx) {
     const { W, H, u } = ctx, cam = CAM.at(keys, t);
     const buf = UI.scratch('clip_vox', W, H), g = buf.getContext('2d'); g.reset();
-    g.save(); g.translate(0, (ctx.safe.top - ctx.safe.bottom) / 2); CAM.apply(g, cam);
+    g.save(); g.translate((ctx.safe.left - ctx.safe.right) / 2, (ctx.safe.top - ctx.safe.bottom) / 2); CAM.apply(g, cam);   // [article-to-video 內嵌] 左右也平移（原版只平移上下）
     if (!ctx.alpha) { g.fillStyle = g.createPattern(CL.paperTile('clipdesk', C.desk, { amt: 12, fibers: 320, fiberCol: [110, 95, 70] }), 'repeat'); const s = 4 / cam.z; g.fillRect(cam.x - W * s, cam.y - H * s, W * 2 * s, H * 2 * s); }
     // 红线：跟着下一件的到场描出（12fps）
     for (const s of strings) { const q = MO.sineInOut(clamp(ls(t, s.at - 0.9) / 0.7)); if (t < s.at - 0.9) continue;

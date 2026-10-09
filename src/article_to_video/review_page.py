@@ -98,6 +98,8 @@ class PageModel:
     removed: list[tuple[str, int]] = field(default_factory=list)
     """這版拿掉的分鏡：(id, 上一版的編號)。"""
     page_sections: list[CardSection] = field(default_factory=list)
+    aspect: str = "16x9"
+    """畫面比例（timeline.VideoFormat.name）：9x16 時靜態圖、成片照直式排。"""
 
 
 # ---------------------------------------------------------------- 能加什麼（照外掛實際做得到的事寫）
@@ -287,7 +289,7 @@ def render_review_html(m: PageModel) -> str:
     )
     n_comments_hint = "在卡片下方的格子寫想改的地方，寫完按「複製給 Claude」。"
     return f"""<!doctype html>
-<html lang="zh-Hant-TW" data-stage="{_e(m.stage)}" data-version="{m.version}">
+<html lang="zh-Hant-TW" data-stage="{_e(m.stage)}" data-version="{m.version}" data-aspect="{_e(m.aspect)}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

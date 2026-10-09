@@ -171,7 +171,9 @@ def resolve_vox(project: Project) -> tuple[Project, VoxPlan]:
                 target = None
                 continue
             resolved = _resolve_material(cue, article, sources, problems)
-            if resolved is not None:
+            if resolved is None:
+                target = None  # 已經報錯；後面框這件素材的框不用再報一次
+            else:
                 engine, target = resolved
                 cues.append(replace(cue, fields=engine))
                 if target and target.excerpt:
@@ -298,14 +300,6 @@ def vox_texts(plan: Any, st: Any) -> list[Any]:
 
 
 def vox_clip_spec(cues: list[dict[str, Any]], duration: float, fmt: Any) -> dict[str, Any]:
-    """一個 Vox 片段給引擎的 spec。cues：給引擎的欄位＋片段內秒數 at。"""
-    return {
-        "grammar": Y2,
-        "duration": duration,
-        "fps": fmt.fps,
-        "width": fmt.width,
-        "height": fmt.height,
-        "safe": {"bottom": fmt.safe_bottom},
-        "data": {"drift": DRIFT},
-        "cues": cues,
-    }
+    """一個 Vox 片段給引擎的 spec。cues：給引擎的欄位＋片段內秒數 at。fmt.spec_base()：寬高、fps、要讓開的邊
+    （字幕帶；直式再加平台介面區，引擎的相機會讓開）。"""
+    return {"grammar": Y2, "duration": duration, **fmt.spec_base(), "data": {"drift": DRIFT}, "cues": cues}

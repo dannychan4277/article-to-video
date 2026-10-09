@@ -1,9 +1,12 @@
 """指令列：`uv run --project <外掛根目錄> python -m article_to_video <子指令> …`
 
 子指令：
-  preview <專案資料夾> [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]   預覽：只出分鏡靜態圖＋審片頁（不渲整支片）
-  build <專案資料夾> [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]     建置成片＋字幕檔，審片頁內嵌成片
-  boxes <專案資料夾> [--tts edge|fake] [--jobs N] [--data-dir D]   列出 Vox 框、渲每個框的靜態圖、印核對代號
+  preview <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]
+                                                  預覽：只出分鏡靜態圖＋審片頁（不渲整支片）
+  build <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]
+                                                  建置成片＋字幕檔，審片頁內嵌成片
+  boxes <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--data-dir D]
+                                                  列出 Vox 框、渲每個框的靜態圖（照這個比例）、印核對代號
   confirm-box <專案資料夾> <核對代號>… [--note 文字]   記下 Claude 看過靜態圖、確認過的框（見 boxes.py）
   feedback <專案資料夾> [--file 檔]                   審片頁複製出來的留言（stdin）→ JSON（格式見 feedback.py）
   extract <專案資料夾> <文章檔|->                   擷取文章到 <專案>/article/（- ＝從標準輸入讀貼上的文字）
@@ -20,6 +23,10 @@
 preview、build 做完會用 macOS 的 open 在預設瀏覽器打開審片頁；--no-open 或環境變數
 ARTICLE_TO_VIDEO_NO_OPEN=1（測試、CI）就不打開。preview、build 的輸出與錯誤記在
 <專案>/build/last-run.{log,json}（只留最後一次），回報問題時打包。
+
+--aspect：畫面比例。作者說「直式」就給 9:16（也收「直式」「9x16」）；不給就用設定快照裡的預設比例
+（使用者設定 aspect，沒設就是 16:9）。直式的產物：成片-9x16.mp4、字幕-9x16.srt、審片頁-9x16.html、build/9x16/，
+跟 16:9 的並存、互不覆蓋。
 
 --data-dir：使用者資料位置，主 skill 傳 ${CLAUDE_PLUGIN_DATA}；沒給就看環境變數，再沒有就用
 ~/Library/Application Support/article-to-video（見 user_settings.py）。
@@ -56,6 +63,18 @@ _DATA_DIR_HELP = "使用者資料位置（主 skill 傳 ${CLAUDE_PLUGIN_DATA}）
 VOICE_SAMPLE = "大家好，歡迎來到我的頻道。今天用三分鐘，帶你看懂殖利率曲線在說什麼。"
 
 
+_ASPECT_HELP = "畫面比例：16:9（橫式）或 9:16（直式，也收「直式」「9x16」）；不給就用設定裡的預設比例"
+
+
+def _aspect(value: str):
+    from article_to_video.timeline import video_format
+
+    try:
+        return video_format(value)
+    except ProjectError as e:
+        raise argparse.ArgumentTypeError(e.problems[0]) from None
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="article_to_video", description="把財經文章做成解說影片")
     sub = p.add_subparsers(dest="command", required=True)
@@ -65,14 +84,17 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--jobs", type=int, help="最多同時渲幾個片段（預設 3）")
     b.add_argument("--no-open", action="store_true", help="做完不要自動在瀏覽器打開審片頁")
     b.add_argument("--data-dir", help=_DATA_DIR_HELP)
+    b.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
     v = sub.add_parser("preview", help="只出分鏡靜態圖與審片頁（不渲整支片）")
     v.add_argument("project", help="專案資料夾（裡面有 narration.json、shots.json）")
     v.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
     v.add_argument("--jobs", type=int, help="最多同時渲幾個分鏡的靜態圖（預設 4）")
     v.add_argument("--no-open", action="store_true", help="做完不要自動在瀏覽器打開審片頁")
     v.add_argument("--data-dir", help=_DATA_DIR_HELP)
+    v.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
     bx = sub.add_parser("boxes", help="列出 Vox 框、渲每個框的靜態圖、看哪些還沒核對")
     bx.add_argument("project", help="專案資料夾")
+    bx.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
     bx.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
     bx.add_argument("--jobs", type=int, help="最多同時渲幾個片段的框靜態圖（預設 4）")
     bx.add_argument("--data-dir", help=_DATA_DIR_HELP)
@@ -181,10 +203,11 @@ def _boxes(args: argparse.Namespace) -> int:
     from article_to_video.build import plan_build
     from article_to_video.issue_report import RunRecord
 
-    rec = RunRecord(args.project, "boxes", {"tts": args.tts, "jobs": args.jobs})
+    rec = RunRecord(args.project, "boxes",
+                    {"tts": args.tts, "jobs": args.jobs, "aspect": args.aspect.name if args.aspect else None})
     log = rec.tee(lambda m: print(m, flush=True))
     try:
-        plan = plan_build(args.project, tts=args.tts, data_dir=args.data_dir, log=log)
+        plan = plan_build(args.project, tts=args.tts, fmt=args.aspect, data_dir=args.data_dir, log=log)
         statuses = box_statuses(plan)
         render_box_stills(plan, statuses, jobs=args.jobs, log=log)
     except KNOWN_ERRORS as e:
@@ -268,7 +291,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         from article_to_video.review import default_contributors, make_review
 
         # 回報問題時打包：preview、build（含審片頁）出的錯都記進 last-run
-        rec = RunRecord(args.project, args.command, {"tts": args.tts, "jobs": args.jobs})
+        rec = RunRecord(args.project, args.command,
+                        {"tts": args.tts, "jobs": args.jobs, "aspect": args.aspect.name if args.aspect else None})
         log = rec.tee(lambda m: print(m, flush=True))
         failed = "建置失敗" if args.command == "build" else "預覽失敗"
         try:
@@ -276,7 +300,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 from article_to_video.build import build_project
 
                 # 正式出片前先數字對帳：有無出處的數字就擋下（不渲染、不出片）
-                res = build_project(args.project, tts=args.tts, jobs=args.jobs, data_dir=args.data_dir,
+                res = build_project(args.project, tts=args.tts, jobs=args.jobs, fmt=args.aspect, data_dir=args.data_dir,
                                     preflight=[check_numbers], log=log)
                 print(f"完成：{res.video}（{res.duration:.2f} 秒）")
                 print(f"字幕檔：{res.srt}")
@@ -287,7 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 from article_to_video.review import preview_project
 
                 review = preview_project(args.project, tts=args.tts, contributors=default_contributors(),
-                                         jobs=args.jobs, data_dir=args.data_dir, log=log)
+                                         jobs=args.jobs, data_dir=args.data_dir, fmt=args.aspect, log=log)
                 if review.plan is not None:
                     log(summary_line(review.plan))
         except BlockedBuild as e:
