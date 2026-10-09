@@ -1,7 +1,9 @@
 """指令列：`uv run --project <外掛根目錄> python -m article_to_video <子指令> …`
 
 子指令：
-  build <專案資料夾> [--tts edge|fake] [--jobs N]   建置成片＋字幕檔
+  preview <專案資料夾> [--tts edge|fake] [--jobs N]   預覽：只出分鏡靜態圖＋審片頁（不渲整支片）
+  build <專案資料夾> [--tts edge|fake] [--jobs N]     建置成片＋字幕檔，審片頁內嵌成片
+  feedback <專案資料夾> [--file 檔]                   審片頁複製出來的留言（stdin）→ JSON（格式見 feedback.py）
 
 錯誤一律印繁中說明到 stderr、結束碼 1（不印 Python traceback）。
 """
@@ -28,6 +30,13 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("project", help="專案資料夾（裡面有 narration.json、shots.json）")
     b.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
     b.add_argument("--jobs", type=int, help="最多同時渲幾個片段（預設 3）")
+    v = sub.add_parser("preview", help="只出分鏡靜態圖與審片頁（不渲整支片）")
+    v.add_argument("project", help="專案資料夾（裡面有 narration.json、shots.json）")
+    v.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
+    v.add_argument("--jobs", type=int, help="最多同時渲幾個分鏡的靜態圖（預設 4）")
+    f = sub.add_parser("feedback", help="把審片頁「複製給 Claude」的文字（從 stdin 讀）解析成 JSON")
+    f.add_argument("project", help="專案資料夾（用來把分鏡編號對到分鏡 id）")
+    f.add_argument("--file", help="從這個檔讀，不從 stdin 讀")
     return p
 
 
@@ -48,5 +57,37 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         print(f"完成：{res.video}（{res.duration:.2f} 秒）")
         print(f"字幕檔：{res.srt}")
+        return 0
+    if args.command == "preview":
+        from article_to_video.review import preview_project
+
+        try:
+            review = preview_project(args.project, tts=args.tts, jobs=args.jobs, log=lambda m: print(m, flush=True))
+        except KNOWN_ERRORS as e:
+            print(f"預覽失敗：{e}", file=sys.stderr)
+            return 1
+        print(f"審片頁：{review.page}")
+        return 0
+    if args.command == "feedback":
+        import json
+        from pathlib import Path
+
+        from article_to_video.feedback import parse_feedback, project_shot_ids
+
+        try:
+            ids = project_shot_ids(args.project)
+        except ProjectError as e:
+            print(f"讀不到分鏡設定：{e}", file=sys.stderr)
+            return 1
+        text = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
+        fb = parse_feedback(text)
+        out = {
+            "project": fb.project,
+            "version": fb.version,
+            "shots": [{"number": c.number, "id": sid, "text": c.text} for c, sid in zip(fb.shots, fb.resolve(ids))],
+            "overall": fb.overall,
+            "problems": fb.check(ids),
+        }
+        print(json.dumps(out, ensure_ascii=False, indent=1))
         return 0
     return 2

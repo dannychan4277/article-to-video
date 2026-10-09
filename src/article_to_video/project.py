@@ -8,10 +8,11 @@
       settings.json      設定快照（選填）：聲音、語速、配音層、段間留白、片尾長度…
       article/           文章原檔、擷取文字與原圖（文章擷取那張票放）
       成片.mp4           燒好字幕的成片（16:9）
+      審片頁.html        給作者看的審片頁（預覽與出片都會更新）
       字幕.srt           字幕檔（檔名故意跟成片不同：同名 .srt 會被播放器自動疊上去，變成兩層字幕）
       build/             建置產物，可整個刪掉重來
         narration/       配音層快取（依「配音層｜聲音｜語速｜文字」）與 timing.json
-        16x9/            這個畫面比例的產物：specs/、clips/、logs/、fonts/、timeline.json、subs.*、narration.wav
+        16x9/            這個畫面比例的產物：specs/、clips/、logs/、fonts/、stills/、timeline.json、review.json、subs.*、narration.wav
 
 設定檔都是 UTF-8 JSON，由 Claude 寫、這裡驗證。驗證錯誤一次列出全部問題，每條都指出哪個分鏡、哪個欄位。
 """
@@ -131,6 +132,16 @@ class VariantPaths:
     def final_stamp(self) -> Path:
         return self.root / "final.sha256"
 
+    @property
+    def stills(self) -> Path:
+        """審片頁的分鏡靜態圖：stills/<片段>/t<秒>.png ＋ stamp.json（快取戳記）。"""
+        return self.root / "stills"
+
+    @property
+    def review_state(self) -> Path:
+        """審片頁的版本紀錄：第幾版、每個分鏡的內容雜湊、這版改了哪些分鏡。"""
+        return self.root / "review.json"
+
 
 @dataclass(frozen=True)
 class ProjectPaths:
@@ -168,6 +179,10 @@ class ProjectPaths:
 
     def srt(self, variant: str = "16x9") -> Path:
         return self.root / ("字幕.srt" if variant == "16x9" else f"字幕-{variant}.srt")
+
+    def review_page(self, variant: str = "16x9") -> Path:
+        """審片頁（作者在 Finder 點兩下打開的那個檔）。"""
+        return self.root / ("審片頁.html" if variant == "16x9" else f"審片頁-{variant}.html")
 
 
 # ---------------------------------------------------------------- 模型

@@ -21,6 +21,9 @@ MINI_PROJECT = FIXTURES / "mini_project"
 
 _LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
+# 建置完不要在 Danny 的瀏覽器裡打開審片頁（CLI 子行程會繼承這個環境變數）
+os.environ["ARTICLE_TO_VIDEO_NO_OPEN"] = "1"
+
 
 class NetworkBlockedError(RuntimeError):
     pass
@@ -89,3 +92,28 @@ def built_project(tmp_path_factory) -> BuiltProject:
     )
     assert proc.returncode == 0, f"建置失敗：\n{proc.stdout}\n{proc.stderr}"
     return BuiltProject(dir=root, video=root / "成片.mp4", srt=root / "字幕.srt", stdout=proc.stdout)
+
+
+@dataclass(frozen=True)
+class PreviewedProject:
+    dir: Path
+    stdout: str
+    seconds: float
+
+
+@pytest.fixture(scope="session")
+def previewed_project(tmp_path_factory) -> PreviewedProject:
+    """把 mini_project 複製到 tmp，用 CLI 的預覽模式（只出靜態圖＋審片頁）跑一次，整個 session 共用。"""
+    import time
+
+    root = tmp_path_factory.mktemp("影片") / "解說影片 預覽" / "2026-10-09-殖利率曲線"
+    shutil.copytree(MINI_PROJECT, root)
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    t0 = time.monotonic()
+    proc = subprocess.run(
+        [sys.executable, "-m", "article_to_video", "preview", str(root), "--tts", "fake"],
+        capture_output=True, text=True, encoding="utf-8", env=env,
+    )
+    seconds = time.monotonic() - t0
+    assert proc.returncode == 0, f"預覽失敗：\n{proc.stdout}\n{proc.stderr}"
+    return PreviewedProject(dir=root, stdout=proc.stdout, seconds=seconds)
