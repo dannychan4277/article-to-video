@@ -82,6 +82,13 @@ class Excerpt:
         x1, y1 = max(b[2] for b in boxes), max(b[3] for b in boxes)
         return x0, y0, x1 - x0, y1 - y0
 
+    def line_rect(self, find: str, occurrence: int | None = None) -> tuple[int, int, int, int]:
+        """find 所在的那一整行在圖上的範圍 (x, y, w, h)：框推近時這一行要整行留在畫面裡（真實試跑 #6）。"""
+        _, y, _, _ = self.char_rect(find, occurrence)
+        row = [b for b in self.boxes.values() if b[1] == y]
+        x0, x1 = min(b[0] for b in row), max(b[2] for b in row)
+        return x0, y, x1 - x0, max(b[3] for b in row) - y
+
 
 def sentence_span(text: str, q0: int, q1: int) -> tuple[int, int]:
     """[q0, q1) 擴大到整句：從 q0 所在那句的開頭，到 q1−1 所在那句的結尾（句號與後面的」』）也算）。"""

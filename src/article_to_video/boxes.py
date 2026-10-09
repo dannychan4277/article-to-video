@@ -321,7 +321,8 @@ def _status_lines(st: BoxStatus) -> list[str]:
 
 
 CHECKLIST = ("看每張「畫面靜態圖」（必要時對照「原圖對照」），確認：① 螢光筆和紅圈剛好在旁白唸到的那個數字上，"
-             "沒圈進別的數字、別的欄位或欄位名；② 螢光筆沒刷到圖例色塊；③ 數字沒被畫面邊緣或字幕帶切到。")
+             "沒圈進別的數字、別的欄位或欄位名；② 螢光筆沒刷到圖例色塊；③ 數字沒被畫面邊緣或字幕帶切到；"
+             "④ 正在講的那一行、那一列的列名、那一欄的欄名或年份還在畫面裡（推太深或太淺就在框上加 \"zoom\"）。")
 
 
 def format_box_listing(statuses: Sequence[BoxStatus], project_dir: Path) -> str:

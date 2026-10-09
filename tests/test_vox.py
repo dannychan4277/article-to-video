@@ -414,7 +414,8 @@ def test_portrait_vox_keeps_the_boxes_clear_of_the_platform_ui(scenario, tmp_pat
         with Image.open(png) as im:
             assert im.size == (1080, 1920)
             a = np.asarray(im.convert("RGB")).astype(int)
-        ys, xs = np.nonzero((a[..., 0] > 150) & (a[..., 1] > 130) & (a[..., 2] < 90))
+        # 螢光筆的黃（綠色分量也高；自製圖的橘色柱子 (230,140,40) 不算——推近不再切掉旁邊的柱子，它會入鏡）
+        ys, xs = np.nonzero((a[..., 0] > 150) & (a[..., 1] > 160) & (a[..., 2] < 90))
         assert len(xs) > 2000, png
         assert xs.max() < f.width - f.safe_right and f.safe_top <= ys.min() and ys.max() < f.height - f.safe_bottom, png
 
@@ -598,3 +599,104 @@ def test_a_boxed_phrase_is_never_split_by_a_line_break(tmp_path):
     [box] = project_boxes(root)[1]
     x, y, w, h = box.rect
     assert h < 150 and w > 5 * 88  # 一行字的高度、十個字的寬度
+
+
+# ---------------------------------------------------------------- 框推近多深：正在唸的那一行、欄名留在畫面裡
+
+
+TABLE_SIZE = (1600, 820)
+
+
+def draw_table_png(path: Path) -> dict[str, list[int]]:
+    """自製的表格圖（自己編的示意數字）：表頭一列（淺灰底）、三列資料、最左邊是列名、變化那欄藍漲紅跌。
+    回傳幾個字在圖上的範圍 [x, y, 寬, 高]。"""
+    im = Image.new("RGB", TABLE_SIZE, (255, 255, 255))
+    d = ImageDraw.Draw(im)
+    font = _font()
+    d.rectangle([60, 200, 1540, 300], fill=(241, 242, 245))
+    where: dict[str, list[int]] = {}
+
+    def put(key: str, xy: tuple[int, int], text: str, fill=(20, 20, 20)) -> None:
+        d.text(xy, text, font=font, fill=fill)
+        x0, y0, x1, y1 = d.textbbox(xy, text, font=font)
+        where[key] = [x0, y0, x1 - x0, y1 - y0]
+
+    put("title", (80, 60), "自製表格：兩個年份的示意數字")
+    for k, (x, head) in enumerate([(640, "甲年"), (960, "乙年"), (1300, "變化")]):
+        put(f"head{k}", (x, 225), head)
+    rows = [("兩年期", "4.10", "3.70", "-0.40"), ("十年期", "3.80", "4.05", "+0.25"), ("利差", "-0.30", "0.35", "+0.65")]
+    for r, (label, a, b, ch) in enumerate(rows):
+        y = 345 + r * 130
+        d.line([60, y - 25, 1540, y - 25], fill=(205, 205, 205), width=2)
+        put(f"label{r}", (100, y), label)
+        put(f"a{r}", (640, y), a)
+        put(f"b{r}", (960, y), b)
+        put(f"c{r}", (1300, y), ch, fill=(200, 50, 40) if ch.startswith("-") else (40, 100, 180))
+    im.save(path)
+    return where
+
+
+def new_table_project(base: Path, box: dict) -> tuple[Path, dict[str, list[int]]]:
+    """文章裡只有一張自製表格圖的專案；SH01 貼圖1、旁白唸到「兩年期」時框 box（rect）。"""
+    root = base / "影片 表格" / "2026-10-09-表格"
+    src = root.parent / "表格-原稿"
+    src.mkdir(parents=True)
+    where = draw_table_png(src / "table.png")
+    (src / "文章.md").write_text("# 自製表格文章\n\n這一段只是為了測試表格推近而寫的。\n\n![](table.png)\n", encoding="utf-8")
+    root.mkdir(parents=True)
+    extract_article(root, src / "文章.md")
+    write_project(root, [{"id": "SH01", "start": {"segment": "s01"}, "vox": {"cues": [
+        {"at": 0, "kind": "image", "image": "圖1"},
+        {"at": {"segment": "s01", "word": "兩年期"}, **box}]}}])
+    return root, where
+
+
+def box_frames(plan) -> dict[str, list[float]]:
+    """建置計畫裡每個框（highlight cue）推近後要留在畫面裡的範圍（相對原圖 0..1）。"""
+    return {c["box"]: c["data"]["frame"] for cp in plan.clips for c in cp.spec["cues"] if c.get("kind") == "highlight"}
+
+
+def covers(frame: list[float], rect: list[int], size: tuple[int, int]) -> bool:
+    fx, fy, fw, fh = frame
+    x, y, w, h = rect
+    W, H = size
+    return fx <= x / W and fy <= y / H and x / W + w / W <= fx + fw and y / H + h / H <= fy + fh
+
+
+@pytest.mark.parametrize("fmt", [SMALL, FORMAT_9x16], ids=["16x9", "9x16"])
+def test_a_box_on_a_table_keeps_its_row_label_and_column_header_in_frame(tmp_path, fmt):
+    """框表格裡的一格（「+0.25」）：推近後這一列的列名（十年期）和這一欄的欄名（變化）都還在畫面裡，
+    但不會只是整張表原地不動（還是有推近：畫面比整張圖小）。"""
+    root, where = new_table_project(tmp_path, {})
+    x, y, w, h = where["c1"]
+    write_project(root, [{"id": "SH01", "start": {"segment": "s01"}, "vox": {"cues": [
+        {"at": 0, "kind": "image", "image": "圖1"},
+        {"at": {"segment": "s01", "word": "兩年期"}, "kind": "box", "rect": [x - 8, y - 8, w + 16, h + 16]}]}}])
+    frame = box_frames(plan_build(root, tts="fake", fmt=fmt))["SH01:1"]
+    assert covers(frame, where["label1"], TABLE_SIZE), frame
+    assert covers(frame, where["head2"], TABLE_SIZE), frame
+    assert frame[2] < 1 or frame[3] < 1  # 有推近
+
+
+def test_a_box_on_a_clipping_keeps_the_whole_line_in_frame(scenario):
+    """框剪報裡的「0.62」：推近後它所在的那一整行都在畫面裡（不會只剩「差距只剩 0.62」幾個字、兩邊被切掉）。"""
+    frames = box_frames(scenario.plan)
+    box = next(b for b in scenario.plan.vox.boxes if b.id == "SH03:1")
+    png = box.target.image
+    with Image.open(png) as im:
+        size = im.size
+    bx, by, bw, bh = box.rect
+    line = next((y0, x, w) for y0, x, w in text_lines(png) if y0 <= by + bh and by <= y0 + 100)
+    assert covers(frames["SH03:1"], [line[1], line[0], line[2], 60], size), (frames["SH03:1"], line, size)
+
+
+def test_the_author_can_set_how_far_a_box_zooms(tmp_path):
+    """shots.json 的框可以寫 "zoom"：1＝整張圖都留在畫面裡（不推近），2＝推到大約半張圖。"""
+    shots = scenario_shots()
+    shots[1]["vox"]["cues"][1]["zoom"] = 1
+    plan = plan_build(new_project(tmp_path, shots), tts="fake", fmt=SMALL)
+    assert covers(box_frames(plan)["SH02:1"], [0, 0, 1200, 800], (1200, 800))
+    shots[1]["vox"]["cues"][1]["zoom"] = 0.5
+    with pytest.raises(ProjectError) as e:
+        plan_build(new_project(tmp_path / "b", shots), tts="fake")
+    assert "zoom" in str(e.value) and "SH02" in str(e.value)

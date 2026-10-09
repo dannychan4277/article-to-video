@@ -11,6 +11,7 @@ const BOLD = '"PuHui-Heavy"', TXT = '"PuHui-Bold"';
 let items, keys, strings;
 // 一拍二的片内时间：at 这一帧就 >0
 const ls = (t, at) => MO.step(t - at + 1e-6, 12) + 1 / 12;
+const FRAME_FILL = 0.94;   // [article-to-video 內嵌] 框的 data.frame 推近後占可用畫面的比例（四周留一點邊）；spec 的 data.frameFill 優先（外掛排鏡頭時用同一個數）
 return {
   fonts: ['PuHui-Heavy', 'PuHui-Bold'],
   safe: true,
@@ -63,6 +64,21 @@ return {
         else { const t0 = Math.max(last.t + 0.25, e.at - 0.95, Math.min(curItem ? curItem.done : 0, e.at - 0.4)), t1 = Math.max(t0 + 0.35, e.at - 0.05);   // 上一张卡没读完相机不走（最晚 at−0.4 起跑）
           keys.push({ t: t0, x: last.x, y: last.y, z: last.z }); keys.push({ t: t1, ...tgt, ease: MO.longTail }); }
         last = keys[keys.length - 1]; curItem = e.it;
+      } else if (curItem && curItem.kind === 'image' && e.h.data && e.h.data.rect && e.h.data.frame) {
+        // [article-to-video 內嵌] 框的鏡頭由外掛排好（data.frame＝原圖上推近後要留在畫面裡的範圍，已照可用畫面的寬高比；
+        // data.travel＝框不在目前畫面裡、要先移過去）。原版只看框多大就推（最多到上一鏡的 2.6 倍），正在唸的那一行、
+        // 表格的欄名與年份常被切出畫面（真實試跑 #6）。紅圈若超出 frame 就一起放進來。
+        const im = ctx.IMG[curItem.q.image], R = e.h.data.rect, Fr = e.h.data.frame, ib = imgBox(curItem, im, u);
+        const toW = (fx, fy) => [curItem.x - curItem.w / 2 + ib.x + fx * ib.w, curItem.y - curItem.h / 2 + ib.y + fy * ib.h];
+        const [bx, by] = toW(R[0] + R[2] / 2, R[1] + R[3] / 2), rx = R[2] * ib.w * 0.7 + 20 * u, ry = R[3] * ib.h * 0.72 + 14 * u;   // 紅圈（drawItem 的橢圓＋線寬）
+        const [fx0, fy0] = toW(Fr[0], Fr[1]), [fx1, fy1] = toW(Fr[0] + Fr[2], Fr[1] + Fr[3]);
+        const x0 = Math.min(fx0, bx - rx), x1 = Math.max(fx1, bx + rx), y0 = Math.min(fy0, by - ry), y1 = Math.max(fy1, by + ry);
+        const fill = (ctx.data && ctx.data.frameFill) || FRAME_FILL;
+        const z = Math.min(Ws * fill / (x1 - x0), Hs * fill / (y1 - y0)), cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+        const t0 = e.h.data.travel ? Math.max(last.t + 0.1, e.at - 0.8) : Math.max(last.t + 0.1, e.at + 0.2);
+        const t1 = e.h.data.travel ? Math.max(t0 + 0.35, e.at - 1 / ctx.FPS) : t0 + 1.0;
+        keys.push({ t: t0, x: last.x, y: last.y, z: last.z }); keys.push({ t: t1, x: cx, y: cy, z, ease: MO.sineInOut });
+        last = keys[keys.length - 1];
       } else if (curItem && curItem.kind === 'image' && e.h.data && e.h.data.rect) {
         const im = ctx.IMG[curItem.q.image], R = e.h.data.rect, ib = imgBox(curItem, im, u);
         const cx = curItem.x + (ib.x + (R[0] + R[2] / 2) * ib.w) - curItem.w / 2, cy = curItem.y + (ib.y + (R[1] + R[3] / 2) * ib.h) - curItem.h / 2;

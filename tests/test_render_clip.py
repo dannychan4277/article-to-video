@@ -200,6 +200,56 @@ def test_annotation_above_a_short_bar_has_a_visible_leader_line(tmp_path, aspect
     assert leader_rows >= 24 * (1080 / 1080), f"引線只看得到 {leader_rows} 像素"
 
 
+MAGENTA = (230, 0, 230)
+
+
+def _framed_box_image(path: Path, frame: list[float], rect: list[float]) -> None:
+    """白底 1600×1000：frame 四個角各一塊洋紅色標記（往內縮一點），rect 那裡一個深色數字塊。"""
+    from PIL import Image, ImageDraw
+
+    w, h = 1600, 1000
+    im = Image.new("RGB", (w, h), (255, 255, 255))
+    d = ImageDraw.Draw(im)
+    x0, y0, x1, y1 = frame[0] * w, frame[1] * h, (frame[0] + frame[2]) * w, (frame[1] + frame[3]) * h
+    for cx, cy in ((x0 + 30, y0 + 30), (x1 - 30, y0 + 30), (x0 + 30, y1 - 30), (x1 - 30, y1 - 30)):
+        d.rectangle([cx - 14, cy - 14, cx + 14, cy + 14], fill=MAGENTA)
+    rx, ry, rw, rh = rect[0] * w, rect[1] * h, rect[2] * w, rect[3] * h
+    d.rectangle([rx + 8, ry + 8, rx + rw - 8, ry + rh - 8], fill=(40, 40, 40))
+    im.save(path)
+
+
+@pytest.mark.parametrize("aspect", ["16x9", "9x16"])
+def test_vox_box_push_shows_exactly_the_frame_it_is_given(tmp_path, aspect):
+    """框的 data.frame（原圖上要留在畫面裡的範圍，例：正在唸的那一整行、表格的欄名）：推近之後這一塊剛好填滿畫面——
+    四個角的標記都看得到（沒推太深切掉），而且分散到畫面四邊（真的推近了，不是停在整張圖）。"""
+    import numpy as np
+    from PIL import Image
+
+    from article_to_video.timeline import FORMATS
+
+    fmt = FORMATS[aspect]
+    base = fmt.spec_base()
+    ws = base["width"] - base["safe"].get("left", 0) - base["safe"].get("right", 0)
+    hs = base["height"] - base["safe"].get("top", 0) - base["safe"].get("bottom", 0)
+    fw = min(0.5, 0.7 * (ws / hs) / 1.6)
+    fh = fw * 1600 / 1000 / (ws / hs)              # 跟可用畫面同樣寬高比
+    frame = [0.3, 0.15, fw, fh]
+    rect = [0.3 + fw / 2 - 0.04, 0.15 + fh / 2 - 0.03, 0.08, 0.06]  # 小框：原版會推到兩倍半以上
+    _framed_box_image(tmp_path / "表.png", frame, rect)
+    spec = {"grammar": "y2_vox", "duration": 4, **base, "data": {"drift": 0.008}, "cues": [
+        {"at": 0, "kind": "image", "image": "表.png", "text": "圖1"},
+        {"at": 1.0, "kind": "highlight", "data": {"rect": rect, "frame": frame, "travel": False}}]}
+    [png] = render_stills(spec, tmp_path / "s", [2.4], base_dir=tmp_path).paths
+    a = np.asarray(Image.open(png).convert("RGB")).astype(int)
+    mag = (a[..., 0] > 120) & (a[..., 2] > 120) & (a[..., 1] < 60)  # 洋紅（壓了舊紙色、暗角，會暗一點）
+    ys, xs = np.nonzero(mag)
+    cx = base["safe"].get("left", 0) + ws / 2
+    cy = base["safe"].get("top", 0) + hs / 2
+    quads = {(x < cx, y < cy) for x, y in zip(xs, ys)}
+    assert len(quads) == 4, f"四個角只看得到 {len(quads)} 個（推太深，切掉了）"
+    assert xs.max() - xs.min() > 0.7 * ws, "沒推近：標記擠在畫面中間"
+
+
 def _components(mask):
     """mask（二維 bool）的連通塊（8 鄰）：每塊一個 (ys, xs)。測試裡的小區域用，不追求快。"""
     import numpy as np

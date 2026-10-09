@@ -640,11 +640,13 @@ def _load_chart(raw: Any, label: str, segments: Mapping[str, str], problems: _Pr
 _VOX_FIELDS = {
     "image": ({"image"}, {"caption"}),
     "excerpt": (set(), {"paragraph", "quote", "occurrence", "caption"}),
-    "box": (set(), {"rect", "find", "occurrence"}),
+    "box": (set(), {"rect", "find", "occurrence", "zoom"}),
     "title": ({"text"}, set()),
     "point": ({"text"}, set()),
 }
 """每種 Vox cue 的（必填欄位, 選填欄位）；at、kind 另外處理。"""
+MAX_BOX_ZOOM = 6
+"""框的 zoom（推近倍數，1＝整張圖）最多幾倍：再近原圖就糊了。"""
 _FIGURE_RE = re.compile(r"^圖([1-9]\d*)$")
 
 
@@ -742,6 +744,10 @@ def _check_box(fields: dict, at: float | Anchor, where: str, problems: _Problems
     if ("rect" in fields) == ("find" in fields):
         problems.add(f"{where}（框）要寫 rect（框原圖：[x, y, 寬, 高]，原圖的像素）或 find（框原文剪報裡的幾個字），只能一個")
         return False
+    if "zoom" in fields and not (_is_number(fields["zoom"]) and 1 <= fields["zoom"] <= MAX_BOX_ZOOM):
+        problems.add(f"{where} 的 zoom 是推近倍數：1＝整張圖都留在畫面裡（不推近），2＝推到大約半張圖，"
+                     f"最多 {MAX_BOX_ZOOM:g}；現在是 {fields['zoom']!r}（不寫＝自動：正在唸的那一行、欄名留在畫面裡）")
+        ok = False
     if "rect" in fields:
         r = fields["rect"]
         if not (isinstance(r, list) and len(r) == 4 and all(_is_number(v) for v in r) and r[0] >= 0 and r[1] >= 0
