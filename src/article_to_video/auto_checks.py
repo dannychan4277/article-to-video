@@ -1,4 +1,4 @@
-"""自動檢查：出片之後、作者看審片頁之前，機器先把每個片段看一遍。
+"""自動檢查：build 好審片用的成片之後、作者看審片頁之前（都在出片之前），機器先把每個片段看一遍。
 
   run_checks(plan)            每個片段跑 qa、白底片段跑字幕帶檢查（有快取、並行），彙整成 CheckReport，
                               寫 build/<比例>/checks.json。指令列：python -m article_to_video checks <專案>。
@@ -27,7 +27,7 @@ qa（內嵌引擎的 engine/qa.py，原樣使用）：在 Chromium 裡把片段�
 
 快取：qa 的結果放 build/<比例>/checks/qa/<片段>/（clip.json、qa.json、qa.md、qa.log、<片段>.jpg 四幀拼圖＋運動熱圖、
 stamp.json），鍵＝QA_VERSION＋片段雜湊（spec＋引擎檔＋圖片）＋取樣設定＋qa.py 本身；片段沒變就不重跑。
-字幕帶放 build/<比例>/checks/band/<片段>.json，看的是渲好的片段（無字幕），所以要出片之後才查得到。
+字幕帶放 build/<比例>/checks/band/<片段>.json，看的是渲好的片段（無字幕），所以要 build 之後才查得到。
 
 代號（接受不改時用，見 check_log.py）：qa:<片段>:<檢查>@<片段雜湊前 8 碼>、band:<片段>@…、hold:<分鏡>@…。
 片段改了代號就變，舊的接受不會套到新畫面上。
@@ -343,7 +343,7 @@ def _check_band(plan: BuildPlan, cp: ClipPlan, ffmpeg: Path | None) -> dict[str,
     if ffmpeg is None:
         return {"top": int(cp.spec["height"]) - _band_px(cp), "pending": True}
     if not clip_is_current(cp, plan.paths):
-        return {"top": int(cp.spec["height"]) - _band_px(cp), "error": "這個片段還沒渲好（先出片再檢查）"}
+        return {"top": int(cp.spec["height"]) - _band_px(cp), "error": "這個片段還沒渲好（先 build 再檢查）"}
     result = _scan_band(plan, cp, ffmpeg)
     if "error" not in result:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -552,7 +552,7 @@ def _collect(plan: BuildPlan, *, run: bool, jobs: int | None, log: Log) -> Check
 
 def run_checks(plan: BuildPlan, *, jobs: int | None = None, log: Log = quiet) -> CheckReport:
     """每個片段跑 qa、白底片段跑字幕帶檢查（有快取、並行），彙整成 CheckReport，寫 build/<比例>/checks.json。
-    字幕帶檢查看的是渲好的片段（出片之後才有）；片段還沒渲好的，那一項記成 fail「先出片再檢查」。"""
+    字幕帶檢查看的是渲好的片段（build 之後才有）；片段還沒渲好的，那一項記成 fail「先 build 再檢查」。"""
     report = _collect(plan, run=True, jobs=jobs, log=log)
     checks_json(plan).write_text(json.dumps(report_json(plan, report), ensure_ascii=False, indent=1), encoding="utf-8")
     return report
@@ -568,7 +568,7 @@ def checks_json(plan: BuildPlan) -> Path:
 
 
 def clips_not_built(plan: BuildPlan) -> list[str]:
-    """還沒渲、或渲的是舊內容的片段 id（自動檢查要在出片之後跑）。"""
+    """還沒渲、或渲的是舊內容的片段 id（自動檢查要在 build 之後跑）。"""
     return [cp.id for cp in plan.clips if not clip_is_current(cp, plan.paths)]
 
 
@@ -753,7 +753,7 @@ def checks_contributor(plan: BuildPlan) -> ReviewExtras:
         fs = report.for_shot(sid)
         items: list = []
         if any(c.qa is None for c in clips):
-            items.append(CheckItem("還沒跑自動檢查", detail="出片之後 Claude 會跑；改過的分鏡要重跑", status="info"))
+            items.append(CheckItem("還沒跑自動檢查", detail="做好審片用的影片之後 Claude 會跑；改過的分鏡要重跑", status="info"))
         else:
             qa_fs = [f for f in fs if f.source == "qa"]
             items += [item(f) for f in qa_fs] or [CheckItem("qa：確定性、動態、跳變、框景都沒問題", status="ok")]
@@ -768,7 +768,7 @@ def checks_contributor(plan: BuildPlan) -> ReviewExtras:
     bad, warn = report.blocking, [f for f in report.findings if not f.blocking]
     nums = _shot_numbers(plan)
     if report.unchecked and len(report.unchecked) == len(report.clips):
-        page_items = [CheckItem("還沒跑", detail="出片之後 Claude 會跑 qa 和字幕帶檢查", status="info")]
+        page_items = [CheckItem("還沒跑", detail="做好審片用的影片之後、給你看之前，Claude 會跑", status="info")]
         note = ""
     else:
         page_items = [CheckItem(f"{_where(plan, f)}　{f.label}：{f.message}", status="block", label="必修")

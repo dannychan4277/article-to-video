@@ -87,7 +87,7 @@ class UserSettings:
     aspect: str = Settings.aspect
     """預設比例："16x9" 或 "9x16"。"""
     independent_review: bool = True
-    """出片後要不要派一個只看成片的 agent 獨立審片一輪（independent_review.py）。全部影片共用，不進設定快照。"""
+    """作者看審片頁之前（出片之前）要不要派一個只看成片的 agent 獨立審片一輪（independent_review.py）。全部影片共用，不進設定快照。"""
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)

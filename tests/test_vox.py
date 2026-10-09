@@ -335,6 +335,14 @@ def test_checking_every_box_unblocks_the_final_build(scenario):
     assert scenario.video.is_file()
 
 
+def test_after_the_last_box_is_checked_claude_is_told_the_real_next_step(scenario):
+    """核完框還不能出片：接著是建置審片用的成片、自動檢查、獨立審片、給作者看；作者點頭才出片。"""
+    out = scenario.confirmed.stdout
+    assert "所有 Vox 框都核對過了" in out
+    assert "可以正式出片" not in out and "可以出片" not in out
+    assert "build" in out and "作者" in out and "publish" in out
+
+
 def test_box_followed_too_soon_by_the_next_item_blocks_the_final_build(tmp_path):
     """框跟下一件素材至少隔 2 秒：SH03 的剪報改成一切進來就貼，SH02 的框之後只隔 1.9 秒 → 正式出片擋下。"""
     shots = scenario_shots()

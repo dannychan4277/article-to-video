@@ -2,7 +2,7 @@
 
 兩種時機都會寫同一頁（專案資料夾裡的「審片頁.html」，9:16 是「審片頁-9x16.html」）：
   preview_project()               預覽模式：plan_build() → 只渲靜態圖（不渲片段、不出成片）→ 審片頁。
-  make_review(plan, video=成片)   出片之後（CLI build 在 build_project 之後呼叫）：同一頁再內嵌成片。
+  make_review(plan, video=成片)   build 之後（CLI build 在 build_project 之後呼叫）：同一頁再內嵌審片用的成片。
 
 分鏡靜態圖（_still_frames）：每個分鏡一張完成狀態（分鏡最後一幀），加上這個分鏡每個畫面事件出現前一幀
 （跟上一個事件隔 ≥ MOMENT_GAP 秒才算，最多 MAX_MOMENTS 張）。快取在 build/<比例>/stills/<片段>/，
@@ -399,7 +399,7 @@ def make_review(
     jobs: int | None = None,
     log: Log = quiet,
 ) -> ReviewResult:
-    """渲靜態圖（有快取）、寫審片頁。video＝成片（出片後才有）；contributors＝要加在卡片上的檢查結果。"""
+    """渲靜態圖（有快取）、寫審片頁。video＝審片用的成片（build 之後才有）；contributors＝要加在卡片上的檢查結果。"""
     extras = ReviewExtras()
     for contribute in contributors:
         more = contribute(plan)

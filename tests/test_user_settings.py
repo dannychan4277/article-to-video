@@ -87,6 +87,18 @@ def test_a_light_brand_color_is_kept_and_the_charts_take_care_of_readability(tmp
     assert "#FFE680" in proc.stdout and "加深" in proc.stdout and "原色" in proc.stdout
 
 
+def test_the_independent_review_setting_says_when_it_really_happens(tmp_path):
+    """獨立審片是在作者看審片頁之前（出片之前）審一輪；設定的說明不能寫成「出片後」。"""
+    data = tmp_path / "plugin-data"
+    proc = run("settings", "set", "--data-dir", str(data), "--independent-review", "開")
+    assert proc.returncode == 0, proc.stderr
+    line = next(ln for ln in proc.stdout.splitlines() if "獨立審片" in ln)
+    assert "出片後" not in line and "出片之後" not in line
+    assert "作者看審片頁之前" in line
+    helptext = run("settings", "set", "--help").stdout
+    assert "出片後" not in helptext and "作者看審片頁之前" in helptext
+
+
 def test_logo_is_copied_into_the_data_dir(tmp_path):
     """logo 複製一份進資料位置：原檔之後搬走、刪掉都沒關係。"""
     src = tmp_path / "我的 logo.png"

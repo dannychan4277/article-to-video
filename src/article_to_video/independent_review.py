@@ -1,4 +1,4 @@
-"""獨立審片：出片之後，Claude Code 另外派一個 agent，只看成片審一輪。Python 不派 agent，這裡只做三件事：
+"""獨立審片：build 好審片用的成片之後、作者看審片頁之前（出片之前），Claude Code 另外派一個 agent，只看成片審一輪。Python 不派 agent，這裡只做三件事：
 
   prepare_review_kit(plan)     從成片準備審片素材（指令列 review-prep）：build/<比例>/independent-review/
                                  material.json   目錄：成片長度、每個分鏡的編號與時段、字幕帶位置、畫面事件時刻、
@@ -568,7 +568,7 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
         rounds = book["rounds"]
         if not rounds:
             if review_enabled(data_dir):
-                item = CheckItem("還沒審", detail="出片之後 Claude 會另外派一個只看成片的 agent 審一輪，結果會出現在這裡。",
+                item = CheckItem("還沒審", detail="做好審片用的影片之後、給你看之前，Claude 會另外派一個只看影片的 agent 審一輪，結果會出現在這裡。",
                                  status="info")
             else:
                 item = CheckItem("已關掉（使用者設定）", detail="要打開跟 Claude 說「獨立審片打開」。", status="info")

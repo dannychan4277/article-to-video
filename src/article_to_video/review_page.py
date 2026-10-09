@@ -3,7 +3,7 @@
 頁面結構（測試與後面的票靠這些 class／id 找東西）：
   <html data-stage="preview|final" data-version="N">
   article.card[data-shot-id][data-shot-number][data-changed]   每個分鏡一張
-    .timecode（出片後是 button.seek[data-start]）、img.still[data-t]（第一張＝完成狀態）、.narration
+    .timecode（有成片時是 button.seek[data-start]）、img.still[data-t]（第一張＝完成狀態）、.narration
     .slot[data-slot="numbers"]   數字對帳（#5 填）      .slot[data-slot="checks"]  自動檢查（#11 填）
     textarea.comment[data-shot-id]
   .page-slots .slot[data-slot=…]   整片層級的檢查結果（例：獨立審片）
