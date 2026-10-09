@@ -23,6 +23,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from article_to_video.commands import cli_command
 from article_to_video.excerpt import Excerpt, ExcerptError, make_excerpt
 from article_to_video.project import Anchor, Cue, Project, ProjectError, Shot, VoxConfig
 
@@ -116,7 +117,7 @@ def _load_article(project: Project, problems: list[str]) -> _Article | None:
     if not manifest.is_file():
         problems.append(
             f"Vox 分鏡要用文章的原圖和段落，但這個專案還沒擷取文章（找不到 {manifest}）。"
-            "先跑 python -m article_to_video extract <專案> <文章檔>"
+            f"先擷取文章：{cli_command('extract', project.root, '"<文章檔>"')}"
         )
         return None
     try:

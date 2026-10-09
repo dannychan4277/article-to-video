@@ -34,6 +34,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from article_to_video.clip_cache import clip_hash
 from article_to_video.clips import FONTS_DIR, ClipRenderError, render_stills
+from article_to_video.commands import cli_command
 from article_to_video.project import ProjectError, ProjectPaths, load_project
 from article_to_video.vox import VoxBox, resolve_vox
 
@@ -349,7 +350,7 @@ def format_box_listing(statuses: Sequence[BoxStatus], project_dir: Path) -> str:
     if todo:
         out.append(CHECKLIST)
         out.append("都沒問題就執行（只寫你看過、確認過的框）：")
-        out.append(f"  python -m article_to_video confirm-box \"{project_dir}\" " + " ".join(s.box.token for s in todo))
+        out.append("  " + cli_command("confirm-box", project_dir, *(s.box.token for s in todo)))
         out.append("有問題就改 shots.json 裡那個框的 rect／find，或錨點，再跑一次 boxes。")
     return "\n".join(out)
 
@@ -368,8 +369,7 @@ def require_boxes_ready(plan: BuildPlan, *, jobs: int | None = None, log: Log = 
     hint = []
     if unconfirmed:
         hint.append(CHECKLIST)
-        hint.append(f"都沒問題就執行：python -m article_to_video confirm-box \"{plan.project.root}\" "
-                    + " ".join(s.box.token for s in unconfirmed))
+        hint.append("都沒問題就執行：" + cli_command("confirm-box", plan.project.root, *(s.box.token for s in unconfirmed)))
     hint.append("預覽（preview）不受影響，照樣可以跑。")
     raise ProjectError(problems, title="Vox 框還沒核對好，先不出片", hint="\n".join(hint))
 

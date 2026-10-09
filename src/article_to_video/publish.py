@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from article_to_video.build import BlockedBuild, BuildPlan, build_project, plan_build
+from article_to_video.commands import aspect_args, cli_command
 from article_to_video.project import ProjectError
 from article_to_video.timeline import VideoFormat
 from article_to_video.videos import OUTPUT_RECORD, load_outputs, output_paths, video_folder, video_title
@@ -53,27 +54,28 @@ class PublishResult:
         return self.plan.timeline.duration
 
 
-def _check_approved(plan: BuildPlan, version: int) -> None:
+def _check_approved(plan: BuildPlan, version: int, data_dir: str | os.PathLike | None = None) -> None:
     from article_to_video.review import seen_version
 
-    root, aspect = plan.project.root, plan.format.name
-    flag = "" if aspect == "16x9" else f" --aspect {aspect}"
+    root, aspect = plan.project.root, aspect_args(plan.format.name)
+    preview = cli_command("preview", root, *aspect, "--no-open", data_dir=data_dir)
     stored, same = seen_version(plan)
     if stored is None:
         raise ProjectError("這支片還沒有審片頁，作者還沒看過", title="還不能出片",
-                           hint=f"先跑 preview（python -m article_to_video preview \"{root}\"{flag}），給作者看過、他點頭再出片。")
+                           hint=f"先跑 preview（{preview}），給作者看過、他點頭再出片。")
     if not same:
         raise ProjectError(
             f"審片頁第 {stored} 版之後，分鏡或旁白又改過了，作者還沒看過改過的樣子",
             title="還不能出片",
-            hint=f"先跑 preview（python -m article_to_video preview \"{root}\"{flag}，會變成第 {stored + 1} 版），"
+            hint=f"先跑 preview（{preview}，會變成第 {stored + 1} 版），"
                  "把改了什麼告訴作者、打開審片頁給他看，他點頭再用那一版的版號出片。",
         )
     if stored != version:
         raise ProjectError(
             f"作者點頭的是第 {version} 版，但審片頁現在是第 {stored} 版",
             title="還不能出片",
-            hint=f"把第 {stored} 版給作者看（審片頁頁首寫著第幾版），他說可以再出片：publish … --version {stored}。",
+            hint=f"把第 {stored} 版給作者看（審片頁頁首寫著第幾版），他說可以再出片："
+                 + cli_command("publish", root, "--version", str(stored), *aspect, data_dir=data_dir) + "。",
         )
 
 
@@ -88,8 +90,8 @@ def _check_reviewed(plan: BuildPlan, data_dir: str | os.PathLike | None) -> None
         "這支片還沒做過獨立審片（使用者設定是開著的）",
         title="還不能出片",
         hint="照 checks-and-review.md 做一輪：build → checks → review-prep → 派審片 agent → review-record，"
-             f"處理完必修再出片（python -m article_to_video review-prep \"{root}\"）。"
-             "作者說不要獨立審片的話：settings set --independent-review 關。",
+             f"處理完必修再出片（{cli_command('review-prep', root, *aspect_args(plan.format.name), data_dir=data_dir)}）。"
+             f"作者說不要獨立審片的話：{cli_command('settings set', '--independent-review', '關', data_dir=data_dir)}。",
     )
 
 
@@ -115,7 +117,7 @@ def publish_project(
     from article_to_video.numbers import check_numbers
 
     plan = plan_build(project_dir, tts=tts, fmt=fmt, data_dir=data_dir)  # 先擋：不渲染；建置時會再印一次配音、時間軸
-    _check_approved(plan, version)
+    _check_approved(plan, version, data_dir)
     _check_reviewed(plan, data_dir)
     fmt = plan.format
 

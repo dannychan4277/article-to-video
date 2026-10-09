@@ -144,6 +144,100 @@ def test_main_flow_skills_point_at_files_that_exist(name):
         assert ref in body or name == "edit-video", ref
 
 
+@pytest.mark.parametrize("name", SKILLS)
+def test_every_preapproved_command_also_works_with_the_freshly_installed_uv(name):
+    """剛用官方安裝程式裝好 uv 的那次對話找不到 uv，skill 叫 Claude 改用 ~/.local/bin/uv：兩種寫法都要預先核准。"""
+    _, rules, _ = parse_skill(name)
+    pats = set(bash_rules(rules))
+    for pat in pats:
+        if pat.startswith("uv run "):
+            assert "~/.local/bin/" + pat in pats, f"少了 ~/.local/bin/uv 的版本：{pat}"
+
+
+# ---------------------------------------------------------------- 指令印出來給 Claude 照抄的下一步
+
+MAIN_FLOW = ("make-video", "edit-video")
+"""做片、改片的兩支 skill：指令印的下一步、審片 agent 的抽幀指令，都在這兩支跑的時候出現。"""
+_COMMAND_RE = re.compile(r'(?:~/\.local/bin/)?uv run --project \S+ python -m article_to_video(?: (?:"[^"]*"|[-\w./~:@<>%+]+))+')
+
+
+def printed_commands(text: str) -> list[str]:
+    """指令印出來的文字裡，每一行完整的外掛指令（從 uv 到最後一個參數）。"""
+    return [m.group(0) for m in _COMMAND_RE.finditer(text)]
+
+
+def assert_preapproved(cmd: str, skills: tuple[str, ...] = MAIN_FLOW) -> None:
+    for name in skills:
+        _, rules, _ = parse_skill(name)
+        real = [r.replace("${CLAUDE_PLUGIN_ROOT}", str(ROOT)) for r in rules]  # skill 載入時換成外掛的絕對路徑
+        assert allowed(cmd, real), f"{name} 沒有預先核准印出來的指令：{cmd}"
+
+
+def _calls_to(tree, func: str) -> list:
+    import ast
+
+    return [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+            and (getattr(n.func, "id", None) == func or getattr(n.func, "attr", None) == func)]
+
+
+def test_printed_commands_all_come_from_one_place_and_are_preapproved():
+    """程式裡印給 Claude 的指令只從 commands.cli_command 組（前綴只有一份），每個子指令都有主流程 skill 預先核准
+    （publish 的提示只在改片那支跑 publish 時出現；兩支都會跑的指令，下面的測試照實際印出來的逐支檢查）。"""
+    import ast
+
+    src = ROOT / "src" / "article_to_video"
+    subs: set[str] = set()
+    for path in sorted(src.rglob("*.py")):
+        if "engine" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        docs = {id(b.body[0].value) for b in ast.walk(tree)
+                if isinstance(b, (ast.Module, ast.FunctionDef, ast.ClassDef)) and b.body
+                and isinstance(b.body[0], ast.Expr) and isinstance(b.body[0].value, ast.Constant)}
+        if path.name != "commands.py":
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs:
+                    assert "-m article_to_video" not in node.value, f"{path.name} 自己寫了指令前綴：{node.value!r}"
+        for call in _calls_to(tree, "cli_command"):
+            assert call.args and isinstance(call.args[0], ast.Constant), f"{path.name}:{call.lineno} 子指令要直接寫"
+            subs.add(call.args[0].value.split()[0])
+    assert {"checks", "review-prep", "review-frames", "confirm-box", "resolve"} <= subs
+    rules = [r for name in MAIN_FLOW for r in parse_skill(name)[1]]
+    for sub in sorted(subs):
+        assert any(f"article_to_video {sub} *" in r for r in rules), f"做片、改片的 skill 都沒有預先核准 {sub}"
+
+
+def test_next_steps_printed_after_a_build_are_preapproved(built_project):
+    cmds = printed_commands(built_project.stdout)
+    assert {c.split("article_to_video ")[1].split()[0] for c in cmds} >= {"checks", "review-prep"}, built_project.stdout
+    for cmd in cmds:
+        assert_preapproved(cmd)
+
+
+def test_without_uv_on_the_path_the_printed_commands_use_the_freshly_installed_uv(tmp_path):
+    """官方安裝程式剛裝好 uv、這次對話的 PATH 還找不到它：印出來的下一步要寫 ~/.local/bin/uv（skill 也是這樣核准的）。"""
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    from conftest import MINI_PROJECT
+
+    home = tmp_path / "家"
+    (home / ".local" / "bin").mkdir(parents=True)
+    (home / ".local" / "bin" / "uv").write_text("#!/bin/sh\n", encoding="utf-8")
+    (home / ".local" / "bin" / "uv").chmod(0o755)
+    root = tmp_path / "專案"
+    shutil.copytree(MINI_PROJECT, root)
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "HOME": str(home), "PATH": "/usr/bin:/bin"}
+    proc = subprocess.run([sys.executable, "-m", "article_to_video", "checks", str(root), "--tts", "fake"],
+                          capture_output=True, text=True, encoding="utf-8", env=env)
+    assert proc.returncode == 1, proc.stdout + proc.stderr  # 還沒出片：叫 Claude 先 build
+    [cmd] = printed_commands(proc.stderr)
+    assert cmd.startswith("~/.local/bin/uv run --project ") and " build " in cmd
+    assert_preapproved(cmd)
+
+
 def test_json_formats_in_the_skill_docs_are_valid_projects(tmp_path):
     """formats.md 的 narration.json、shots.json 範例照抄就是能讀的專案（Claude 照著寫不會一開始就錯）。"""
     from article_to_video.project import load_project

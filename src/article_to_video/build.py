@@ -22,6 +22,7 @@ from article_to_video.assemble import (
 )
 from article_to_video.boxes import require_boxes_ready
 from article_to_video.clip_cache import RenderReport, render_planned_clips
+from article_to_video.end_card import missing_channel_error
 from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.music import TRACKS, ensure_track
 from article_to_video.narration import SegmentAudio, get_tts_engine, narrate, write_timing
@@ -106,6 +107,8 @@ def plan_build(
     if added:
         log(f"設定快照：從使用者設定補上 {'、'.join(added)}（之後改使用者設定不會影響這支片）")
     project = load_project(project_dir, overrides={"tts": tts})
+    if not project.settings.channel.strip():  # 片尾卡要用；配音、抓公有數據之前就先講
+        raise missing_channel_error(project.root, data_dir)
     project, public_data = resolve_public_data(project)
     project, vox = resolve_vox(project)
     s = project.settings

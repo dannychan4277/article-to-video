@@ -41,6 +41,7 @@ from importlib import metadata
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from article_to_video.commands import MAINTAINER_PREFIX
 from article_to_video.environment import collect_environment
 from article_to_video.project import ProjectError, ProjectPaths, load_project
 
@@ -593,12 +594,12 @@ def _readme(manifest: dict[str, Any]) -> str:
 外掛版本：{manifest.get("pluginVersion")}（要完全一樣的結果，先切到這個版本）
 
 重現（在外掛的 repo 裡跑）：
-  uv run --project <repo> python -m article_to_video reproduce-issue <這個 zip>
+  {MAINTAINER_PREFIX} reproduce-issue <這個 zip>
 會解開到 zip 旁邊的同名資料夾：
   project/   作者的專案；旁白時間點用作者那台的紀錄（補上同長度的靜音），不重新配音、不用連網
   重現/      重渲出來的片段（clips/）和靜態圖（stills/），可以跟 zip 裡 stills/ 的作者那台比對
 整支重建：
-  uv run --project <repo> python -m article_to_video build <解開的資料夾>/project{build_tts}
+  {MAINTAINER_PREFIX} build <解開的資料夾>/project{build_tts}
 
 其他檔案：
   report.json        這包的說明（出錯分鏡、靜態圖時刻、最後一次建置的結果、略過了什麼）

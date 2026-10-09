@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 from article_to_video.check_log import load_log, now, resolution, save_log
 from article_to_video.clips import FONTS_DIR
+from article_to_video.commands import PLUGIN_ROOT, aspect_args, cli_command
 from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.project import ProjectError, ProjectPaths
 from article_to_video.review_page import timecode
@@ -60,7 +61,6 @@ __all__ = [
     "unresolved_must",
 ]
 
-PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 BRIEF = PLUGIN_ROOT / "skills" / "make-video" / "references" / "independent-review.md"
 KIT_DIR = "independent-review"
 SEVERITIES = ("必修", "該修", "可改")
@@ -258,10 +258,6 @@ def _shot_of(plan: BuildPlan, t: float) -> int | None:
     return None
 
 
-def _cli_prefix() -> str:
-    return f"uv run --project \"{PLUGIN_ROOT}\" python -m article_to_video"
-
-
 def prepare_review_kit(plan: BuildPlan, *, log: Log = _quiet) -> ReviewKit:
     """從成片做審片素材（見模組說明）。成片不是現在這份分鏡設定做出來的（改過還沒重新出片）就丟 ProjectError。"""
     from article_to_video.auto_checks import current_video
@@ -271,7 +267,8 @@ def prepare_review_kit(plan: BuildPlan, *, log: Log = _quiet) -> ReviewKit:
         raise ProjectError(
             "成片還沒做、或分鏡改過之後還沒重新出片",
             title="獨立審片要看最新的成片",
-            hint=f"先跑 build（python -m article_to_video build \"{plan.project.root}\"），出片成功再準備審片素材。",
+            hint=f"先跑 build（{cli_command('build', plan.project.root, *aspect_args(plan.format.name), '--no-open')}），"
+                 "出片成功再準備審片素材。",
         )
     ffmpeg = find_ffmpeg()
     fmt, tl = plan.format, plan.timeline
@@ -322,7 +319,6 @@ def prepare_review_kit(plan: BuildPlan, *, log: Log = _quiet) -> ReviewKit:
          "status": said.get((resolution(book, it["id"]) or {}).get("status"), "還沒處理")}
         for rnd in book["rounds"] for it in rnd.get("items") or [] if it.get("severity") in ("必修", "該修")
     ]
-    aspect = "" if fmt.name == "16x9" else f" --aspect {fmt.name.replace('x', ':')}"
     material = {
         "version": 1,
         "preparedAt": now(),
@@ -343,7 +339,7 @@ def prepare_review_kit(plan: BuildPlan, *, log: Log = _quiet) -> ReviewKit:
         "subtitles": "subtitles.srt",
         "freeze": freeze,
         "previous": previous,
-        "frameCommand": f"{_cli_prefix()} review-frames \"{plan.project.root}\"{aspect}",
+        "frameCommand": cli_command("review-frames", plan.project.root, *aspect_args(fmt.name)),
         "brief": "brief.md",
         "answer": "review.json",
     }
@@ -383,7 +379,7 @@ def find_kit(project_dir: str | os.PathLike, aspect: str | None = None) -> Revie
             continue
         return ReviewKit(kit, material)
     raise ProjectError("找不到審片素材", title="還沒準備審片素材",
-                       hint=f"先跑 review-prep（python -m article_to_video review-prep \"{project_dir}\"）。")
+                       hint=f"先跑 review-prep（{cli_command('review-prep', Path(project_dir), *aspect_args(aspect or '16x9'))}）。")
 
 
 def _parse_time(v: Any) -> float | None:

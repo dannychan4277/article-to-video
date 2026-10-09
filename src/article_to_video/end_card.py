@@ -10,16 +10,19 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Iterable, Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from article_to_video.commands import cli_command
 from article_to_video.project import Project, ProjectError
 
 if TYPE_CHECKING:
     from article_to_video.timeline import ClipPlan, Timeline, VideoFormat
 
-__all__ = ["END_CARD_GRAMMAR", "END_CARD_ID", "NOTES", "merge_sources", "plan_end_card"]
+__all__ = ["END_CARD_GRAMMAR", "END_CARD_ID", "NOTES", "merge_sources", "missing_channel_error", "plan_end_card"]
 
 END_CARD_ID = "end.card"
 """片尾卡的片段 id（檔名 specs/end.card.json、clips/end.card.mp4）。有句點，分鏡 id 不會跟它撞名。"""
@@ -61,18 +64,25 @@ def merge_sources(texts: Iterable[str]) -> list[str]:
     return [f"{k[0]}（{'、'.join(groups[k])}）{k[1]}" if isinstance(k, tuple) else k for k in merged]
 
 
+def missing_channel_error(project_root: Path, data_dir: str | os.PathLike | None = None) -> ProjectError:
+    """還沒設定頻道名、片尾卡做不出來的錯誤。設定快照已經記了空的頻道名時，只改使用者設定救不了這支片，
+    所以兩行指令都給：存進使用者設定（以後每支片）、補進這支片的設定快照。"""
+    return ProjectError(
+        "片尾卡要放你的名字，但還沒設定頻道名",
+        title="還不能出片",
+        hint="跟 Claude 說「頻道名叫○○」就會設定好。指令：以後每支片都用 "
+             + cli_command("settings set", "--channel", '"<頻道名>"', data_dir=data_dir)
+             + "；這支片也補上 " + cli_command("settings set", "--project", Path(project_root), "--channel", '"<頻道名>"'),
+    )
+
+
 def plan_end_card(project: Project, timeline: Timeline, fmt: VideoFormat, plans: Sequence[ClipPlan]) -> ClipPlan:
     """片尾卡的片段計畫。來源從前面所有片段計畫的 sources 彙整。"""
     from article_to_video.timeline import ClipPlan
 
     s = project.settings
     if not s.channel.strip():
-        raise ProjectError(
-            "片尾卡要放你的名字，但還沒設定頻道名",
-            title="還不能出片",
-            hint="跟 Claude 說「頻道名叫○○」就會設定好"
-                 "（指令：python -m article_to_video settings set --channel 你的頻道名）。",
-        )
+        raise missing_channel_error(project.root)
     data: dict[str, Any] = {
         "channel": s.channel,
         "sourcesLabel": "資料來源",
@@ -86,7 +96,8 @@ def plan_end_card(project: Project, timeline: Timeline, fmt: VideoFormat, plans:
         logo = (project.root / s.logo).absolute()
         if not logo.is_file():
             raise ProjectError(f"設定快照裡的 logo「{s.logo}」不在專案資料夾裡（{logo}）",
-                               hint="重設 logo：python -m article_to_video settings set --project <專案> --logo <圖檔>")
+                               hint="重設 logo：" + cli_command("settings set", "--project", project.root,
+                                                                "--logo", '"<圖檔>"'))
         data["image"] = str(logo)
         images.append(logo)
     o = timeline.outro

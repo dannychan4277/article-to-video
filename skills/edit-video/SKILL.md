@@ -17,6 +17,8 @@ allowed-tools:
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video resolve *)
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video publish *)
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings *)
+  - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-frames *)
+  - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video extract *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video projects *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video outline *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video feedback *)
@@ -32,6 +34,8 @@ allowed-tools:
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video resolve *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video publish *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings *)
+  - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-frames *)
+  - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video extract *)
   - Read(~/Movies/解說影片/**)
   - Edit(~/Movies/解說影片/**)
 ---

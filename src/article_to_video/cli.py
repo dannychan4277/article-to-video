@@ -69,6 +69,7 @@ import sys
 from collections.abc import Sequence
 
 from article_to_video.assemble import AssemblyError
+from article_to_video.commands import aspect_args, cli_command
 from article_to_video.clips import ClipRenderError
 from article_to_video.ffmpeg import FFmpegNotFoundError
 from article_to_video.narration import TTS_ENGINES, NarrationError
@@ -480,19 +481,18 @@ def _after_build_hint(plan, data_dir) -> str:
     from article_to_video.auto_checks import load_check_report
     from article_to_video.independent_review import review_enabled, reviewed_current_video
 
-    root = plan.project.root
-    aspect = "" if plan.format.name == "16x9" else f" --aspect {plan.format.name}"
+    root, aspect = plan.project.root, aspect_args(plan.format.name)
     steps = []
     unchecked = load_check_report(plan).unchecked
     if unchecked:
-        steps.append(f"自動檢查（{len(unchecked)} 個片段還沒查）：python -m article_to_video checks \"{root}\"{aspect}")
+        steps.append(f"自動檢查（{len(unchecked)} 個片段還沒查）：{cli_command('checks', root, *aspect, data_dir=data_dir)}")
     if review_enabled(data_dir) and not reviewed_current_video(plan):
-        steps.append(f"獨立審片（這版成片還沒審）：python -m article_to_video review-prep \"{root}\"{aspect}"
+        steps.append(f"獨立審片（這版成片還沒審）：{cli_command('review-prep', root, *aspect, data_dir=data_dir)}"
                      " → 用印出來的 prompt 派一個 agent → review-record")
     if steps:
         return "下一步：\n" + "\n".join(f"  {s}" for s in steps)
-    return ("自動檢查、獨立審片都跑過這版了。下一步：處理完必修，python -m article_to_video open-review "
-            f"\"{root}\"{aspect} 打開審片頁給作者看；作者點頭之後 publish --version <他看的那一版> 才是出片。")
+    return (f"自動檢查、獨立審片都跑過這版了。下一步：處理完必修，{cli_command('open-review', root, *aspect, data_dir=data_dir)}"
+            " 打開審片頁給作者看；作者點頭之後 publish --version <他看的那一版> 才是出片。")
 
 
 def _refresh_review(plan, data_dir, log) -> None:
@@ -519,7 +519,8 @@ def _checks(args: argparse.Namespace) -> int:
             raise ProjectError(
                 [f"片段 {cid} 還沒渲，或分鏡改過之後還沒重新出片" for cid in missing],
                 title="自動檢查要在出片之後跑",
-                hint=f"先跑 build（python -m article_to_video build \"{args.project}\"），出片成功再跑 checks。",
+                hint=f"先跑 build（{cli_command('build', plan.project.root, *aspect_args(plan.format.name), '--no-open', data_dir=args.data_dir)}），"
+                     "出片成功再跑 checks。",
             )
         report = run_checks(plan, jobs=args.jobs, log=log)
         log(format_report(plan, report))
@@ -573,11 +574,12 @@ def _review(args: argparse.Namespace) -> int:
         plan = plan_build(args.project, tts=args.tts, fmt=args.aspect, data_dir=args.data_dir, log=log)
         if args.command == "review-prep":
             if not ir.review_enabled(args.data_dir):
-                log("注意：使用者設定把獨立審片關掉了（settings set --independent-review 開 可以打開）；照樣準備素材。")
+                log("注意：使用者設定把獨立審片關掉了（"
+                    f"{cli_command('settings set', '--independent-review', '開', data_dir=args.data_dir)} 可以打開）；照樣準備素材。")
             kit = ir.prepare_review_kit(plan, log=log)
             log(f"派審片 agent 時把這個檔的內容當 prompt：{kit.prompt}")
-            log("agent 寫完 review.json 之後跑：python -m article_to_video review-record "
-                f"\"{plan.project.root}\"" + ("" if plan.format.name == "16x9" else f" --aspect {plan.format.name}"))
+            log("agent 寫完 review.json 之後跑：" + cli_command("review-record", plan.project.root,
+                                                                 *aspect_args(plan.format.name), data_dir=args.data_dir))
         else:
             kit = ir.find_kit(args.project, plan.format.name)
             src = args.file or str(kit.answer)
@@ -599,8 +601,10 @@ def _review(args: argparse.Namespace) -> int:
                 log(f"  上一輪 {p['id']}：{p['status']}")
             must = ir.unresolved_must(plan)
             if must:
-                log(f"還有 {len(must)} 項必修沒處理，正式出片會被擋下：改好之後 resolve <代號> --fixed \"怎麼改的\"；"
-                    "作者決定不改的 resolve <代號> --accept \"理由\" --by 作者")
+                root = plan.project.root
+                log(f"還有 {len(must)} 項必修沒處理，正式出片會被擋下：改好之後 "
+                    + cli_command("resolve", root, "<代號>", "--fixed", '"怎麼改的"') + "；作者決定不改的 "
+                    + cli_command("resolve", root, "<代號>", "--accept", '"理由"', "--by", "作者"))
             _refresh_review(plan, args.data_dir, log)
     except KNOWN_ERRORS as e:
         rec.finish(e)

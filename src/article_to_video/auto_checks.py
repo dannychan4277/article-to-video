@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any
 
 from article_to_video.check_log import load_log, now, resolution
 from article_to_video.clip_cache import clip_hash
+from article_to_video.commands import cli_command
 from article_to_video.clips import QA_SCRIPT, _absolutize_images
 from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.project import ProjectError
@@ -711,7 +712,7 @@ def format_report(plan: BuildPlan, report: CheckReport) -> str:
     if bad:
         lines.append(f"有 {len(bad)} 項必修沒處理，正式出片會被擋下。先打開對照圖看：真的有問題就改分鏡再出片"
                      "（改過的片段會自動重查）；看過確定沒問題、要保留，就記下接受的理由：")
-        lines.append(f"  python -m article_to_video resolve \"{root}\" {' '.join(f.token for f in bad)} --accept \"理由\"")
+        lines.append("  " + cli_command("resolve", root, *(f.token for f in bad), "--accept", '"理由"'))
     else:
         lines.append("沒有擋出片的問題。" if report.findings or not report.unchecked else "")
     lines.append(f"彙整：{checks_json(plan)}")
@@ -725,10 +726,9 @@ def _resolve_hint(root: Path, tokens: Sequence[str]) -> str:
     review = [t for t in tokens if not t.startswith(("qa:", "band:", "hold:"))]
     lines = ["要改：改分鏡設定再出片（自動檢查的問題，改過的片段會自動重查）。"]
     if review:
-        lines.append("  獨立審片的問題改好之後記下來："
-                     f"python -m article_to_video resolve \"{root}\" {' '.join(review)} --fixed \"怎麼改的\"")
+        lines.append("  獨立審片的問題改好之後記下來：" + cli_command("resolve", root, *review, "--fixed", '"怎麼改的"'))
     lines.append("不改：看過畫面、確定要保留，記下理由（作者決定不改的加 --by 作者）：")
-    lines.append(f"  python -m article_to_video resolve \"{root}\" {' '.join(tokens)} --accept \"理由\"")
+    lines.append("  " + cli_command("resolve", root, *tokens, "--accept", '"理由"'))
     return "\n".join(lines)
 
 

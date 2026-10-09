@@ -250,13 +250,14 @@ SKILL = Path(__file__).resolve().parent.parent / "skills" / "report-issue" / "SK
 
 
 def test_report_skill_triggers_on_the_phrase_and_runs_only_the_report_command():
-    text = SKILL.read_text(encoding="utf-8")
-    _, front, body = text.split("---\n", 2)
-    meta = dict(line.split(": ", 1) for line in front.strip().splitlines())
+    from test_skills import parse_skill
+
+    meta, rules, body = parse_skill("report-issue")
     assert meta["name"] == "report-issue"
     assert "回報問題" in meta["description"]
     assert "disable-model-invocation" not in meta  # 作者說「回報問題」Claude 要能自己叫
-    assert meta["allowed-tools"] == "Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video report-issue *)"
+    assert rules == [f"Bash({uv}run --project ${{CLAUDE_PLUGIN_ROOT}} python -m article_to_video report-issue *)"
+                     for uv in ("uv ", "~/.local/bin/uv ")]  # 只放行打包，兩種 uv 寫法
     assert "uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video report-issue" in body
     assert "LINE" in body and "Danny" in body
     # skill 裡叫到的選項，指令真的有

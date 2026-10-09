@@ -73,6 +73,21 @@ def test_review_material_is_prepared_from_the_finished_video(prepped):
     assert str(kit / "prompt.txt") in proc.stdout
 
 
+def test_the_frame_command_given_to_the_reviewer_is_preapproved(prepped):
+    """審片 agent 照 prompt 抽幀：那一行指令要被做片、改片兩支 skill 預先核准，作者才不會在「自動」那一步被問權限。"""
+    from test_skills import assert_preapproved, printed_commands
+
+    root, proc = prepped
+    m = json.loads((root / KIT / "material.json").read_text(encoding="utf-8"))
+    prompt = (root / KIT / "prompt.txt").read_text(encoding="utf-8")
+    [cmd] = printed_commands(m["frameCommand"])
+    assert cmd == m["frameCommand"] and " review-frames " in cmd and cmd in prompt
+    assert_preapproved(cmd + " --at 6.0")
+    assert_preapproved(cmd + " --from 5.5 --to 6.0 --step 0.25")
+    for cmd in printed_commands(proc.stdout):  # review-prep 印的下一步（review-record）
+        assert_preapproved(cmd)
+
+
 def test_the_reviewer_can_pull_full_resolution_frames_from_the_video(prepped):
     root, _ = prepped
     one = run_cli("review-frames", str(root), "--at", "0:06.0")

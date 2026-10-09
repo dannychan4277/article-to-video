@@ -1,7 +1,9 @@
 ---
 name: report-issue
 description: 回報問題：做片失敗、卡住，或做出來的畫面不對時，把錯誤紀錄、分鏡設定、旁白稿、出錯分鏡的畫面和這台電腦的環境打包成一個 zip 放到桌面，讓作者用 LINE 傳給 Danny。作者說「回報問題」「回報錯誤」「把問題傳給 Danny」「打包給 Danny 看」時使用。
-allowed-tools: Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video report-issue *)
+allowed-tools:
+  - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video report-issue *)
+  - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video report-issue *)
 ---
 
 # 回報問題
@@ -30,6 +32,7 @@ allowed-tools: Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_
    ```
 
    它會順便渲幾張出錯分鏡的畫面，大約十幾秒。就算畫面渲不出來（那可能正是問題所在），zip 還是會做好。
+   說找不到 `uv`：把開頭的 `uv` 換成 `~/.local/bin/uv` 再跑一次。
 
 5. **告訴作者。** 用口語講，大意是：
    - 檔案已經放在桌面，檔名是「回報問題-….zip」（照抄指令印出來的檔名）。
