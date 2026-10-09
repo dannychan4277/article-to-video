@@ -23,10 +23,8 @@ __all__ = [
     "ENGINE_DIR",
     "EXAMPLE_T3_SPEC",
     "FONTS_DIR",
-    "MUSIC_TEMPLATE",
     "QA_SCRIPT",
     "RENDER_SCRIPT",
-    "SUBZONE_GATE_SCRIPT",
     "ClipRenderError",
     "MissingGlyphError",
     "RenderResult",
@@ -37,8 +35,6 @@ __all__ = [
 ENGINE_DIR = Path(__file__).resolve().parent / "engine"
 RENDER_SCRIPT = ENGINE_DIR / "render.py"
 QA_SCRIPT = ENGINE_DIR / "qa.py"
-SUBZONE_GATE_SCRIPT = ENGINE_DIR / "subzone_gate.py"
-MUSIC_TEMPLATE = ENGINE_DIR / "audio" / "synth_template.py"
 FONTS_DIR = ENGINE_DIR / "lib" / "fonts"
 EXAMPLE_T3_SPEC = ENGINE_DIR / "examples" / "t3_finance_chart.json"
 

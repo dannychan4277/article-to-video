@@ -2,7 +2,7 @@
 
 這個資料夾的動畫引擎來自 **huashu-art-motion**，作者是**花叔**（alchaincyf，<https://github.com/alchaincyf/huashu-art-motion>），以 MIT 授權釋出，授權原文保留在同資料夾的 `LICENSE`。感謝花叔把整套引擎開源。
 
-外掛只帶「財經圖表」（`t3_finance_chart`）和「Vox 剪報」（`y2_vox`）兩種片段用得到的部分，另外帶了驗收工具與程式作曲範本。複製來源是 2026-10-06 發布包，加上 Danny 本機做第一支財經解說片時的修正（上游 CHANGELOG 2026-10-08 那一條）。
+外掛只帶「財經圖表」（`t3_finance_chart`）和「Vox 剪報」（`y2_vox`）兩種片段用得到的部分，另外帶了片段驗收工具（`qa.py`）。複製來源是 2026-10-06 發布包，加上 Danny 本機做第一支財經解說片時的修正（上游 CHANGELOG 2026-10-08 那一條）。
 
 ## 帶了什麼
 
@@ -12,12 +12,11 @@
 | `clips/t3_finance_chart.js`、`clips/y2_vox.js` | 兩種片段的畫法 |
 | `lib/{util,paint,kit,motion,camera,diagram,typo,chart,ui,collage,fonts}.js` | 兩種片段共用的函式庫 |
 | `lib/fonts/` | 字型子集（SIL OFL 1.1，見 `lib/fonts/LICENSES.md`、`lib/fonts/OFL.txt`），不屬於 MIT |
-| `qa.py`、`subzone_gate.py` | 片段驗收（穩定、動感、框景）、字幕帶圖形檢查 |
-| `audio/synth_template.py` | 程式作曲範本（上游 `scripts/audio/synth_艺术史速通.py`，內容沒改） |
+| `qa.py` | 片段驗收（穩定、動感、框景） |
 | `examples/t3_finance_chart.json` | 外掛自己寫的繁中財經圖表範例（數字取自 FRED 公開資料 DGS2） |
 | `clips/a2v_end_card.js` | **外掛自己寫的**片尾卡語法（不是花叔原版）：頻道名＋logo、資料來源、免責與 AI 配音聲明，沿用引擎的字型與版式工具 |
 
-沒帶的：其他語法與場景、示範片、參考影片、上游的範例資料、花叔的卡通形象與角色素材（`toon.js`、`rig_huashu.js` 等，上游明訂不隨 MIT），以及這兩種片段用不到的字型。
+沒帶的：其他語法與場景、示範片、參考影片、上游的範例資料、花叔的卡通形象與角色素材（`toon.js`、`rig_huashu.js` 等，上游明訂不隨 MIT），這兩種片段用不到的字型，以及外掛沒呼叫的兩支腳本：字幕帶圖形檢查 `scripts/subzone_gate.py`（外掛的 `auto_checks.py` 照它的做法另寫，改成任何畫面大小都能用）、程式作曲範本 `scripts/audio/synth_艺术史速通.py`（外掛的 `music.py` 照它的做法另寫，見最後一條）。
 
 ## Danny 本機修正（複製時就已經在程式裡，搜「Danny 本机改」）
 
@@ -43,9 +42,9 @@ Vox 剪報 `clips/y2_vox.js`：
 - `clip.js`：缺字除了告警，也記在 `window.__missingGlyphs`。
 - `render.py`：spec 用 UTF-8 讀；`--ffmpeg <路徑>` 指定 ffmpeg（不靠 PATH）；檢查 ffmpeg 結束碼；`--strict-glyphs` 有缺字就在渲染前失敗；頁面 `console.error` 印成 `[page-error]`，跟告警 `[page]` 分開。
 - `qa.py`：`--project` 預設是本資料夾（qa.py 跟引擎放在一起）；spec、`qa.json`、`qa.md` 用 UTF-8 讀寫。
-- `subzone_gate.py`：`--ffmpeg <路徑>` 指定 ffmpeg。
-- `audio/synth_template.py` 只改了檔名。注意它會把輸出寫在腳本旁邊、需要 `soundfile`，要用請先複製出去再改。
-- `clips/t3_finance_chart.js`：`data.colors.brand` 品牌色，取代「當品牌用的紅」（頂端色條、小旗、角標、標註圓點、大數字、折線預設色）；沒寫就是原本的紅 `#E3120B`。負數柱的標註改放在那根柱的數值標籤正下方（讓開它橫跨到的負數柱與標籤，init 裡最低那根柱下面多留文字塊的高度）：原版的斜向標註往下拉，會壓在柱底下方的數值標籤上（16:9、9:16 都會；tests/test_render_clip.py 有靜態圖測試）。`data.colors.ink`：要讀的字與記號（角標、標註圓點、大數字）用的顏色，沒寫就跟 brand 一樣——品牌色太淺時 brand.py 給它同色相加深的版本，色條、小旗照用原色。折線下方漸層改跟著線的顏色（原本寫死紅色）。K 線漲跌的紅綠不變。
+- `clips/t3_finance_chart.js`：`data.colors.brand` 品牌色，取代「當品牌用的紅」（頂端色條、小旗、角標、標註圓點、大數字、折線預設色）；沒寫就是原本的紅 `#E3120B`。折線下方漸層改跟著線的顏色（原本寫死紅色）。K 線漲跌的紅綠不變。
+- `clips/t3_finance_chart.js`：`data.colors.ink`：要讀的字與記號（角標、標註圓點、大數字）用的顏色，沒寫就跟 brand 一樣——品牌色太淺時外掛的 `brand.py` 給它同色相加深的版本，色條、小旗照用原色。
+- `clips/t3_finance_chart.js`：負數柱的標註改放在那根柱的數值標籤正下方（讓開它橫跨到的負數柱與標籤，init 裡最低那根柱下面多留文字塊的高度）。原版的斜向標註往下拉，會壓在柱底下方的數值標籤上（16:9、9:16 都會；`tests/test_render_clip.py` 有靜態圖測試）。
 - `clips/t3_finance_chart.js`（直式 9:16，#10）：
   - 左右邊距讓開 `safe.left`／`safe.right`（短影音平台右側的按鈕欄）；頂端色條畫在 `safe.top`（原版畫在 0）。safe 沒寫左右、上方時跟原版一樣。
   - 原版「竖屏」的「標題最多 3 行、多一格刻度、底部多留 260」改成只在讓開 safe 之後內容框真的很高（高 > 寬 × 1.25）時才用；直式成片上下讓給平台介面與字幕後內容框接近方形，照原版會擠出 8 條刻度、長標題吃掉整個圖區。小字放大兩成、邊距 70、x 軸抽稀 n/6 照舊。
@@ -53,4 +52,4 @@ Vox 剪報 `clips/y2_vox.js`：
   - 時間軸（折線、K 線）的 x 軸名字互相重疊就不寫：被標註那根優先，其餘照原規則（含 `data.xTicks`）由左到右放得下才寫。沒有重疊時跟原版一樣；直式畫面窄、字放大兩成，原版的 n/6 抽稀常常疊在一起。
 - `clips/y2_vox.js`（直式 9:16，#10）：相機的縮放與「框在不在鏡頭裡」改用讓開 `safe.left`／`safe.right` 之後的寬度，畫面中心也左右平移（原版只處理上下）。safe 沒寫左右時跟原版一樣。
 - `clips/a2v_end_card.js`（外掛自己的片尾卡語法）：接 `safe`（直式成片的平台介面區）。
-- 配樂：外掛的 `article_to_video/music.py` 照 `audio/synth_template.py` 的樂器與混音做法改寫（加法合成、撥弦、ADSR、鋸齒鋪底、合成殘響、電平對齊與軟限幅），改用 numpy 頻域濾波、不需要 scipy／soundfile，編曲另寫成三首 8 小節可循環的原創樂句。範本檔本身沒動。
+- 配樂：外掛的 `article_to_video/music.py` 改寫自花叔的程式作曲範本 `scripts/audio/synth_艺术史速通.py`（MIT，同一份 `LICENSE`）：照它的樂器與混音做法（加法合成、撥弦、ADSR、鋸齒鋪底、合成殘響、電平對齊與軟限幅），改用 numpy 頻域濾波、不需要 scipy／soundfile，編曲另寫成三首 8 小節可循環的原創樂句。範本本身沒帶進外掛（外掛不呼叫它）。

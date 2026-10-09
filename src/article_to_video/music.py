@@ -1,6 +1,6 @@
 """配樂：用程式作曲產生幾首原創配樂（不用任何取樣、不放音檔進 repo）。
 
-做法改寫自內嵌引擎的程式作曲範本 engine/audio/synth_template.py（花叔 huashu-art-motion，MIT）：
+做法改寫自花叔 huashu-art-motion（MIT，授權見 engine/LICENSE）的程式作曲範本 scripts/audio/synth_艺术史速通.py（沒帶進外掛）：
 加法合成、撥弦（各次諧波各自衰減）、ADSR、鋸齒鋪底、合成殘響、電平對齊與軟限幅。範本是綁死 15 秒的
 速通片配樂（還有貓叫、碎裂音效），這裡只拿樂器與混音的做法，編曲另寫成「8 小節可循環的樂句」：
 - 濾波改用頻域（numpy FFT）做，不需要 scipy；殘響用循環摺積，樂句頭尾接起來沒有縫。
