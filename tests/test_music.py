@@ -86,16 +86,16 @@ def test_loop_point_has_no_click(tracks):
         assert jump[1999] <= np.percentile(inside, 99.9), name
 
 
-def preview(*args: str) -> subprocess.CompletedProcess:
+def samples(*args: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
-    return subprocess.run([sys.executable, "-m", "article_to_video", "preview", *args],
+    return subprocess.run([sys.executable, "-m", "article_to_video", "samples", *args],
                           capture_output=True, text=True, encoding="utf-8", env=env)
 
 
-def test_music_preview_command_writes_one_file_per_track(tracks, tmp_path):
+def test_music_samples_command_writes_one_file_per_track(tracks, tmp_path):
     """安裝流程讓作者試聽、挑一首：每首一個試聽檔，輸出列出名字、說明、檔案位置。"""
     data = next(iter(tracks.values())).parent.parent
-    proc = preview("music", "--out", str(tmp_path / "試聽"), "--data-dir", str(data), "--seconds", "6")
+    proc = samples("music", "--out", str(tmp_path / "試聽"), "--data-dir", str(data), "--seconds", "6")
     assert proc.returncode == 0, proc.stderr
     for name, track in TRACKS.items():
         f = tmp_path / "試聽" / f"music-{name}.wav"
@@ -105,11 +105,11 @@ def test_music_preview_command_writes_one_file_per_track(tracks, tmp_path):
         assert track.label in proc.stdout and str(f) in proc.stdout
 
 
-def test_voice_preview_command_writes_one_file_per_voice(tmp_path):
+def test_voice_samples_command_writes_one_file_per_voice(tmp_path):
     """安裝流程讓作者聽三個聲音挑一個（測試用假配音層，不連網）。"""
     from article_to_video.project import ZH_TW_VOICES
 
-    proc = preview("voice", "--out", str(tmp_path / "試聽"), "--tts", "fake", "--data-dir", str(tmp_path / "data"))
+    proc = samples("voice", "--out", str(tmp_path / "試聽"), "--tts", "fake", "--data-dir", str(tmp_path / "data"))
     assert proc.returncode == 0, proc.stderr
     for vid, name in ZH_TW_VOICES.items():
         f = tmp_path / "試聽" / f"voice-{vid}.wav"
