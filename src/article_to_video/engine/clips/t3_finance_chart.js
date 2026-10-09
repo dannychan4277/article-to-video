@@ -17,25 +17,27 @@ return {
   safe: true,
   init(ctx) {
     const { W, H, u, data: d } = ctx, m = (ctx.portrait ? 70 : 90) * u, c = document.createElement('canvas').getContext('2d');
+    const mL = Math.max(m, ctx.safe.left), mR = Math.max(m, ctx.safe.right);   // [article-to-video 內嵌] 左右邊距讓開 safe.left/right（直式：短影音平台右側的按鈕欄）；safe 沒寫左右時＝m，跟原版一樣
+    const tall = ctx.portrait && ctx.box.h > W * 1.25;                    // [article-to-video 內嵌] 竖屏的「標題 3 行、多一格刻度、底部多留」只在讓開 safe 之後畫面真的很高時才用：直式上下讓給平台介面與字幕後，內容框接近方形，照原版會擠成 8 條刻度、圖區被標題吃光
     const kind = (ctx.of('bar', 'line', 'candle')[0] || {}).kind || d.chart || 'bar';
     const S = d.series || [];
     const vals = kind === 'candle' ? S.flatMap(r => [r.h, r.l]) : S.map(r => r.value);
     let lo = Math.min(...vals), hi = Math.max(...vals);
     let zeroBased = kind === 'bar' || lo <= 0 || (hi - lo) / hi > 0.6;
     if (zeroBased) lo = Math.min(0, lo);
-    const pad = (hi - lo) * 0.08, ticks = CH.ticks(zeroBased ? lo : lo - pad, hi + pad, ctx.portrait ? 5 : 4);
+    const pad = (hi - lo) * 0.08, ticks = CH.ticks(zeroBased ? lo : lo - pad, hi + pad, tall ? 5 : 4);
     const step = ticks[1] - ticks[0];                                     // 刻度要把数据整个包住（CH.ticks 只给区间内的整刻度）
     while (ticks[ticks.length - 1] < hi + pad * 0.5) ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
     while (ticks[0] > (zeroBased ? lo : lo - pad * 0.5)) ticks.unshift(+(ticks[0] - step).toFixed(10));
-    const titleSz = (ctx.portrait ? 64 : 58) * u, t = TY.fit(c, d.title || '', W - 2 * m, titleSz, 'PuHui-Bold', { maxLines: ctx.portrait ? 3 : 2, weight: '700 ' });
+    const titleSz = (ctx.portrait ? 64 : 58) * u, t = TY.fit(c, d.title || '', W - mL - mR, titleSz, 'PuHui-Bold', { maxLines: tall ? 3 : 2, weight: '700 ' });
     const sub = (d.unit || '') + (!zeroBased ? (d.unit ? '　' : '') + (d.axisNote || '纵轴未从 0 开始') : '');
     // 副标题、来源行：放不下先缩一点，再折两行（竖屏长口径会出画）；来源行要让开右下角标
-    const fsz = ctx.portrait ? 1.2 : 1, subF = TY.fit(c, sub, W - 2 * m, 32 * u * fsz, 'PuHui-Medium', { maxLines: 2, min: 0.8 });
+    const fsz = ctx.portrait ? 1.2 : 1, subF = TY.fit(c, sub, W - mL - mR, 32 * u * fsz, 'PuHui-Medium', { maxLines: 2, min: 0.8 });
     c.font = `700 ${28 * u}px "PuHui-Medium"`; const badgeW = d.badge ? c.measureText(d.badge).width + 28 + 30 * u : 0;
-    const srcF = TY.fit(c, d.source || '', W - 2 * m - badgeW, 26 * u * fsz, 'PuHui-Medium', { maxLines: 2, min: 0.8 });
+    const srcF = TY.fit(c, d.source || '', W - mL - mR - badgeW, 26 * u * fsz, 'PuHui-Medium', { maxLines: 2, min: 0.8 });
     const top = ctx.safe.top + 80 * u + t.lines.length * t.size * 1.25 + 60 * u + (subF.lines.length - 1) * subF.size * 1.3;
     const band = ctx.of('number').length ? 150 * u : 0;                 // 有 number：给大数字单独留一条，不压在图区里（折线一上涨，右上角正好是线头）
-    const F = { x: m + 20 * u, y: top + 40 * u + band, w: W - 2 * m - 40 * u, h: H - top - 40 * u - band - (ctx.portrait ? 260 : 190) * u - ctx.safe.bottom - (srcF.lines.length - 1) * srcF.size * 1.3 };   // safe.bottom：字幕带整条让出来，来源行落在它上面
+    const F = { x: mL + 20 * u, y: top + 40 * u + band, w: W - mL - mR - 40 * u, h: H - top - 40 * u - band - (tall ? 260 : 190) * u - ctx.safe.bottom - (srcF.lines.length - 1) * srcF.size * 1.3 };   // safe.bottom：字幕带整条让出来，来源行落在它上面
     const n = S.length, slot = (F.w - 80 * u) / n, xs = S.map((_, i) => F.x + slot * (i + 0.5));   // 右边留 80px 给刻度值，别压在最后一根柱上
     // x 轴：时间序列（折线/K 线，或 data.xAxis:'time'）按间隔抽稀；类目（柱状图默认）每根都要有名字，放不下就缩字、再放不下错成两行
     const category = (d.xAxis || (kind === 'bar' ? 'category' : 'time')) === 'category';
@@ -45,24 +47,34 @@ return {
     const xScale = category ? clamp(slot * 0.94 / maxW, 0.7, 1) : 1, stagger = category && slot * 0.94 < maxW * 0.7;
     // 刻度标签按步长定小数位：步长 2.5 就要 1 位，不然 −2.5/2.5/7.5 会被四舍五入印成 −3/3/8（刻度撒谎）
     let tdec = 0; while (tdec < 4 && Math.abs(step * 10 ** tdec - Math.round(step * 10 ** tdec)) > 1e-6) tdec++;
+    const roomFor = need => { if (F.h - need < 60 * u) throw new Error(`[article-to-video 內嵌] 圖區太矮：讓開上下 safe（字幕、平台介面）之後只剩 ${Math.round(F.h)}px 畫資料，標註留白要 ${Math.round(need)}px。標題、副標或來源太長，或多了大數字那一條：請縮短文字、拿掉大數字，或把標註改短`); };   // [article-to-video 內嵌] 原版這裡放不下時下面的 while 會無限加刻度，當掉時只看到 Invalid array length
+    roomFor(0);
     if (kind === 'bar' && Math.min(...vals) < 0) {                       // 负数柱的数值写在柱底下方：最低那根下面留出一行，不然压到类目名
-      const vmin = Math.min(...vals), need = 56 * u * fs0;
+      const vmin = Math.min(...vals), need = 56 * u * fs0; roomFor(need);
       while ((vmin - ticks[0]) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.unshift(+(ticks[0] - step).toFixed(10));
     }
     const qh1 = ctx.of('highlight')[0], H1 = d.highlight || {}, hiI = qh1 ? (qh1.data && qh1.data.index != null ? qh1.data.index : (H1.index != null ? H1.index : S.length - 1)) : -1;
     if (kind === 'bar' && hiI >= 0 && S[hiI] && S[hiI].value >= 0) {   // 标注的柱子上方要留够文字块（[Danny 本机改] 原本只管「不是最高那根」；标最高那根时斜向标注被 ty 夹在 F.y+60，文字压回柱子上）
-      const nL = [C(qh1.text, H1.text), C(qh1.sub, H1.sub)].filter(Boolean).length, need = (52 * nL + 44 + 30) * u * fs0, vmax = Math.max(...vals);
+      const nL = [C(qh1.text, H1.text), C(qh1.sub, H1.sub)].filter(Boolean).length, need = (52 * nL + 44 + 30) * u * fs0, vmax = Math.max(...vals); roomFor(need);
       while ((ticks[ticks.length - 1] - vmax) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
     }
     if (kind === 'line' && hiI >= 0) {                                    // [Danny 本机改] 折线标注：线的最高点之上留够文字块，斜向标注才不会压在线上
-      const vmax = Math.max(...vals), need = 170 * u * fs0;
+      const vmax = Math.max(...vals), need = 170 * u * fs0; roomFor(need);
       while ((ticks[ticks.length - 1] - vmax) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
     }
-    L = { subF, srcF, m, kind, S, zeroBased, ticks, tdec, yS: CH.lin(ticks[0], ticks[ticks.length - 1], F.y + F.h, F.y), F, xs, slot, t, sub, band, category, xFont: xf * xScale, stagger,
+    L = { subF, srcF, m: mL, mR, kind, S, zeroBased, ticks, tdec, yS: CH.lin(ticks[0], ticks[ticks.length - 1], F.y + F.h, F.y), F, xs, slot, t, sub, band, category, xFont: xf * xScale, stagger,
       every: category ? 1 : Math.max(1, Math.ceil(n / (ctx.portrait ? 6 : 10))) };
     const main = (d.colors && d.colors.main) || (kind === 'bar' ? '#006BA2' : RED);
     L.col = { main, accent: (d.colors && d.colors.accent) || main, dim: (d.colors && d.colors.dim) || '#C6D2D8' };
     L.updown = d.upDown === 'us' ? ['#1B9E5A', RED] : [RED, '#1B9E5A'];
+    if (!category) {   // [article-to-video 內嵌] 時間軸的名字互相重疊就不寫：直式畫面窄、字又放大兩成，原版的抽稀間隔常讓相鄰名字疊在一起。被標註那根優先，其餘照原本的規則（含 xTicks）從左到右、放得下才寫；沒有重疊時跟原版一樣
+      c.font = `400 ${L.xFont}px ${NUM}`;
+      const half = i => c.measureText(String(S[i].label ?? '')).width / 2;
+      const base = i => d.xTicks ? d.xTicks.includes(i) : i % L.every === 0 || (i === n - 1 && (n - 1) % L.every >= L.every / 2);
+      const kept = hiI >= 0 && S[hiI] ? [hiI] : [];
+      for (let i = 0; i < n; i++) if (i !== hiI && base(i) && kept.every(j => Math.abs(xs[i] - xs[j]) >= half(i) + half(j) + 16 * u)) kept.push(i);
+      L.xKeep = new Set(kept);
+    }
   },
   draw(c0, t, ctx) {
     // alpha：图是白纸黑字，叠在深色画面上墨色看不见。先画进缓冲，再带一圈白色光晕合成（和 t1 同一招）
@@ -74,7 +86,7 @@ return {
     // ---- 版式：顶红线 → 小旗 → 标题 → 副标题（单位/口径）→ 来源 → 角标 ----
     if (lt > 0) {
       const p = MO.quintOut(MO.seg(lt, 0, 0.45));
-      c.fillStyle = RED; c.fillRect(0, 0, W * p, 8 * u); CH.tag(c, m, ctx.safe.top + 52 * u, 96 * p * u, 22 * u, RED);
+      c.fillStyle = RED; c.fillRect(0, ctx.safe.top, W * p, 8 * u);   /* [article-to-video 內嵌] 紅線畫在 safe.top（原版 0；16:9 safe.top＝0 不變） */ CH.tag(c, m, ctx.safe.top + 52 * u, 96 * p * u, 22 * u, RED);
       c.save(); c.textBaseline = 'alphabetic'; c.textAlign = 'left';
       const tp = MO.quintOut(MO.seg(lt, 0.05, 0.5)); c.globalAlpha = tp; c.fillStyle = INK; c.font = `700 ${L.t.size}px ${CNB}`;
       L.t.lines.forEach((ln, i) => c.fillText(ln, m, ctx.safe.top + 80 * u + (i + 1) * L.t.size * 1.2 + (1 - tp) * 18 * u));
@@ -83,7 +95,7 @@ return {
       c.globalAlpha = MO.seg(lt, 0.2, 0.6); c.font = `400 ${L.srcF.size}px ${CN}`; c.fillStyle = '#7c868b';
       L.srcF.lines.forEach((ln, k, a) => c.fillText(ln, m, H - 40 * u - ctx.safe.bottom - (a.length - 1 - k) * L.srcF.size * 1.3));
       c.restore();
-      if (d.badge) { c.save(); c.globalAlpha = MO.seg(lt, 0.2, 0.6); CH.demoBadge(c, d.badge, { x: W - m, y: H - 50 * u - ctx.safe.bottom, font: `700 ${28 * u}px ${CN}`, col: RED, box: 'rgba(227,18,11,0.06)' }); c.restore(); }
+      if (d.badge) { c.save(); c.globalAlpha = MO.seg(lt, 0.2, 0.6); CH.demoBadge(c, d.badge, { x: W - L.mR, y: H - 50 * u - ctx.safe.bottom, font: `700 ${28 * u}px ${CN}`, col: RED, box: 'rgba(227,18,11,0.06)' }); c.restore(); }
     }
     // ---- 坐标系（版式之后 0.25s） ----
     const qd = ctx.of('bar', 'line', 'candle')[0] || { at: qt.at + 0.75 }, gStart = Math.min(qt.at + 0.25, qd.at - 0.4);
@@ -91,7 +103,7 @@ return {
     const fmtTick = v => TY.fmt(v, L.tdec);
     CH.grid(c, F, L.ticks, yS, gp, { col: GRID, zeroCol: L.zeroBased ? INK : GRID, font: `400 ${28 * u * fs}px ${NUM}`, labelCol: '#5b666b', side: 'right', lw: 1.5 * u, zeroLw: 3 * u, fmt: fmtTick, labelDy: -10 * u });
     const qh0 = ctx.of('highlight')[0], hi0 = qh0 ? (qh0.data && qh0.data.index != null ? qh0.data.index : (d.highlight && d.highlight.index != null ? d.highlight.index : S.length - 1)) : -1;
-    const keep = i => d.xTicks ? (d.xTicks.includes(i) || i === hi0) : i % L.every === 0 || i === hi0 ||   // [Danny 本机改] data.xTicks：自己指定要写名字的索引（时间轴按月/按年对齐）
+    const keep = L.xKeep ? (i => L.xKeep.has(i)) : i => d.xTicks ? (d.xTicks.includes(i) || i === hi0) : i % L.every === 0 || i === hi0 ||   // [Danny 本机改] data.xTicks：自己指定要写名字的索引（时间轴按月/按年对齐）
       (i === S.length - 1 && (S.length - 1) % L.every >= L.every / 2);   // 被标注的那根永远有名字；末尾标签离上一个太近就不硬塞
     const xp = MO.seg(ctx.lt(t, gStart + 0.15), 0, 0.5), xy = F.y + F.h + 46 * u, xo = { font: `400 ${L.xFont}px ${NUM}`, col: '#3a4246' };
     if (!L.stagger) CH.xLabels(c, S.map((r, i) => ({ x: xs[i], label: keep(i) ? String(r.label ?? '') : '' })), xy, xp, xo);
@@ -170,8 +182,8 @@ return {
       c.save(); c.globalAlpha = clamp((t - (q.at - 0.9)) / 0.2); c.font = `700 ${120 * u}px ${NUM}`; c.fillStyle = RED; c.textAlign = 'right'; c.textBaseline = 'alphabetic';
       const numStr = (nd.prefix || '') + TY.fmt((nd.value || 0) * k, nd.decimals ?? 0) + (nd.suffix || ''), by = F.y - 62 * u;   // 落在图区上方专留的那一条（让开顶格刻度值）
       const nw = c.measureText((nd.prefix || '') + TY.fmt(nd.value || 0, nd.decimals ?? 0) + (nd.suffix || '')).width;
-      TY.tabular(c, numStr, W - m, by, { align: 'right' });
-      const cap = q.text ?? q.sub; if (cap) { c.font = `400 ${30 * u * fs}px ${CN}`; c.fillStyle = SUB; c.textAlign = 'right'; c.fillText(cap, W - m - nw - 24 * u, by - 10 * u); }
+      TY.tabular(c, numStr, W - L.mR, by, { align: 'right' });
+      const cap = q.text ?? q.sub; if (cap) { c.font = `400 ${30 * u * fs}px ${CN}`; c.fillStyle = SUB; c.textAlign = 'right'; c.fillText(cap, W - L.mR - nw - 24 * u, by - 10 * u); }
       c.restore();
     }
     c.restore();
