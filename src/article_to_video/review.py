@@ -85,8 +85,10 @@ Contributor = Callable[[BuildPlan], ReviewExtras]
 
 
 def default_contributors() -> list[Contributor]:
-    """指令列（preview、build）預設用的資料來源。數字對帳（#5）、自動檢查（#11）做好後加在這裡（函式內 import，免得循環匯入）。"""
-    return []
+    """指令列（preview、build）預設用的資料來源：數字對帳（#5）；自動檢查（#11）做好後加在這裡（函式內 import，免得循環匯入）。"""
+    from article_to_video.numbers import number_review
+
+    return [number_review]
 
 
 def _quiet(_: str) -> None:
@@ -287,6 +289,8 @@ class ReviewResult:
     removed: list[str]
     """上一版有、這版拿掉的分鏡 id。"""
     stills: dict[str, list[Still]] = field(default_factory=dict)
+    plan: BuildPlan | None = None
+    """寫這一頁用的建置計畫（指令列拿它印數字對帳的摘要）。"""
 
 
 # ---------------------------------------------------------------- 版本：這版改了哪些分鏡
@@ -409,7 +413,7 @@ def make_review(
         log(f"審片頁第 {version.number} 版：改了 {len(version.changed)} 個分鏡"
             + (f"、拿掉 {len(version.removed)} 個" if version.removed else ""))
     return ReviewResult(page=page, version=version.number, changed=list(version.changed),
-                        removed=[r[0] for r in version.removed], stills=stills)
+                        removed=[r[0] for r in version.removed], stills=stills, plan=plan)
 
 
 def preview_project(

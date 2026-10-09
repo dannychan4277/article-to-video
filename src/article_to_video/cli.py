@@ -87,12 +87,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         rec = RunRecord(args.project, args.command, {"tts": args.tts, "jobs": args.jobs})
         log = rec.tee(lambda m: print(m, flush=True))
         failed = "建置失敗" if args.command == "build" else "預覽失敗"
+        from article_to_video.build import BlockedBuild
+        from article_to_video.numbers import check_numbers, summary_line
+        from article_to_video.review import make_review
+
         try:
             if args.command == "build":
                 from article_to_video.build import build_project
-                from article_to_video.review import make_review
 
-                res = build_project(args.project, tts=args.tts, jobs=args.jobs, log=log)
+                # 正式出片前先數字對帳：有無出處的數字就擋下（不渲染、不出片）
+                res = build_project(args.project, tts=args.tts, jobs=args.jobs, preflight=[check_numbers], log=log)
                 print(f"完成：{res.video}（{res.duration:.2f} 秒）")
                 print(f"字幕檔：{res.srt}")
                 failed = "成片做好了，但審片頁沒更新"
@@ -103,6 +107,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
                 review = preview_project(args.project, tts=args.tts, contributors=default_contributors(),
                                          jobs=args.jobs, log=log)
+                if review.plan is not None:
+                    log(summary_line(review.plan))
+        except BlockedBuild as e:
+            # 擋下正式出片：審片頁照這一版重寫（沒有成片、被擋的數字標在卡上），作者打開看到的就是現況
+            rec.finish(e)
+            print(f"{failed}：{e}", file=sys.stderr)
+            try:
+                review = make_review(e.plan, contributors=default_contributors(), jobs=args.jobs, log=log)
+                print(f"審片頁已更新（被擋下的原因標在卡片上）：{review.page}")
+            except KNOWN_ERRORS as e2:
+                print(f"審片頁也沒更新：{e2}", file=sys.stderr)
+            return 1
         except KNOWN_ERRORS as e:
             rec.finish(e)
             print(f"{failed}：{e}", file=sys.stderr)

@@ -30,7 +30,7 @@ from article_to_video.subtitles import (
 )
 from article_to_video.timeline import FORMAT_16x9, ClipPlan, Timeline, VideoFormat, build_timeline, plan_clips
 
-__all__ = ["BuildPlan", "BuildResult", "build_project", "plan_build"]
+__all__ = ["BlockedBuild", "BuildPlan", "BuildResult", "build_project", "plan_build"]
 
 Log = Callable[[str], None]
 
@@ -48,6 +48,16 @@ class BuildPlan:
     @property
     def paths(self) -> VariantPaths:
         return self.project.paths.variant(self.format.name)
+
+
+class BlockedBuild(ProjectError):
+    """渲染前檢查（例如數字對帳）擋下了正式出片。訊息照原本的檢查；plan＝已經算好的建置計畫
+    （指令列拿它更新審片頁，讓頁面也標出被擋的原因）。"""
+
+    def __init__(self, cause: ProjectError, plan: BuildPlan) -> None:
+        ValueError.__init__(self, str(cause))
+        self.problems = list(cause.problems)
+        self.plan = plan
 
 
 @dataclass(frozen=True)
@@ -124,11 +134,15 @@ def build_project(
     preflight: Sequence[Callable[[BuildPlan], None]] = (),
     log: Log = _quiet,
 ) -> BuildResult:
-    """建置成片。preflight：渲染前的檢查，丟 ProjectError 就不出片（數字對帳那張票接在這裡）。"""
+    """建置成片。preflight：渲染前的檢查（數字對帳 numbers.check_numbers），丟 ProjectError 就不出片——
+    改丟 BlockedBuild（帶著算好的 plan，審片頁照樣能用它更新）。"""
     ffmpeg = find_ffmpeg()
     plan = plan_build(project_dir, tts=tts, fmt=fmt, ffmpeg=ffmpeg, log=log)
     for check in preflight:
-        check(plan)
+        try:
+            check(plan)
+        except ProjectError as e:
+            raise BlockedBuild(e, plan) from e
 
     vp = plan.paths
     n_jobs = jobs or min(3, max(1, (os.cpu_count() or 2) // 2))
