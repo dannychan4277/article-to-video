@@ -64,6 +64,8 @@ CHART_DATA_KEYS = frozenset({
     "highlight", "colors", "upDown", "xAxis", "xTicks", "axisNote", "push", "publicData",
 })
 CHART_CUE_KINDS = frozenset({"title", "bar", "line", "candle", "highlight", "number"})
+VOX_CUE_KINDS = frozenset({"image", "excerpt"})
+"""Vox 分鏡的 cue：image＝文章原圖（圖N）、excerpt＝原文剪報。"""
 SETTINGS_KEYS = frozenset({"voice", "rate", "tts", "gap", "lead", "tail",
                            "channel", "logo", "brand_color", "music", "aspect"})
 
@@ -262,16 +264,25 @@ class ChartConfig:
 
 
 @dataclass(frozen=True)
+class VoxConfig:
+    cues: list[Cue]
+    """照出場順序。載入時 fields 是分鏡設定原樣；建置時（vox.resolve_vox）換成給引擎的欄位（圖片絕對路徑、標籤…）。"""
+    sources: list[str] = field(default_factory=list)
+    """這個分鏡畫面上素材的出處（建置時 resolve_vox 填，片尾卡彙整）。"""
+
+
+@dataclass(frozen=True)
 class Shot:
     number: int
     """第幾個分鏡（1 起算），審片頁上的編號。"""
     id: str
     start: Anchor | None
     continues: bool = False
-    """接續上一個分鏡：沿用上一個的圖（第一幀就畫好），只換這一鏡自己的 cue；同一串共用一段連續慢推。"""
+    """接續上一個分鏡：沿用上一個的圖（第一幀就畫好），只換這一鏡自己的 cue；同一串共用一段連續慢推。
+    Vox 分鏡接續上一個 Vox 分鏡＝同一張桌面不切，併成一個片段。"""
     chart: ChartConfig | None = None
-    vox: Any = None
-    """Vox 分鏡的設定（Vox 那張票接手；這版建置會擋下來）。"""
+    vox: VoxConfig | None = None
+    """Vox 分鏡：文章原圖、原文剪報、文字卡、框（見 vox.py）。"""
     note: str = ""
 
     @property
@@ -492,12 +503,12 @@ def _load_shots(raw: Any, segments: Mapping[str, str], problems: _Problems) -> l
         chart = (
             _load_chart(item["chart"], label, segments, problems, continues=continues) if has_chart else None
         )
+        vox = _load_vox(item["vox"], label, segments, problems, continues=continues) if has_vox and not has_chart else None
         note = item.get("note", "")
         if not isinstance(note, str):
             problems.add(f"{label} 的 note 要是文字")
             note = ""
-        shots.append(Shot(number=n, id=sid, start=start, continues=continues, chart=chart,
-                          vox=item.get("vox"), note=note))
+        shots.append(Shot(number=n, id=sid, start=start, continues=continues, chart=chart, vox=vox, note=note))
     return shots
 
 
@@ -571,6 +582,94 @@ def _load_chart(raw: Any, label: str, segments: Mapping[str, str], problems: _Pr
         fields = {k: v for k, v in q.items() if k != "at"}
         cues.append(Cue(kind=kind, at=at, fields=fields, where=where))
     return ChartConfig(data=data, cues=cues, public=public)
+
+
+_VOX_FIELDS = {
+    "image": ({"image"}, {"caption"}),
+    "excerpt": (set(), {"paragraph", "quote", "occurrence", "caption"}),
+}
+"""每種 Vox cue 的（必填欄位, 選填欄位）；at、kind 另外處理。"""
+_FIGURE_RE = re.compile(r"^圖([1-9]\d*)$")
+
+
+def _load_vox(raw: Any, label: str, segments: Mapping[str, str], problems: _Problems, *, continues: bool) -> VoxConfig | None:
+    if not isinstance(raw, dict):
+        problems.add(f"{label} 的 vox 要是物件：{{\"cues\": [{{\"at\": 0, \"kind\": \"image\", \"image\": \"圖1\"}}, …]}}")
+        return None
+    bad = [k for k in raw if k != "cues"]
+    if bad:
+        problems.add(f"{label} 的 vox 有不認得的欄位「{'、'.join(bad)}」（只認 cues）")
+    cues_raw = raw.get("cues")
+    if not isinstance(cues_raw, list):
+        problems.add(f"{label} 少了 vox.cues（素材清單，照出場順序，例 [{{\"at\": 0, \"kind\": \"image\", \"image\": \"圖1\"}}]）")
+        return None
+    if not cues_raw and not continues:
+        problems.add(f"{label} 的 vox.cues 是空的：Vox 分鏡至少要貼一件素材（原圖、剪報或文字卡）")
+    cues: list[Cue] = []
+    for i, q in enumerate(cues_raw):
+        where = f"{label} 的 vox.cues[{i}]"
+        if not isinstance(q, dict):
+            problems.add(f"{where} 要是物件，例 {{\"at\": 0, \"kind\": \"image\", \"image\": \"圖1\"}}")
+            continue
+        kind = q.get("kind")
+        if kind not in VOX_CUE_KINDS:
+            problems.add(f"{where} 的 kind「{kind}」不認得（Vox 分鏡只認 {'、'.join(sorted(VOX_CUE_KINDS))}）")
+            continue
+        if "at" not in q:
+            problems.add(f"{where} 少了 at（從這個分鏡開始算的秒數，或錨點物件）")
+            continue
+        at_raw = q["at"]
+        if _is_number(at_raw):
+            if at_raw < 0:
+                problems.add(f"{where} 的 at 不能是負的（Vox 分鏡要接續就寫 \"continues\": true，不用負時間）")
+                continue
+            at: float | Anchor = float(at_raw)
+        else:
+            anchor = _load_anchor(at_raw, f"{where}.at", segments, problems)
+            if anchor is None:
+                continue
+            at = anchor
+        required, optional = _VOX_FIELDS[kind]
+        fields = {k: v for k, v in q.items() if k not in ("at", "kind")}
+        extra = [k for k in fields if k not in required | optional]
+        if extra:
+            allowed = "、".join(sorted(required | optional))
+            problems.add(f"{where}（{kind}）有不認得的欄位「{'、'.join(extra)}」（認得的：{allowed}）")
+        missing = [k for k in sorted(required) if k not in fields]
+        if missing:
+            problems.add(f"{where}（{kind}）少了 {'、'.join(missing)}")
+            continue
+        if kind == "image" and not (isinstance(fields["image"], str) and _FIGURE_RE.match(fields["image"])):
+            problems.add(f"{where} 的 image 要寫文章原圖的編號，例 \"圖1\"（看 article/article.json 的 images），現在是 {fields['image']!r}")
+            continue
+        if kind == "excerpt" and not _check_excerpt(fields, where, problems):
+            continue
+        if "caption" in fields and not (isinstance(fields["caption"], str) and fields["caption"].strip()):
+            problems.add(f"{where} 的 caption 要是文字（接在標籤後面，例「圖1｜十年期殖利率」）")
+            continue
+        cues.append(Cue(kind=kind, at=at, fields=fields, where=where))
+    return VoxConfig(cues=cues)
+
+
+def _positive_int(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 1
+
+
+def _check_excerpt(fields: dict, where: str, problems: _Problems) -> bool:
+    if "paragraph" not in fields and "quote" not in fields:
+        problems.add(f"{where}（原文剪報）要寫 quote（要剪的那句裡的幾個字），或 paragraph（第幾段，整段剪）")
+        return False
+    ok = True
+    if "paragraph" in fields and not _positive_int(fields["paragraph"]):
+        problems.add(f"{where} 的 paragraph 要是第幾段（1 起算，看 article/article.json 的 paragraphs），現在是 {fields['paragraph']!r}")
+        ok = False
+    if "quote" in fields and not (isinstance(fields["quote"], str) and fields["quote"].strip()):
+        problems.add(f"{where} 的 quote 要是原文裡的一段字（會剪到它所在的整句）")
+        ok = False
+    if "occurrence" in fields and not ("quote" in fields and _positive_int(fields["occurrence"])):
+        problems.add(f"{where} 的 occurrence 要配 quote，寫第幾次（1 起算）")
+        ok = False
+    return ok
 
 
 def _check_chart_data(data: dict, label: str, problems: _Problems) -> None:

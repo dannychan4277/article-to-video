@@ -258,6 +258,12 @@ def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: Vid
                 ct = _cue_timing(cue, f0, f1, segs, s.lead, fps, problems, shot)
                 if ct is not None:
                     cues.append(ct)
+        elif shot.vox is not None:
+            clip_f0 = starts[vox_head(project.shots, n)]
+            for cue in shot.vox.cues:
+                ct = _cue_timing(cue, f0, f1, segs, s.lead, fps, problems, shot, clip_f0=clip_f0)
+                if ct is not None:
+                    cues.append(ct)
         shots.append(ShotTiming(shot, f0, f1, cues))
 
     if problems:
@@ -267,9 +273,19 @@ def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: Vid
                     total_frames=total)
 
 
+def vox_head(shots: list[Shot], i: int) -> int:
+    """第 i 個（Vox）分鏡所在那一串的第一個分鏡：Vox 接續分鏡跟它前面的 Vox 分鏡併成同一個片段。"""
+    while i > 0 and shots[i].continues and shots[i - 1].vox is not None:
+        i -= 1
+    return i
+
+
 def _cue_timing(cue: Cue, f0: int, f1: int, segs: Mapping[str, SegmentTiming], lead: float, fps: int,
-                problems: list[str], shot: Shot) -> CueTiming | None:
+                problems: list[str], shot: Shot, *, clip_f0: int | None = None) -> CueTiming | None:
+    """cue → 在成片裡的幀與片段內秒數。錨點與數字 at 都要落在這個分鏡自己的時段裡；
+    clip_f0：片段的起點幀（Vox 接續分鏡跟前面的分鏡同一個片段，片段內秒數從那裡算）。"""
     frames = f1 - f0
+    base = f0 if clip_f0 is None else clip_f0
     if not isinstance(cue.at, Anchor):
         if cue.carried:
             return CueTiming(cue.where, cue.kind, cue.at, f0, None, dict(cue.fields), True)
@@ -280,7 +296,8 @@ def _cue_timing(cue: Cue, f0: int, f1: int, segs: Mapping[str, SegmentTiming], l
                 "改小一點，或改用錨點"
             )
             return None
-        return CueTiming(cue.where, cue.kind, round(local / fps, 6), f0 + max(0, local), None, dict(cue.fields))
+        return CueTiming(cue.where, cue.kind, round((f0 + local - base) / fps, 6), f0 + max(0, local), None,
+                         dict(cue.fields))
     g = _anchor_time(cue.at, segs[cue.at.segment], lead)
     local = _frame(g, fps) - f0
     if local < 0:
@@ -298,7 +315,7 @@ def _cue_timing(cue: Cue, f0: int, f1: int, segs: Mapping[str, SegmentTiming], l
             "會被下一個分鏡切掉、根本不會出現。改指這個分鏡唸到的詞，或把下一個分鏡的切入點往後移"
         )
         return None
-    return CueTiming(cue.where, cue.kind, round(local / fps, 6), f0 + local, cue.at, dict(cue.fields))
+    return CueTiming(cue.where, cue.kind, round((f0 + local - base) / fps, 6), f0 + local, cue.at, dict(cue.fields))
 
 
 # ---------------------------------------------------------------- 片段計畫（引擎 spec）
@@ -356,8 +373,10 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
     plans: list[ClipPlan] = []
     for n, st in enumerate(timeline.shots):
         shot = st.shot
-        if shot.chart is None:
-            raise ProjectError(f"{shot.label} 是 Vox 分鏡，這版的建置還不支援 Vox，先改成財經圖表分鏡")
+        if shot.vox is not None:
+            if vox_head(project.shots, n) == n:
+                plans.append(_plan_vox_clip(timeline, n, fmt))
+            continue
         data, _ = effective_chart(project.shots, n)
         data = apply_brand(prepare_chart_data(data), project.settings.brand_color)
         g0, g1, head = chains[shot.id]
@@ -382,6 +401,23 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
                               sources=[source] if isinstance(source, str) and source.strip() else []))
     plans.append(plan_end_card(project, timeline, fmt, plans))
     return plans
+
+
+def _plan_vox_clip(timeline: Timeline, head: int, fmt: VideoFormat) -> ClipPlan:
+    """一串 Vox 分鏡（第一個＋後面接續它的）＝一個 y2_vox 片段：同一張桌面，切點不切。"""
+    from article_to_video.vox import vox_clip_spec  # 避免循環匯入
+
+    chain = [timeline.shots[head]]
+    for st in timeline.shots[head + 1:]:
+        if not (st.shot.continues and st.shot.vox is not None):
+            break
+        chain.append(st)
+    f0, f1 = chain[0].start_frame, chain[-1].end_frame
+    cues = [{**c.fields, "at": c.at} for st in chain for c in st.cues]
+    images = [Path(c["image"]) for c in cues if c.get("image")]
+    sources = list(dict.fromkeys(src for st in chain for src in st.shot.vox.sources))
+    return ClipPlan(id=chain[0].shot.id, shot_ids=[st.shot.id for st in chain], start_frame=f0, end_frame=f1,
+                    spec=vox_clip_spec(cues, (f1 - f0) / fmt.fps, fmt), images=images, sources=sources)
 
 
 def prepare_chart_data(data: Mapping[str, Any]) -> dict[str, Any]:

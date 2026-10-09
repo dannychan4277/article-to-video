@@ -32,6 +32,7 @@ from article_to_video.subtitles import (
 from article_to_video.soundtrack import mix_soundtrack
 from article_to_video.timeline import FORMAT_16x9, ClipPlan, Timeline, VideoFormat, build_timeline, plan_clips
 from article_to_video.user_settings import snapshot_into_project
+from article_to_video.vox import VoxPlan, resolve_vox
 
 __all__ = ["BuildPlan", "BuildResult", "build_project", "plan_build"]
 
@@ -47,6 +48,8 @@ class BuildPlan:
     clips: list[ClipPlan]
     public_data: dict[str, PublicChart] = field(default_factory=dict)
     """分鏡 id → 這個圖表畫的公有數據（每個點的系列、日期、擷取日；數字對帳與審片頁標出處用）。"""
+    vox: VoxPlan = field(default_factory=VoxPlan)
+    """Vox 分鏡解析完的素材（原圖、原文剪報、框）。"""
 
     @property
     def paths(self) -> VariantPaths:
@@ -89,6 +92,7 @@ def plan_build(
         log(f"設定快照：從使用者設定補上 {'、'.join(added)}（之後改使用者設定不會影響這支片）")
     project = load_project(project_dir, overrides={"tts": tts})
     project, public_data = resolve_public_data(project)
+    project, vox = resolve_vox(project)
     s = project.settings
 
     missing = missing_subtitle_glyphs(project.segments)
@@ -120,7 +124,8 @@ def plan_build(
         f"時間軸：{len(timeline.shots)} 個分鏡，總長 {timeline.duration:.2f} 秒"
         f"（旁白到 {timeline.narration_end:.2f} 秒，片尾 {timeline.outro.frames / timeline.fps:.2f} 秒）"
     )
-    return BuildPlan(project=project, format=fmt, audio=audio, timeline=timeline, clips=clips, public_data=public_data)
+    return BuildPlan(project=project, format=fmt, audio=audio, timeline=timeline, clips=clips, public_data=public_data,
+                     vox=vox)
 
 
 def build_project(
