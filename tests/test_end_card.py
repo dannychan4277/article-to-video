@@ -78,6 +78,25 @@ def test_public_data_charts_show_up_on_the_end_card(tmp_path, fred):
     assert sources == [f"FRED，聯準會（DGS10、DFII10）；月平均；{date.today().isoformat()} 擷取"]
 
 
+def test_report_zip_carries_the_end_card_logo_so_it_reproduces(tmp_path):
+    """回報問題的 zip 要帶著設定快照裡的 logo，不然維護者那台重現（plan_build）時片尾卡會說 logo 不見了。"""
+    import zipfile
+
+    from test_report_issue import cli
+    from test_user_settings import _png
+
+    root = tmp_path / "專案"
+    shutil.copytree(MINI_PROJECT, root)
+    (root / "logo.png").write_bytes(_png(8, 8))
+    snap = json.loads((root / "settings.json").read_text(encoding="utf-8"))
+    (root / "settings.json").write_text(json.dumps({**snap, "logo": "logo.png"}), encoding="utf-8")
+    desk = tmp_path / "桌面"
+    assert cli("report-issue", str(root), "--out-dir", str(desk)).returncode == 0
+    [zpath] = desk.glob("*.zip")
+    with zipfile.ZipFile(zpath) as z:
+        assert z.read("project/logo.png") == _png(8, 8)  # 重現時解開就在 settings.json 指的位置
+
+
 def test_without_a_channel_name_the_build_stops_and_says_how_to_set_it(tmp_path):
     root = tmp_path / "專案"
     shutil.copytree(MINI_PROJECT, root)
