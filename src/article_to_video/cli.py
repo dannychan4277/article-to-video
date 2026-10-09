@@ -3,6 +3,8 @@
 子指令：
   preview <專案資料夾> [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]   預覽：只出分鏡靜態圖＋審片頁（不渲整支片）
   build <專案資料夾> [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]     建置成片＋字幕檔，審片頁內嵌成片
+  boxes <專案資料夾> [--tts edge|fake] [--jobs N] [--data-dir D]   列出 Vox 框、渲每個框的靜態圖、印核對代號
+  confirm-box <專案資料夾> <核對代號>… [--note 文字]   記下 Claude 看過靜態圖、確認過的框（見 boxes.py）
   feedback <專案資料夾> [--file 檔]                   審片頁複製出來的留言（stdin）→ JSON（格式見 feedback.py）
   extract <專案資料夾> <文章檔|->                   擷取文章到 <專案>/article/（- ＝從標準輸入讀貼上的文字）
   report-issue [專案資料夾] [--shot 分鏡]… [--note 文字] [--out-dir 資料夾]
@@ -69,6 +71,15 @@ def _parser() -> argparse.ArgumentParser:
     v.add_argument("--jobs", type=int, help="最多同時渲幾個分鏡的靜態圖（預設 4）")
     v.add_argument("--no-open", action="store_true", help="做完不要自動在瀏覽器打開審片頁")
     v.add_argument("--data-dir", help=_DATA_DIR_HELP)
+    bx = sub.add_parser("boxes", help="列出 Vox 框、渲每個框的靜態圖、看哪些還沒核對")
+    bx.add_argument("project", help="專案資料夾")
+    bx.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
+    bx.add_argument("--jobs", type=int, help="最多同時渲幾個片段的框靜態圖（預設 4）")
+    bx.add_argument("--data-dir", help=_DATA_DIR_HELP)
+    cb = sub.add_parser("confirm-box", help="記下 Claude 看過靜態圖、確認沒問題的框（核對代號從 boxes 指令來）")
+    cb.add_argument("project", help="專案資料夾")
+    cb.add_argument("tokens", nargs="*", help="核對代號，例 SH02:1@1a2b3c4d（可以一次給好幾個）")
+    cb.add_argument("--note", default="", help="備註（例：框在「十年期」那一列的 3.96 上）")
     f = sub.add_parser("feedback", help="把審片頁「複製給 Claude」的文字（從 stdin 讀）解析成 JSON")
     f.add_argument("project", help="專案資料夾（用來把分鏡編號對到分鏡 id）")
     f.add_argument("--file", help="從這個檔讀，不從 stdin 讀")
@@ -145,6 +156,46 @@ def _samples(args: argparse.Namespace) -> int:
         f = out / f"voice-{vid}.wav"
         f.write_bytes(audio["sample"].audio.read_bytes())
         print(f"{name}（{vid}）：\n  {f}")
+    return 0
+
+
+def _boxes(args: argparse.Namespace) -> int:
+    """boxes：列出每個 Vox 框＋渲靜態圖；confirm-box：記下核對過的框。"""
+    from pathlib import Path
+
+    from article_to_video.boxes import box_statuses, confirm_boxes, format_box_listing, render_box_stills
+
+    if args.command == "confirm-box":
+        try:
+            res = confirm_boxes(args.project, args.tokens, note=args.note)
+        except ProjectError as e:
+            print(f"核對失敗：{e}", file=sys.stderr)
+            return 1
+        print("已記下核對：" + "、".join(b.id for b in res.confirmed))
+        if res.remaining:
+            print("還沒核對：" + "、".join(b.id for b in res.remaining))
+        else:
+            print("所有 Vox 框都核對過了，可以正式出片。")
+        return 0
+
+    from article_to_video.build import plan_build
+    from article_to_video.issue_report import RunRecord
+
+    rec = RunRecord(args.project, "boxes", {"tts": args.tts, "jobs": args.jobs})
+    log = rec.tee(lambda m: print(m, flush=True))
+    try:
+        plan = plan_build(args.project, tts=args.tts, data_dir=args.data_dir, log=log)
+        statuses = box_statuses(plan)
+        render_box_stills(plan, statuses, jobs=args.jobs, log=log)
+    except KNOWN_ERRORS as e:
+        rec.finish(e)
+        print(f"列不出框：{e}", file=sys.stderr)
+        return 1
+    except BaseException as e:
+        rec.finish(e, unexpected=True)
+        raise
+    log(format_box_listing(statuses, Path(args.project).absolute()))
+    rec.finish()
     return 0
 
 
@@ -244,6 +295,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         rec.finish()
         _show_review(review.page, no_open=args.no_open)
         return 0
+    if args.command in ("boxes", "confirm-box"):
+        return _boxes(args)
     if args.command == "feedback":
         from pathlib import Path
 

@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import re
+import shutil
 import subprocess
+import sys
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,9 +24,11 @@ import pytest
 from PIL import Image, ImageDraw, ImageFont
 
 from article_to_video.article import extract_article
+from article_to_video.boxes import box_statuses
 from article_to_video.build import build_project, plan_build
 from article_to_video.clips import FONTS_DIR
 from article_to_video.ffmpeg import find_ffmpeg
+from article_to_video.project import ProjectError
 from article_to_video.timeline import VideoFormat
 
 FPS = 30
@@ -88,11 +94,26 @@ def frame(t: float) -> int:
 # ---------------------------------------------------------------- 測試專案
 
 
+def _font() -> ImageFont.FreeTypeFont:
+    return ImageFont.truetype(str(FONTS_DIR / "NotoSansTC-500.woff"), 44)
+
+
+def _number_rect() -> list[int]:
+    """自製原圖上「3.96」那幾個字的範圍（框要框的地方），四邊各多留 6 像素。"""
+    x0, y0, x1, y1 = ImageDraw.Draw(Image.new("RGB", (1, 1))).textbbox((720, 330), "3.96", font=_font())
+    return [x0 - 6, y0 - 6, x1 - x0 + 12, y1 - y0 + 12]
+
+
+NUMBER_RECT = _number_rect()
+SWATCH_RECT = [330, 130, 50, 40]
+"""圖例「十年期」的色塊。"""
+
+
 def draw_chart_png(path: Path) -> None:
     """自製的「文章原圖」：淡色底、圖例色塊、兩根柱、柱上數字（深藍字，整張圖沒有接近黑色的像素）。"""
     im = Image.new("RGB", (1200, 800), (247, 244, 236))
     d = ImageDraw.Draw(im)
-    font = ImageFont.truetype(str(FONTS_DIR / "NotoSansTC-500.woff"), 44)
+    font = _font()
     ink = (31, 58, 147)
     d.text((60, 40), "殖利率示意圖", font=font, fill=ink)
     d.rectangle([60, 130, 110, 170], fill=(230, 140, 40))   # 圖例色塊：兩年期
@@ -123,9 +144,13 @@ def scenario_shots() -> list[dict]:
     return [
         {**chart_shot("SH01", "s01", "兩年期殖利率"), "start": {"segment": "s01"}},
         {"id": "SH02", "start": {"segment": "s02"},
-         "vox": {"cues": [{"at": 0, "kind": "image", "image": "圖1"}]}},
+         "vox": {"cues": [
+             {"at": 0, "kind": "image", "image": "圖1"},
+             {"at": {"segment": "s02", "word": "三點九六"}, "kind": "box", "rect": NUMBER_RECT}]}},
         {"id": "SH03", "start": {"segment": "s03"}, "continues": True,
-         "vox": {"cues": [{"at": {"segment": "s03", "word": "差距"}, "kind": "excerpt", "quote": "差距只剩"}]}},
+         "vox": {"cues": [
+             {"at": {"segment": "s03", "word": "差距"}, "kind": "excerpt", "quote": "差距只剩"},
+             {"at": {"segment": "s03", "word": "零點六二"}, "kind": "box", "find": "0.62"}]}},
         chart_shot("SH04", "s04", "曲線倒掛"),
     ]
 
@@ -145,18 +170,40 @@ def new_project(base: Path, shots: list[dict] | None = None, article_md: str = A
     return root
 
 
+def cli(*args: object) -> subprocess.CompletedProcess:
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    return subprocess.run([sys.executable, "-m", "article_to_video", *map(str, args)],
+                          capture_output=True, text=True, encoding="utf-8", env=env)
+
+
+TOKEN_RE = re.compile(r"\b(SH\d+:\d+@[0-9a-f]{8})\b")
+
+
 @dataclass(frozen=True)
 class Scenario:
     dir: Path
     video: Path
     specs: Path
+    preview: subprocess.CompletedProcess
+    blocked: subprocess.CompletedProcess
+    listing: subprocess.CompletedProcess
+    confirmed: subprocess.CompletedProcess
 
 
 @pytest.fixture(scope="module")
 def scenario(tmp_path_factory) -> Scenario:
+    """作者那邊的流程跑一次：預覽 → 正式出片（框還沒核對，被擋）→ 列出框與靜態圖 → Claude 核對 → 出片。
+    最後那次出片用小畫面（Vox 片段在 1080p 渲太久），擋不擋出片跟畫面大小無關。"""
     root = new_project(tmp_path_factory.mktemp("vox"))
+    preview = cli("preview", root, "--tts", "fake")
+    assert preview.returncode == 0, preview.stderr
+    blocked = cli("build", root, "--tts", "fake")
+    listing = cli("boxes", root, "--tts", "fake")
+    assert listing.returncode == 0, listing.stderr
+    confirmed = cli("confirm-box", root, *TOKEN_RE.findall(listing.stdout))
     res = build_project(root, tts="fake", fmt=SMALL)
-    return Scenario(dir=root, video=res.video, specs=res.plan.paths.specs)
+    return Scenario(dir=root, video=res.video, specs=res.plan.paths.specs, preview=preview, blocked=blocked,
+                    listing=listing, confirmed=confirmed)
 
 
 # ---------------------------------------------------------------- 讀成片的幀
@@ -223,9 +270,96 @@ def test_continued_vox_shot_has_no_cut(scenario):
 
 def test_vox_camera_drifts_slowly_while_holding_on_an_image(scenario):
     """圖貼好之後、下一件素材來之前，鏡頭停在圖上慢慢推近：畫面在動，但動得很少。"""
-    a, b = frame(SEG_START["s02"] + 0.8), frame(SEG_START["s02"] + 1.6)
+    a, b = frame(SEG_START["s02"] + 0.7), frame(SEG_START["s02"] + 1.4)  # 框在 1.6 秒才來
     fr = video_frames(scenario.video, [a, b])
     assert 0.5 < mean_diff(fr[a], fr[b]) < 8
+
+
+# ---------------------------------------------------------------- 框：每個框一張靜態圖，Claude 看過、核對過才放行
+
+BOX_IDS = ["SH02:1", "SH03:1"]
+
+
+def still_paths(text: str) -> list[Path]:
+    return [Path(m) for m in re.findall(r"(?:畫面靜態圖|原圖對照)：(.+?\.png)", text)]
+
+
+def yellow_pixels(png: Path) -> int:
+    """螢光筆（黃色、藍色分量很低）的像素數。桌面、紙、紅線都不是這個顏色。"""
+    with Image.open(png) as im:
+        a = np.asarray(im.convert("RGB")).astype(int)
+    return int(((a[..., 0] > 150) & (a[..., 1] > 130) & (a[..., 2] < 90)).sum())
+
+
+def test_every_box_gets_a_still_showing_the_box(scenario):
+    out = scenario.listing.stdout
+    for box in BOX_IDS:
+        assert box in out
+    stills = still_paths(out)
+    assert len(stills) == 2 * len(BOX_IDS)  # 每個框：畫面靜態圖＋原圖對照
+    for png in stills:
+        assert png.is_file()
+    screens = [p for p in stills if "畫面" in p.name]
+    assert len(screens) == len(BOX_IDS)
+    for png in screens:  # 畫面靜態圖是框畫好、鏡頭推近之後那一刻：看得到螢光筆
+        assert yellow_pixels(png) > 2000, png
+
+
+def test_preview_is_never_blocked_by_unchecked_boxes(scenario):
+    assert scenario.preview.returncode == 0
+    page = (scenario.dir / "審片頁.html").read_text(encoding="utf-8")
+    assert "還沒核對" in page
+
+
+def test_final_build_is_blocked_until_every_box_is_checked(scenario):
+    b = scenario.blocked
+    assert b.returncode == 1
+    assert "Traceback" not in b.stderr
+    for box in BOX_IDS:
+        assert box in b.stderr
+    stills = still_paths(b.stderr)
+    assert stills and all(p.is_file() for p in stills)  # 訊息裡說靜態圖在哪，而且真的有
+    assert "confirm-box" in b.stderr
+
+
+def test_checking_every_box_unblocks_the_final_build(scenario):
+    assert scenario.confirmed.returncode == 0, scenario.confirmed.stderr
+    assert scenario.video.is_file()
+
+
+def edit_box(root: Path, shot_id: str, **changes: object) -> None:
+    doc = json.loads((root / "shots.json").read_text(encoding="utf-8"))
+    for shot in doc["shots"]:
+        if shot["id"] == shot_id:
+            [box] = [c for c in shot["vox"]["cues"] if c["kind"] == "box"]
+            box.update(changes)
+    (root / "shots.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+
+def test_changing_a_checked_box_blocks_the_build_again(scenario, tmp_path):
+    root = tmp_path / "改框"
+    shutil.copytree(scenario.dir, root)
+    x, y, w, h = NUMBER_RECT
+    edit_box(root, "SH02", rect=[x + 40, y, w, h])
+    with pytest.raises(ProjectError) as e:
+        build_project(root, tts="fake", fmt=SMALL)
+    msg = str(e.value)
+    assert "SH02:1" in msg and "SH03:1" not in msg  # 只有改過的那個框要重新核對
+    # 改框之前看的代號不能拿來核對改過的框
+    old = [t for t in TOKEN_RE.findall(scenario.listing.stdout) if t.startswith("SH02:1@")]
+    again = cli("confirm-box", root, *old)
+    assert again.returncode == 1
+    assert "SH02:1" in again.stderr and "Traceback" not in again.stderr
+
+
+def test_box_over_a_legend_swatch_gets_a_warning(tmp_path):
+    """螢光筆刷到圖例色塊會變色（審片學到的規則）：框到色塊時提醒；框彩色的字不提醒。"""
+    shots = scenario_shots()
+    shots[1]["vox"]["cues"].insert(1, {"at": {"segment": "s02", "word": "十年期"}, "kind": "box", "rect": SWATCH_RECT})
+    plan = plan_build(new_project(tmp_path, shots), tts="fake")
+    warned = {s.box.id: s.warnings for s in box_statuses(plan)}
+    assert any("圖例色塊" in w for w in warned["SH02:1"])
+    assert warned["SH02:2"] == []  # 深藍色的數字
 
 
 # ---------------------------------------------------------------- 原文剪報

@@ -195,7 +195,8 @@ def make_excerpt(paragraph: int, text: str, quote: str | None, out_dir: Path, *,
     for n, k, a, b in visible:
         top = PAD_Y + n * LINE_PX
         x0 = PAD_X + a - left
-        boxes[k] = (int(round(x0)), top, int(round(PAD_X + b - left)), top + LINE_PX)
+        y0 = top + (LINE_PX - FONT_PX) // 2 - 10  # 框住字的高度（再多留一點），不是整個行高
+        boxes[k] = (int(round(x0)), y0, int(round(PAD_X + b - left)), y0 + FONT_PX + 20)
         glyphs.append((text[k], x0, top + (LINE_PX - asc - desc) / 2))
 
     key = hashlib.sha256(json.dumps(

@@ -86,7 +86,9 @@ Contributor = Callable[[BuildPlan], ReviewExtras]
 
 def default_contributors() -> list[Contributor]:
     """指令列（preview、build）預設用的資料來源。數字對帳（#5）、自動檢查（#11）做好後加在這裡（函式內 import，免得循環匯入）。"""
-    return []
+    from article_to_video.boxes import boxes_contributor
+
+    return [boxes_contributor]
 
 
 def _quiet(_: str) -> None:

@@ -2,7 +2,7 @@
 
   plan_build()   讀專案＋驗證 → 公有數據（讀專案快照或抓 FRED，換成實際數列與來源行）→ 字幕字型涵蓋檢查 → 配音層 → 時間軸（錨點、分鏡起訖、接續分鏡）→ 每個片段的引擎 spec。
                  不渲任何東西，幾秒內完成。審片頁的靜態圖（render_stills(plan.clips[i].spec, …)）從這裡接。
-  build_project() plan_build() → preflight 檢查（數字對帳在這裡擋正式出片）→ 片段（快取、並行）→ 旁白音軌 →
+  build_project() plan_build() → Vox 框核對（沒核對過的框擋正式出片，boxes.py）→ preflight 檢查（數字對帳在這裡擋正式出片）→ 片段（快取、並行）→ 旁白音軌 →
                  配樂墊在旁白下（soundtrack.py）→ 字幕 → 接片＋燒字幕＋混音 → 成片.mp4、字幕.srt。
 
 產物位置見 project.py 開頭。
@@ -20,6 +20,7 @@ from pathlib import Path
 from article_to_video.assemble import (
     ASSEMBLY_VERSION, assemble_video, file_digest, final_key, write_narration_track,
 )
+from article_to_video.boxes import require_boxes_ready
 from article_to_video.clip_cache import RenderReport, render_planned_clips
 from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.music import TRACKS, ensure_track
@@ -141,6 +142,7 @@ def build_project(
     """建置成片。preflight：渲染前的檢查，丟 ProjectError 就不出片（數字對帳那張票接在這裡）。"""
     ffmpeg = find_ffmpeg()
     plan = plan_build(project_dir, tts=tts, fmt=fmt, ffmpeg=ffmpeg, data_dir=data_dir, log=log)
+    require_boxes_ready(plan, jobs=jobs, log=log)  # Vox 框都要 Claude 看過靜態圖、核對過（boxes.py）
     for check in preflight:
         check(plan)
 

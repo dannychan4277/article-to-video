@@ -13,21 +13,25 @@ at：數字＝從這個分鏡開始算的秒數（不能是負的），或錨點
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from article_to_video.excerpt import ExcerptError, make_excerpt
-from article_to_video.project import Cue, Project, ProjectError, VoxConfig
+from article_to_video.excerpt import Excerpt, ExcerptError, make_excerpt
+from article_to_video.project import Anchor, Cue, Project, ProjectError, Shot, VoxConfig
 
-__all__ = ["ARTICLE_SOURCE", "EXCERPT_LABEL", "VoxPlan", "resolve_vox", "vox_clip_spec"]
+__all__ = ["ARTICLE_SOURCE", "EXCERPT_LABEL", "Target", "VoxBox", "VoxPlan", "resolve_vox", "vox_clip_spec"]
 
 Y2 = "y2_vox"
 DRIFT = 0.008
 """相機停在同一件素材超過 1.5 秒時，每秒慢慢推近 0.8%（停留慢漂）。"""
 EXCERPT_LABEL = "原文段落"
 """原文剪報下方的標籤。"""
+BOX_VERSION = "1"
+"""框的雜湊版本（改了雜湊的算法才加一；所有框都要重新核對）。"""
 ARTICLE_SOURCE = "作者原文"
 """片尾卡上，文章原圖、原文剪報的出處名稱（括號裡列用到的圖號）。"""
 
@@ -44,8 +48,55 @@ class Figure:
 
 
 @dataclass(frozen=True)
+class Target:
+    """桌面上一件可以被框的素材：文章原圖或原文剪報。"""
+
+    kind: str
+    """"image" 或 "excerpt"。"""
+    label: str
+    """給人看的名字：「圖1」「原文第 4 段」。"""
+    image: Path
+    width: int
+    height: int
+    excerpt: Excerpt | None = None
+
+
+@dataclass(frozen=True)
+class VoxBox:
+    """一個框（螢光筆＋紅圈）：框在哪張圖的哪裡、旁白唸到哪個詞時出現。核對用的雜湊見 box_hash。"""
+
+    id: str
+    """「SH02:1」＝分鏡 SH02 的第 1 個框。"""
+    shot_id: str
+    shot_number: int
+    index: int
+    where: str
+    target: Target
+    rect: tuple[int, int, int, int]
+    """框在 target.image 上的像素範圍 (x, y, 寬, 高)。"""
+    find: str | None
+    """框剪報時要找的字（框原圖是 None）。"""
+    word: str
+    """錨點的詞（旁白唸到這裡時框出現）。"""
+    sentence: str
+    """錨點所在的那句旁白。"""
+    hash: str
+
+    @property
+    def token(self) -> str:
+        """核對代號：SH02:1@<雜湊前 8 碼>。框一改，代號就變。"""
+        return f"{self.id}@{self.hash[:8]}"
+
+    def describe(self) -> str:
+        what = f"「{self.find}」" if self.find else f"{list(self.rect)}"
+        return f"{self.target.label} 上的{what}，旁白唸到「{self.word}」時出現（「{self.sentence}」）"
+
+
+@dataclass(frozen=True)
 class VoxPlan:
     """Vox 分鏡解析完的結果（建置計畫的一部分）。"""
+
+    boxes: list[VoxBox] = field(default_factory=list)
 
 
 @dataclass
@@ -80,7 +131,7 @@ def _load_article(project: Project, problems: list[str]) -> _Article | None:
 
 
 def resolve_vox(project: Project) -> tuple[Project, VoxPlan]:
-    """把 Vox 分鏡的 cue 換成給引擎的欄位。沒有 Vox 分鏡就原樣回傳。問題一次列出（ProjectError）。"""
+    """把 Vox 分鏡的 cue 換成給引擎的欄位、算出每個框。沒有 Vox 分鏡就原樣回傳。問題一次列出（ProjectError）。"""
     if not any(s.vox for s in project.shots):
         return project, VoxPlan()
     problems: list[str] = []
@@ -88,15 +139,31 @@ def resolve_vox(project: Project) -> tuple[Project, VoxPlan]:
     if article is None:
         raise ProjectError(problems, title="Vox 分鏡找不到文章")
     shots = []
+    boxes: list[VoxBox] = []
+    target: Target | None = None
     for shot in project.shots:
         if shot.vox is None:
             shots.append(shot)
+            target = None
             continue
+        if not shot.continues:
+            target = None
         cues: list[Cue] = []
         sources: list[str] = []
         for cue in shot.vox.cues:
-            engine = _engine_fields(cue, article, sources, problems)
-            if engine is not None:
+            if cue.kind == "box":
+                box = _resolve_box(cue, shot, target, sum(b.shot_id == shot.id for b in boxes) + 1, project, problems)
+                if box is None:
+                    continue
+                boxes.append(box)
+                x, y, w, h = box.rect
+                tw, th = box.target.width, box.target.height
+                rect01 = [round(x / tw, 6), round(y / th, 6), round(w / tw, 6), round(h / th, 6)]
+                cues.append(replace(cue, fields={"kind": "highlight", "data": {"rect": rect01}}))
+                continue
+            resolved = _resolve_material(cue, article, sources, problems)
+            if resolved is not None:
+                engine, target = resolved
                 cues.append(replace(cue, fields=engine))
         shots.append(replace(shot, vox=VoxConfig(cues=cues, sources=list(dict.fromkeys(sources)))))
     if problems:
@@ -105,7 +172,7 @@ def resolve_vox(project: Project) -> tuple[Project, VoxPlan]:
         for old in article.excerpt_dir.glob("excerpt-*.png"):
             if old not in article.used:
                 old.unlink()
-    return replace(project, shots=shots), VoxPlan()
+    return replace(project, shots=shots), VoxPlan(boxes=boxes)
 
 
 def _find_paragraph(quote: str, paragraphs: dict[int, str]) -> tuple[int | None, str]:
@@ -118,7 +185,9 @@ def _find_paragraph(quote: str, paragraphs: dict[int, str]) -> tuple[int | None,
     return None, f"「{quote}」在第 {'、'.join(map(str, found))} 段都有：加 \"paragraph\" 指定哪一段，或把引文寫長一點"
 
 
-def _engine_fields(cue: Cue, article: _Article, sources: list[str], problems: list[str]) -> dict[str, Any] | None:
+def _resolve_material(cue: Cue, article: _Article, sources: list[str],
+                      problems: list[str]) -> tuple[dict[str, Any], Target | None] | None:
+    """原圖、剪報 → (給引擎的欄位, 之後的框要框的那件素材)。"""
     f = cue.fields
     caption = f"｜{f['caption'].strip()}" if f.get("caption") else ""
     if cue.kind == "image":
@@ -135,7 +204,8 @@ def _engine_fields(cue: Cue, article: _Article, sources: list[str], problems: li
             problems.append(f"{cue.where}：{fig.label} 是瀏覽器顯示不了的圖檔格式（{fig.path.suffix}），請作者換成 PNG 或 JPEG")
             return None
         sources.append(f"{ARTICLE_SOURCE}（{fig.label}）")
-        return {"kind": "image", "image": str(fig.path), "text": fig.label + caption}
+        engine = {"kind": "image", "image": str(fig.path), "text": fig.label + caption}
+        return engine, Target("image", fig.label, fig.path, fig.width, fig.height)
     if cue.kind == "excerpt":
         quote = f.get("quote")
         n = f.get("paragraph")
@@ -154,8 +224,54 @@ def _engine_fields(cue: Cue, article: _Article, sources: list[str], problems: li
             return None
         article.used.add(ex.image)
         sources.append(f"{ARTICLE_SOURCE}（第 {n} 段）")
-        return {"kind": "image", "image": str(ex.image), "text": EXCERPT_LABEL + caption}
+        engine = {"kind": "image", "image": str(ex.image), "text": EXCERPT_LABEL + caption}
+        return engine, Target("excerpt", f"原文第 {n} 段", ex.image, ex.width, ex.height, ex)
     raise AssertionError(cue.kind)
+
+
+_SENTENCE_RE = re.compile(r"[^。！？!?]*[。！？!?]*")
+
+
+def _sentence_at(text: str, i: int) -> str:
+    """旁白段裡第 i 個字所在的那一句。"""
+    pos = 0
+    for m in _SENTENCE_RE.finditer(text):
+        if m.start() <= i < m.end():
+            return m.group().strip()
+        pos = m.end()
+    return text.strip()
+
+
+def _resolve_box(cue: Cue, shot: Shot, target: Target | None, index: int, project: Project,
+                 problems: list[str]) -> VoxBox | None:
+    if target is None:  # 載入時已經報過（框前面沒有圖）
+        return None
+    f = cue.fields
+    find = f.get("find")
+    if find is not None:
+        assert target.excerpt is not None
+        try:
+            rect = target.excerpt.char_rect(find, f.get("occurrence"))
+        except ExcerptError as e:
+            problems.append(f"{cue.where}（框）：{e}")
+            return None
+    else:
+        x, y, w, h = (int(round(v)) for v in f["rect"])
+        if x + w > target.width or y + h > target.height:
+            problems.append(
+                f"{cue.where}（框）的 rect {f['rect']} 超出 {target.label} 的範圍（{target.width}×{target.height} 像素）"
+            )
+            return None
+        rect = (x, y, w, h)
+    anchor = cue.at
+    assert isinstance(anchor, Anchor) and anchor.span is not None
+    sentence = _sentence_at(project.segments[anchor.segment], anchor.span[0])
+    digest = hashlib.sha256(json.dumps(
+        [BOX_VERSION, hashlib.sha256(target.image.read_bytes()).hexdigest(), list(rect), find, anchor.word, sentence],
+        ensure_ascii=False,
+    ).encode()).hexdigest()
+    return VoxBox(id=f"{shot.id}:{index}", shot_id=shot.id, shot_number=shot.number, index=index, where=cue.where,
+                  target=target, rect=rect, find=find, word=anchor.word or "", sentence=sentence, hash=digest)
 
 
 def vox_clip_spec(cues: list[dict[str, Any]], duration: float, fmt: Any) -> dict[str, Any]:

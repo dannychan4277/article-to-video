@@ -64,8 +64,8 @@ CHART_DATA_KEYS = frozenset({
     "highlight", "colors", "upDown", "xAxis", "xTicks", "axisNote", "push", "publicData",
 })
 CHART_CUE_KINDS = frozenset({"title", "bar", "line", "candle", "highlight", "number"})
-VOX_CUE_KINDS = frozenset({"image", "excerpt"})
-"""Vox 分鏡的 cue：image＝文章原圖（圖N）、excerpt＝原文剪報。"""
+VOX_CUE_KINDS = frozenset({"image", "excerpt", "box"})
+"""Vox 分鏡的 cue：image＝文章原圖（圖N）、excerpt＝原文剪報、box＝框（螢光筆＋紅圈，框住旁白正在唸的數字）。"""
 SETTINGS_KEYS = frozenset({"voice", "rate", "tts", "gap", "lead", "tail",
                            "channel", "logo", "brand_color", "music", "aspect"})
 
@@ -150,6 +150,11 @@ class VariantPaths:
         return self.root / "stills"
 
     @property
+    def boxes(self) -> Path:
+        """Vox 框的靜態圖：<分鏡>-框<n>-畫面.png（引擎畫面）、<分鏡>-框<n>-原圖.png（原圖對照）＋ stamp.json。"""
+        return self.root / "boxes"
+
+    @property
     def review_state(self) -> Path:
         """審片頁的版本紀錄：第幾版、每個分鏡的內容雜湊、這版改了哪些分鏡。"""
         return self.root / "review.json"
@@ -179,6 +184,11 @@ class ProjectPaths:
     def public_data(self) -> Path:
         """公有數據快照：每個系列一個 <代號>.json（數字＋擷取日期），抓過一次之後重建不用網路。"""
         return self.root / "public_data"
+
+    @property
+    def box_checks(self) -> Path:
+        """Claude 核對過的 Vox 框（依框的內容雜湊記；框改了雜湊就變，要重新核對）。"""
+        return self.root / "box_checks.json"
 
     @property
     def build(self) -> Path:
@@ -348,6 +358,7 @@ def load_project(root: str | Path, *, overrides: Mapping[str, Any] | None = None
     shots = _load_shots(_read_json(paths.shots, "分鏡設定"), segments, problems)
     problems.raise_if_any()
     _check_continuations(shots, problems)
+    _check_vox_boxes(shots, problems)
     problems.raise_if_any()
     return Project(paths=paths, segments=segments, shots=shots, settings=settings)
 
@@ -587,6 +598,7 @@ def _load_chart(raw: Any, label: str, segments: Mapping[str, str], problems: _Pr
 _VOX_FIELDS = {
     "image": ({"image"}, {"caption"}),
     "excerpt": (set(), {"paragraph", "quote", "occurrence", "caption"}),
+    "box": (set(), {"rect", "find", "occurrence"}),
 }
 """每種 Vox cue 的（必填欄位, 選填欄位）；at、kind 另外處理。"""
 _FIGURE_RE = re.compile(r"^圖([1-9]\d*)$")
@@ -613,7 +625,8 @@ def _load_vox(raw: Any, label: str, segments: Mapping[str, str], problems: _Prob
             continue
         kind = q.get("kind")
         if kind not in VOX_CUE_KINDS:
-            problems.add(f"{where} 的 kind「{kind}」不認得（Vox 分鏡只認 {'、'.join(sorted(VOX_CUE_KINDS))}）")
+            hint = "（Vox 的框寫 \"kind\": \"box\"）" if kind == "highlight" else ""
+            problems.add(f"{where} 的 kind「{kind}」不認得（Vox 分鏡只認 {'、'.join(sorted(VOX_CUE_KINDS))}）{hint}")
             continue
         if "at" not in q:
             problems.add(f"{where} 少了 at（從這個分鏡開始算的秒數，或錨點物件）")
@@ -644,6 +657,8 @@ def _load_vox(raw: Any, label: str, segments: Mapping[str, str], problems: _Prob
             continue
         if kind == "excerpt" and not _check_excerpt(fields, where, problems):
             continue
+        if kind == "box" and not _check_box(fields, at, where, problems):
+            continue
         if "caption" in fields and not (isinstance(fields["caption"], str) and fields["caption"].strip()):
             problems.add(f"{where} 的 caption 要是文字（接在標籤後面，例「圖1｜十年期殖利率」）")
             continue
@@ -669,6 +684,33 @@ def _check_excerpt(fields: dict, where: str, problems: _Problems) -> bool:
     if "occurrence" in fields and not ("quote" in fields and _positive_int(fields["occurrence"])):
         problems.add(f"{where} 的 occurrence 要配 quote，寫第幾次（1 起算）")
         ok = False
+    return ok
+
+
+def _check_box(fields: dict, at: float | Anchor, where: str, problems: _Problems) -> bool:
+    ok = True
+    if not isinstance(at, Anchor) or at.word is None:
+        problems.add(f"{where}（框）的 at 要是錨點，錨在旁白唸到那個數字的詞上，例 {{\"segment\": \"s03\", \"word\": \"三點九六\"}}")
+        ok = False
+    if ("rect" in fields) == ("find" in fields):
+        problems.add(f"{where}（框）要寫 rect（框原圖：[x, y, 寬, 高]，原圖的像素）或 find（框原文剪報裡的幾個字），只能一個")
+        return False
+    if "rect" in fields:
+        r = fields["rect"]
+        if not (isinstance(r, list) and len(r) == 4 and all(_is_number(v) for v in r) and r[0] >= 0 and r[1] >= 0
+                and r[2] > 0 and r[3] > 0):
+            problems.add(f"{where} 的 rect 要寫 [x, y, 寬, 高]（原圖的像素，左上角是 0, 0），現在是 {r!r}")
+            ok = False
+        if "occurrence" in fields:
+            problems.add(f"{where} 的 occurrence 只配 find 用")
+            ok = False
+    else:
+        if not (isinstance(fields["find"], str) and fields["find"].strip()):
+            problems.add(f"{where} 的 find 要是剪報裡要框的那幾個字（例 \"0.62\"）")
+            ok = False
+        if "occurrence" in fields and not _positive_int(fields["occurrence"]):
+            problems.add(f"{where} 的 occurrence 要是第幾次（1 起算）")
+            ok = False
     return ok
 
 
@@ -730,6 +772,28 @@ def _highlight_lines(data: Mapping, cues: list[Cue]) -> int:
     text = q.fields.get("text") if q.fields.get("text") is not None else h.get("text")
     sub = q.fields.get("sub") if q.fields.get("sub") is not None else h.get("sub")
     return sum(1 for s in (text, sub) if s)
+
+
+def _check_vox_boxes(shots: list[Shot], problems: _Problems) -> None:
+    """框畫在它前面最近的那件圖上（同一張桌面，接續分鏡算同一張）：前面要有圖或剪報；
+    rect 框原圖、find 框剪報。"""
+    target: str | None = None
+    for shot in shots:
+        if shot.vox is None:
+            target = None
+            continue
+        if not shot.continues:
+            target = None
+        for cue in shot.vox.cues:
+            if cue.kind in ("image", "excerpt"):
+                target = cue.kind
+            elif cue.kind == "box":
+                if target is None:
+                    problems.add(f"{cue.where}（框）前面沒有圖或剪報：框要寫在它要框的原圖（image）或原文剪報（excerpt）後面")
+                elif "rect" in cue.fields and target != "image":
+                    problems.add(f"{cue.where}（框）要框的是原文剪報：剪報用 find 寫要框的字（例 \"find\": \"0.62\"），不用 rect")
+                elif "find" in cue.fields and target != "excerpt":
+                    problems.add(f"{cue.where}（框）要框的是文章原圖：原圖用 rect 寫像素範圍 [x, y, 寬, 高]，find 只能找剪報裡的字")
 
 
 def _check_continuations(shots: list[Shot], problems: _Problems) -> None:
