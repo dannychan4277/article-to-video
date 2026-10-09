@@ -15,6 +15,8 @@ const fmtv = (d, v) => (d.prefix || '') + TY.fmt(v, d.decimals ?? 1) + (d.suffix
 // [article-to-video 內嵌修改] 負數柱標註的版面（×u×字級倍數）：數值標籤占柱底下方多高（CH.bars 寫在柱底 +12、字最大 34）、
 // 標籤到文字塊的間隔、第一行（50 號粗體）基線離文字塊上緣多遠、第二行基線再往下多少
 const NEG_LABEL = 50, NEG_GAP = 18, NEG_LINE1 = 44, NEG_LINE2 = 40;
+// [article-to-video 內嵌修改] 柱正上方的標註：引線至少露出這麼長（×u×字級倍數），不會被柱上數值標籤蓋得只剩一小截
+const LEADER_MIN = 40;
 // [article-to-video 內嵌修改] 品牌色：data.colors.brand 取代「當品牌用的紅」（頂端色條、小旗、角標、標註圓點、大數字、折線預設色）；
 // 沒寫就是原本的紅。K 線的漲跌紅綠是語意色，不跟品牌走。#RRGGBB／#RGB 換成 rgba（折線下方漸層、角標底色用）。
 const rgba = (col, a, fb) => { const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(col || ''); if (!m) return fb; let h = m[1]; if (h.length === 3) h = [...h].map(x => x + x).join('');
@@ -193,9 +195,10 @@ return {
         c.save(); c.font = `700 ${50 * u * fs}px ${NUM}`; let tw = c.measureText(lines[0]).width; c.font = `400 ${28 * u * fs}px ${CN}`; if (lines[1]) tw = Math.max(tw, c.measureText(lines[1]).width);
         const cx = clamp(x, F.x + tw / 2, F.x + F.w - 80 * u - tw / 2);
         const cover = L.tops.filter(([bx]) => bx > cx - tw / 2 - L.slot / 2 && bx < cx + tw / 2 + L.slot / 2).map(([, by]) => by);
-        const bottom = Math.max(F.y + lh * lines.length, Math.min(y, ...cover) - vlab - 18 * u);   // 文字块底边
+        // [article-to-video 內嵌修改] 引線至少露出 LEADER_MIN：原版文字塊緊貼數值標籤（只隔 18），引線只剩 10 像素、看起來被標籤蓋掉（短柱最明顯）
+        const y0 = y - vlab - 4 * u, bottom = Math.max(F.y + lh * lines.length, Math.min(Math.min(y, ...cover) - vlab - 18 * u, y0 - LEADER_MIN * u * fs - 10 * u));   // 文字块底边
         c.fillStyle = L.col.ink; c.beginPath(); c.arc(x - Math.min(150 * u, L.slot * 0.62) / 2, y, 9 * u * Math.max(0, s), 0, 7); c.fill();   // [Danny 本机改] 圆点放在柱顶左角：放柱顶正中会压到柱上数值的字底
-        const y0 = y - vlab, y1 = bottom + 8 * u;
+        const y1 = bottom + 10 * u;
         if (y0 - y1 > 6 * u) { c.strokeStyle = INK; c.lineWidth = 2 * u; c.beginPath(); c.moveTo(x, y0); c.lineTo(lerp(x, cx, lp), lerp(y0, y1, lp)); c.stroke(); }
         c.globalAlpha = fp; c.fillStyle = INK; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
         lines.forEach((ln, i) => { c.font = i === 0 ? `700 ${50 * u * fs}px ${NUM}` : `400 ${28 * u * fs}px ${CN}`; c.fillText(ln, cx, bottom - (lines.length - 1 - i) * lh * (i === 0 ? 1 : 0.62) + (1 - fp) * 12 * u); });

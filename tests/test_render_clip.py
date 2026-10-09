@@ -172,6 +172,34 @@ def test_annotation_on_a_negative_bar_leaves_its_value_label_readable(tmp_path, 
     assert drawn > 1000  # 標註真的有畫出來（畫在別處）
 
 
+@pytest.mark.parametrize("aspect", ["16x9", "9x16"])
+def test_annotation_above_a_short_bar_has_a_visible_leader_line(tmp_path, aspect):
+    """短柱旁邊有高柱時，標註放在短柱正上方；文字塊和柱上數值標籤之間的引線要看得到（不能被數值標籤蓋掉、只剩一小截）。
+    標註出現前後各一張靜態圖：只在標註那根柱中線上（左右 3 像素內）多出來的像素＝引線，至少要有約 24 像素長。數字是自製的。"""
+    import numpy as np
+    from PIL import Image
+
+    from article_to_video.timeline import FORMATS
+
+    spec = {
+        "grammar": "t3_finance_chart", "duration": 2.5, **FORMATS[aspect].spec_base(),
+        "data": {"title": "兩個月的利差", "unit": "示意數據，百分點", "source": "來源：測試用自製數字",
+                 "chart": "bar", "decimals": 2, "series": [{"label": "甲月", "value": 2.4}, {"label": "乙月", "value": 1.1}],
+                 "highlight": {"index": 1, "text": "縮小一半以上"}},
+        "cues": [{"at": 0, "kind": "title"}, {"at": 0.1, "kind": "bar"}, {"at": 1.5, "kind": "highlight"}],
+    }
+    before, after = (np.asarray(Image.open(p).convert("RGB")).astype(int)
+                     for p in render_stills(spec, tmp_path, [1.4, 2.45]).paths)
+    blue = (np.abs(after - np.array([0x00, 0x6B, 0xA2])).max(axis=-1) <= 12)  # 標註那根柱（其他柱淡掉）
+    ys, xs = np.nonzero(blue)
+    cx, top = (xs.min() + xs.max()) // 2, ys.min()
+    new = (np.abs(after - before).max(axis=-1) > 40)[:top]
+    near = new[:, cx - 3: cx + 4].any(axis=1)
+    wide = new[:, cx - 200: cx - 3].any(axis=1) | new[:, cx + 4: cx + 201].any(axis=1)
+    leader_rows = int((near & ~wide).sum())
+    assert leader_rows >= 24 * (1080 / 1080), f"引線只看得到 {leader_rows} 像素"
+
+
 def test_page_error_fails_loudly(tmp_path):
     out = tmp_path / "bad.mp4"
     spec = short_chart_spec("十年期殖利率", grammar="no_such_grammar")
