@@ -142,7 +142,7 @@ def test_preflight_check_blocks_the_build_before_rendering(tmp_path):
     root = make_project(tmp_path, lambda shots, narration: None)
     with pytest.raises(ProjectError, match="數字對帳沒過"):
         build_project(root, tts="fake", preflight=[blocker])
-    assert seen["shots"] == ["SH01", "SH02"]
+    assert seen["shots"] == ["SH01", "SH02", "end.card"]
     assert not (root / "成片.mp4").exists()
     assert not (root / "build" / "16x9" / "clips").exists()
 
