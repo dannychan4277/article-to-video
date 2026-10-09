@@ -105,3 +105,14 @@ def test_preapproved_rules_stay_narrow(name):
 def test_check_env_skill_runs_only_the_check():
     _, rules, _ = parse_skill("check-env")
     assert all(" check-env " in r for r in rules)
+
+
+def test_fixing_a_broken_plugin_never_costs_the_author_his_settings():
+    """外掛檔案壞掉時的修法：/plugin 的 Update now 重新下載外掛檔案。解除安裝（重新安裝的第一步）會把外掛資料夾
+    ${CLAUDE_PLUGIN_DATA}（頻道名、logo、聲音…）一起刪掉，所以不能叫作者「重新安裝、設定不會不見」。"""
+    from article_to_video.environment import SAY_UPDATE_PLUGIN
+
+    _, _, body = parse_skill("check-env")
+    for text in (body, SAY_UPDATE_PLUGIN):
+        assert "Update now" in text and "解除安裝會把" in text and "設定一起刪掉" in text, text
+        assert "設定不會不見" not in text and "重新安裝" not in text, text

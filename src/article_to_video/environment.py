@@ -60,6 +60,11 @@ EDGE_PROBE_VOICE = "zh-TW-HsiaoChenNeural"
 
 SAY_INSTALL = "跟 Claude 說「安裝」，它會幫你補裝"
 SAY_REINSTALL = "外掛的 Python 環境不完整：跟 Claude 說「安裝」重新整理一次；還是不行就說「回報問題」傳給 Danny"
+SAY_UPDATE_PLUGIN = ("外掛檔案不完整：在 Claude 輸入 /plugin，到 Installed 找到 article-to-video，按 Update now 重新下載外掛"
+                     "（設定存在另外的地方，更新不會動到）。不要解除安裝：解除安裝會把頻道名、logo 這些設定一起刪掉。"
+                     "更新完還是不行，說「回報問題」傳給 Danny")
+"""外掛自己的檔案壞了的修法。設定在 ${CLAUDE_PLUGIN_DATA}：更新外掛不會動到，但最後一個 scope 解除安裝時會被刪掉
+（除非 claude plugin uninstall 加 --keep-data，那是維護者的事，不叫作者打指令）。"""
 
 
 @dataclass(frozen=True)
@@ -355,7 +360,7 @@ def check_fonts() -> EnvCheck:
     detail = {"dir": str(FONTS_DIR), "files": woffs, "subtitle": SUBTITLE_FONT_FILE.name}
     if not SUBTITLE_FONT_FILE.is_file() or not woffs:
         return EnvCheck("fonts", name, False, f"少了字型檔（{SUBTITLE_FONT_FILE.name}）", detail,
-                        fix="外掛檔案不完整：在 Claude 輸入 /plugin，找到 article-to-video 重新安裝（你的設定不會不見）")
+                        fix=SAY_UPDATE_PLUGIN)
     return EnvCheck("fonts", name, True, f"{len(woffs)} 個字型檔，字幕用 {SUBTITLE_FONT_FILE.name}", detail)
 
 

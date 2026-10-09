@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 from article_to_video.check_log import load_log, now, resolution, save_log
 from article_to_video.clips import FONTS_DIR
 from article_to_video.commands import PLUGIN_ROOT, aspect_args, cli_command
+from article_to_video.environment import SAY_UPDATE_PLUGIN
 from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.project import ProjectError, ProjectPaths
 from article_to_video.review_page import timecode
@@ -281,7 +282,7 @@ def prepare_review_kit(plan: BuildPlan, *, log: Log = _quiet) -> ReviewKit:
     shutil.copyfile(srt, kit / "subtitles.srt")
     subs = _parse_srt(srt)
     if not BRIEF.is_file():
-        raise ProjectError(f"找不到審片說明 {BRIEF}", title="審片素材做不出來", hint="外掛可能沒裝完整，重新安裝外掛。")
+        raise ProjectError(f"找不到審片說明 {BRIEF}", title="審片素材做不出來", hint=SAY_UPDATE_PLUGIN)
     shutil.copyfile(BRIEF, kit / "brief.md")
 
     duration = tl.duration
