@@ -1,0 +1,180 @@
+---
+name: setup
+description: 安裝與設定：第一次用這個外掛時，把做影片要用的工具裝好（Homebrew、能燒字幕的 ffmpeg、uv、畫圖表用的 Chromium），讓作者試聽挑配音聲音和配樂，填頻道名、logo、品牌色，最後做一支 10 秒測試片打開給他看。之後想換聲音、換配樂、改頻道名或品牌色也用這個。作者說「安裝」「設定」「第一次使用」「裝好環境」「換聲音」「換配樂」「改頻道名」「改品牌色」時使用。
+allowed-tools:
+  - Bash(uv --version)
+  - Bash(~/.local/bin/uv --version)
+  - Bash(curl -LsSf --create-dirs -o ${CLAUDE_PLUGIN_DATA}/uv-install.sh https://astral.sh/uv/install.sh)
+  - Bash(sh ${CLAUDE_PLUGIN_DATA}/uv-install.sh)
+  - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video install *)
+  - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video samples *)
+  - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings *)
+  - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video test-video *)
+  - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video install *)
+  - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video samples *)
+  - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings *)
+  - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video test-video *)
+  - Bash(afplay ${CLAUDE_PLUGIN_DATA}/previews/*)
+---
+
+# 安裝與設定
+
+作者不熟電腦。整個過程他只需要做三件事：Claude 問權限時按「允許」、在跳出來的終端機視窗輸入一次 Mac 密碼、
+回答你的問題（挑聲音、挑配樂、頻道名⋯）。指令和錯誤訊息都由你轉成白話，**不要叫他自己打指令**。
+
+只想改其中一項（換聲音、換配樂、改頻道名／logo／品牌色）：直接做那一步就好，不用重裝。
+
+## 開始前先跟作者說
+
+用你自己的話講，大意是：
+
+- 接下來會裝幾個做影片要用的工具，第一次大約 10～30 分鐘，看網路快慢。
+- 中間會跳出一個「終端機」視窗，要他輸入一次登入 Mac 的密碼。打字時畫面不會出現任何字，這是正常的。
+- Claude 跳出權限詢問時按「允許」。
+- 等的時候會一起挑配音的聲音、配樂，填頻道名。
+
+## 第 1 步：確認有 uv（跑外掛程式用的工具）
+
+跑 `uv --version`。
+
+- 印出版本號：下一步。
+- 說找不到：跑 `~/.local/bin/uv --version`。有版本號表示裝過了，只是這次對話還找不到它，
+  **下面每一行開頭的 `uv` 都換成 `~/.local/bin/uv`**。
+- 兩個都找不到：用 uv 官方的安裝程式裝（不用密碼，幾秒鐘），兩行分開跑：
+
+  ```
+  curl -LsSf --create-dirs -o ${CLAUDE_PLUGIN_DATA}/uv-install.sh https://astral.sh/uv/install.sh
+  ```
+
+  ```
+  sh ${CLAUDE_PLUGIN_DATA}/uv-install.sh
+  ```
+
+  裝好之後這次對話一律用 `~/.local/bin/uv`（下次開新對話直接打 `uv` 就行）。
+
+第一次跑下面的外掛指令時，uv 會自己下載 Python 和外掛要用的套件，大約一分鐘，正常。
+
+## 第 2 步：裝工具（放在背景跑）
+
+先照上面跟作者講好終端機和密碼的事，再用 Bash 的背景執行（run_in_background）跑這一行，
+第一次可能要 10～30 分鐘：
+
+```
+uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video install --data-dir ${CLAUDE_PLUGIN_DATA}
+```
+
+- 已經裝好的會自己略過。這台 Mac 沒有 Homebrew 時，它會打開「終端機」：請作者照視窗裡的字輸入密碼、按 return，
+  然後讓它跑，看到「Homebrew 裝好了」才關那個視窗。
+- 不用乾等：等的時候直接做第 3～5 步（試聽和填品牌不需要這些工具）。
+- 跑完看最後幾行：
+  - 「全部裝好了」：等第 5 步做完就做第 6 步。
+  - 有「✗」的項目：把那一項的「修法」用白話講給作者聽，處理完再跑一次這一步（裝好的會略過，很快）。
+  - 「edge-tts 連線」失敗通常是沒網路：請他確認 Wi-Fi 有連上。
+
+## 第 3 步：挑配音的聲音
+
+產生三個試聽檔（要連網，大約十秒）：
+
+```
+uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video samples voice --out ${CLAUDE_PLUGIN_DATA}/previews/voices --data-dir ${CLAUDE_PLUGIN_DATA}
+```
+
+三個都是台灣口音：曉臻（女聲）、曉雨（女聲）、雲哲（男聲）。一個一個播，播之前先講「現在播第 1 個：曉臻」：
+
+```
+afplay ${CLAUDE_PLUGIN_DATA}/previews/voices/voice-zh-TW-HsiaoChenNeural.wav
+```
+
+```
+afplay ${CLAUDE_PLUGIN_DATA}/previews/voices/voice-zh-TW-HsiaoYuNeural.wav
+```
+
+```
+afplay ${CLAUDE_PLUGIN_DATA}/previews/voices/voice-zh-TW-YunJheNeural.wav
+```
+
+問他喜歡哪一個（想再聽就再播）。決定了就存起來（填他挑的名字：曉臻、曉雨或雲哲）：
+
+```
+uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings set --voice 曉雨 --data-dir ${CLAUDE_PLUGIN_DATA}
+```
+
+覺得講太快或太慢：語速預設 +5%，可以改成例如 `--rate +10%` 或 `--rate -5%`，用
+`samples voice --rate +10% …`（其他照上面）重產試聽檔再聽一次，滿意了 `settings set` 時一起帶 `--rate`。
+
+## 第 4 步：挑配樂
+
+產生三首的試聽檔（每首 15 秒，幾秒鐘就好）：
+
+```
+uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video samples music --out ${CLAUDE_PLUGIN_DATA}/previews/music --seconds 15 --data-dir ${CLAUDE_PLUGIN_DATA}
+```
+
+三首都是程式作曲的原創配樂，沒有版權問題：沉穩鋼琴（calm）、新聞脈動（pulse）、極簡電子（minimal）。
+一首一首播，播之前講名字：
+
+```
+afplay ${CLAUDE_PLUGIN_DATA}/previews/music/music-calm.wav
+```
+
+```
+afplay ${CLAUDE_PLUGIN_DATA}/previews/music/music-pulse.wav
+```
+
+```
+afplay ${CLAUDE_PLUGIN_DATA}/previews/music/music-minimal.wav
+```
+
+跟他說：影片裡配樂會壓得很小聲墊在旁白下面，到片尾卡才大聲一點；也可以不要配樂。存起來（不要配樂寫 `none`）：
+
+```
+uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings set --music pulse --data-dir ${CLAUDE_PLUGIN_DATA}
+```
+
+## 第 5 步：頻道名、logo、品牌色
+
+一次問一個：
+
+1. **頻道名**（一定要有）：會出現在每支片最後的片尾卡上，40 個字以內。
+2. **logo**（可以不要）：請他把圖檔（PNG 或 JPG）拖進這個對話視窗，你就拿得到檔案的路徑。
+3. **品牌色**（可以不要）：圖表的主色和片尾卡會用它。他說顏色名稱（例如「深藍」）就由你換成色碼（例如 `#1A4E8A`）；
+   不要的話，圖表用預設的紅黑白。
+
+一次存起來（沒給的選項就不要帶）：
+
+```
+uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings set --channel "<頻道名>" --logo "<logo 檔案路徑>" --brand-color "#1A4E8A" --data-dir ${CLAUDE_PLUGIN_DATA}
+```
+
+- 顏色太淺會被擋下來（白底的圖表上看不清楚）：照訊息請他挑深一點的顏色，再存一次。
+- 存好之後，把印出來的設定唸一遍給他確認。
+
+## 第 6 步：做一支測試片
+
+第 2 步全部裝好、第 5 步存好頻道名之後跑（要連網配音，大約半分鐘到一分鐘，做完會自動用 QuickTime 打開）：
+
+```
+uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video test-video --data-dir ${CLAUDE_PLUGIN_DATA}
+```
+
+問作者：
+
+- 聽得到配音（是他挑的聲音）、底下有配樂嗎？
+- 看得到圖表、字幕，最後的片尾卡有他的頻道名嗎？
+
+都沒問題就完成了。測試片放在 Finder 的「影片」→「解說影片」→「安裝測試片」，看完可以整個刪掉；
+以後做的片也會放在「解說影片」裡。
+
+做不出來：把錯誤訊息的意思用白話講給他聽；看不懂的，請他說「回報問題」
+（出問題的專案資料夾就是指令印出來的那個「安裝測試片」資料夾）。
+
+## 完成後跟作者說
+
+- 以後要做片：把文章（PDF、Word、Google 文件下載的檔，或直接貼文字）丟給 Claude，說「做成影片」。
+- 想知道電腦哪裡怪怪的：說「檢查環境」。
+- 想換聲音、配樂、頻道名、品牌色：直接說「換聲音」之類的就好，已經做好的片不會跟著變。
+
+## 出狀況時
+
+- 指令印出一大段英文，或你不確定怎麼辦：請作者說「回報問題」，把打包好的檔案用 LINE 傳給 Danny。
+- 不要自己用別的方法裝這些工具（例如換別的安裝指令）；照指令印出來的「修法」做。

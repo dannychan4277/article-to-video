@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from article_to_video.environment import EnvCheck
 from article_to_video.homebrew import BrewLayout, find_brew, machine_arch
 from article_to_video.installer import Installer
 
@@ -188,8 +189,10 @@ class FakeMac:
 
     def installer(self, **kw) -> Installer:
         # homebrew_timeout：哪天輪詢壞了，測試失敗而不是卡 45 分鐘
+        # Chromium 不是這些測試的重點：真的開一次要半秒多，換成「開得起來」（真的那條在別的測試）
         opts = dict(layout=self.layout, open_terminal=self.open_terminal, is_admin=lambda: True,
-                    ffmpeg_candidates=(), poll_interval=0.05, homebrew_timeout=15, log=lambda m: None)
+                    ffmpeg_candidates=(), poll_interval=0.05, homebrew_timeout=15, log=lambda m: None,
+                    chromium_check=lambda: EnvCheck("chromium", "Chromium", True, "153.0（假）"))
         opts.update(kw)
         return Installer(self.data, **opts)
 

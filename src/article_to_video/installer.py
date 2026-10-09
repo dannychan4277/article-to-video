@@ -137,6 +137,7 @@ class Installer:
         open_terminal: Callable[[Path], bool] | None = None,
         is_admin: Callable[[], bool] | None = None,
         ffmpeg_candidates: Sequence[Path] | None = None,
+        chromium_check: Callable[[], EnvCheck] | None = None,
         homebrew_timeout: float = HOMEBREW_TIMEOUT,
         start_timeout: float = START_TIMEOUT,
         poll_interval: float = 5.0,
@@ -149,6 +150,7 @@ class Installer:
         self.open_terminal = open_terminal or (lambda script: open_in_terminal(script))
         self.is_admin = is_admin or (lambda: user_is_admin())
         self.extra_ffmpeg = list(ffmpeg_candidates) if ffmpeg_candidates is not None else None
+        self.chromium_check = chromium_check or check_chromium
         self.homebrew_timeout = homebrew_timeout
         self.start_timeout = start_timeout
         self.poll_interval = poll_interval
@@ -299,12 +301,12 @@ class Installer:
 
     def _chromium(self) -> StepResult:
         name = "Chromium（畫圖表用的瀏覽器）"
-        before = check_chromium()
+        before = self.chromium_check()
         if before.ok:
             return StepResult("chromium", name, "present", f"已經有了，略過（{before.value}）")
         self.log("  正在下載 Playwright 用的 Chromium（約 150 MB）…")
         code = self.act([sys.executable, "-m", "playwright", "install", "chromium"], env=None, log=self.log)
-        after = check_chromium()
+        after = self.chromium_check()
         if after.ok:
             return StepResult("chromium", name, "installed", f"裝好了（{after.value}）")
         return StepResult("chromium", name, "failed", f"下載跑完（結束碼 {code}）還是開不起來：{after.value}",
