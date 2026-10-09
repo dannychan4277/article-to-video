@@ -26,6 +26,7 @@ __all__ = [
     "SubtitleLine",
     "check_libass_log",
     "missing_subtitle_glyphs",
+    "subtitle_box",
     "subtitle_lines",
     "wrap_subtitle",
     "write_ass",
@@ -140,10 +141,26 @@ def wrap_subtitle(text: str, max_em: float) -> list[str]:
         n += 1
 
 
+def _max_em(fmt: VideoFormat) -> float:
+    """一行字幕最多幾個中文字寬：畫面寬－左右邊距。"""
+    return (fmt.width - 2 * fmt.sub_margin_lr) / (fmt.sub_size * _EM_PER_SIZE)
+
+
+def subtitle_box(text: str, fmt: VideoFormat) -> tuple[int, int, int, int]:
+    """這句字幕燒上去之後蓋住的範圍（深底框）：(x0, y0, x1, y1)，px。照 write_ass 的樣式算：水平置中、
+    最後一行的底在 sub_margin_v 上面、框比字四周多 sub_pad；折行和字寬跟 wrap_subtitle 同一套估法
+    （實測 1080p 一句 7 個字的框約 285×78，算出來 285×78）。自動檢查用它看畫面上的字會不會被字幕蓋到。"""
+    lines = wrap_subtitle(text, _max_em(fmt))
+    w = max(sum(_em(c) for c in ln) for ln in lines) * fmt.sub_size * _EM_PER_SIZE
+    bottom = fmt.height - fmt.sub_margin_v
+    return (math.floor((fmt.width - w) / 2 - fmt.sub_pad), math.floor(bottom - len(lines) * fmt.sub_size - fmt.sub_pad),
+            math.ceil((fmt.width + w) / 2 + fmt.sub_pad), math.ceil(bottom + fmt.sub_pad))
+
+
 def write_ass(lines: Iterable[SubtitleLine], path: Path, fmt: VideoFormat) -> None:
     """深底框白字：BorderStyle 3（不透明底框），框色 #141414、約 25% 透明，Outline＝框的內距。
     一行放不下的字幕自己折行（wrap_subtitle）：可用寬度＝畫面寬－左右邊距。"""
-    max_em = (fmt.width - 2 * fmt.sub_margin_lr) / (fmt.sub_size * _EM_PER_SIZE)
+    max_em = _max_em(fmt)
     box = "&H40141414"
     style = ",".join(str(x) for x in [
         "Default", SUBTITLE_FONT_FAMILY, fmt.sub_size, "&H00FFFFFF", "&H00FFFFFF", box, box,
