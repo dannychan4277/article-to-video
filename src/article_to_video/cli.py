@@ -8,6 +8,17 @@
   boxes <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--data-dir D]
                                                   列出 Vox 框、渲每個框的靜態圖（照這個比例）、印核對代號
   confirm-box <專案資料夾> <核對代號>… [--note 文字]   記下 Claude 看過靜態圖、確認過的框（見 boxes.py）
+  checks <專案資料夾> [--aspect …] [--tts …] [--jobs N] [--data-dir D] [--json]
+                                                  自動檢查（出片之後）：每個片段跑 qa、白底片段查字幕帶，彙整到分鏡，
+                                                  寫 build/<比例>/checks.json、更新審片頁（見 auto_checks.py）
+  review-prep <專案資料夾> [--aspect …] [--tts …] [--data-dir D]
+                                                  獨立審片：從成片準備素材、印出派 agent 用的 prompt（見 independent_review.py）
+  review-frames <專案資料夾> [--aspect …] (--at 秒… | --from 秒 --to 秒 [--step 0.25])
+                                                  （審片 agent 用）從成片抽全解析度幀
+  review-record <專案資料夾> [--aspect …] [--file 檔|-] [--tts …] [--data-dir D]
+                                                  記下審片 agent 的回答（預設讀素材資料夾的 review.json），更新審片頁
+  resolve <專案資料夾> <代號>… (--fixed 說明 | --accept 理由) [--by 作者|Claude]
+                                                  記下必修的處理：改好了（獨立審片）或接受不改；記了就不再擋出片
   feedback <專案資料夾> [--file 檔]                   審片頁複製出來的留言（stdin）→ JSON（格式見 feedback.py）
   extract <專案資料夾> <文章檔|->                   擷取文章到 <專案>/article/（- ＝從標準輸入讀貼上的文字）
   report-issue [專案資料夾] [--shot 分鏡]… [--note 文字] [--out-dir 資料夾]
@@ -15,7 +26,8 @@
   reproduce-issue <zip> [--out 資料夾] [--shot 分鏡]…   （維護者用）從回報的 zip 重渲出錯的分鏡
   settings show [--json] [--data-dir D] [--project P]               看使用者設定（或某支片的設定快照）
   settings set [--channel …] [--logo 圖檔|none] [--brand-color #RRGGBB|none] [--voice 曉臻|曉雨|雲哲]
-               [--rate +5%] [--music calm|pulse|minimal|none] [--aspect 16:9|9:16] [--data-dir D] [--project P]
+               [--rate +5%] [--music calm|pulse|minimal|none] [--aspect 16:9|9:16] [--independent-review 開|關]
+               [--data-dir D] [--project P]
                                                                      改使用者設定；加 --project 只改那支片的快照
   samples music --out 資料夾 [--seconds 20] [--data-dir D]           每首配樂一個試聽檔 music-<名字>.wav
   samples voice --out 資料夾 [--rate +5%] [--text …] [--tts edge|fake] 每個聲音一個試聽檔 voice-<代號>.wav（edge 要連網）
@@ -328,6 +340,23 @@ def _boxes(args: argparse.Namespace) -> int:
     return 0
 
 
+def _after_build_hint(plan, data_dir) -> str:
+    """出片之後的下一步（給 Claude 看）：自動檢查有沒有跑過、獨立審片審過這版沒有。"""
+    from article_to_video.auto_checks import load_check_report
+    from article_to_video.independent_review import review_enabled, reviewed_current_video
+
+    root = plan.project.root
+    aspect = "" if plan.format.name == "16x9" else f" --aspect {plan.format.name}"
+    steps = []
+    unchecked = load_check_report(plan).unchecked
+    if unchecked:
+        steps.append(f"自動檢查（{len(unchecked)} 個片段還沒查）：python -m article_to_video checks \"{root}\"{aspect}")
+    if review_enabled(data_dir) and not reviewed_current_video(plan):
+        steps.append(f"獨立審片（這版成片還沒審）：python -m article_to_video review-prep \"{root}\"{aspect}"
+                     " → 用印出來的 prompt 派一個 agent → review-record")
+    return ("下一步：\n" + "\n".join(f"  {s}" for s in steps)) if steps else "自動檢查、獨立審片都跑過這版了。"
+
+
 def _refresh_review(plan, data_dir, log) -> None:
     """自動檢查、獨立審片的結果寫進審片頁：成片還是最新的就照樣內嵌（出片後的樣子），不然是預覽的樣子。"""
     from article_to_video.auto_checks import current_video
@@ -536,8 +565,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"完成：{res.video}（{res.duration:.2f} 秒）")
                 print(f"字幕檔：{res.srt}")
                 failed = "成片做好了，但審片頁沒更新"
-                review = make_review(res.plan, video=res.video, contributors=default_contributors(args.data_dir), jobs=args.jobs,
-                                     log=log)
+                review = make_review(res.plan, video=res.video, contributors=default_contributors(args.data_dir),
+                                     jobs=args.jobs, log=log)
+                print(_after_build_hint(res.plan, args.data_dir))
             else:
                 from article_to_video.review import preview_project
 
@@ -550,7 +580,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             rec.finish(e)
             print(f"{failed}：{e}", file=sys.stderr)
             try:
-                review = make_review(e.plan, contributors=default_contributors(args.data_dir), jobs=args.jobs, log=log)
+                from article_to_video.auto_checks import current_video
+
+                # 成片還是這份分鏡做的（例如只是被審片的必修擋下）就照樣內嵌，作者看得到被擋的是哪一版
+                review = make_review(e.plan, video=current_video(e.plan), contributors=default_contributors(args.data_dir),
+                                     jobs=args.jobs, log=log)
                 print(f"審片頁已更新（被擋下的原因標在卡片上）：{review.page}")
             except KNOWN_ERRORS as e2:
                 print(f"審片頁也沒更新：{e2}", file=sys.stderr)

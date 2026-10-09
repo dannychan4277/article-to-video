@@ -166,7 +166,7 @@ def test_an_unhandled_must_fix_blocks_the_final_build_until_fixed_or_accepted(pr
     # 下一輪審片說沒修好：重新打開，又擋；作者決定不改就記下接受
     assert run_cli("review-prep", str(project), "--tts", "fake").returncode == 0
     material = json.loads((project / KIT / "material.json").read_text(encoding="utf-8"))
-    assert material["round"] == 2 and {p["id"]: p["status"] for p in material["previous"]}["R1-1"] == "fixed"
+    assert material["round"] == 2 and {p["id"]: p["status"] for p in material["previous"]}["R1-1"] == "做片的說改好了"
     again = record(project, {"items": [], "previous": [{"id": "R1-1", "status": "沒修好", "note": "還是壓到"}]})
     assert again.returncode == 0, again.stderr
     assert run_cli("build", str(project), "--tts", "fake").returncode == 1
@@ -192,3 +192,20 @@ def test_independent_review_can_be_turned_off_in_the_user_settings(project, tmp_
 
     assert run_cli("build", str(project), "--tts", "fake", data_dir=data).returncode == 0
     assert "已關掉" in read_review(project).page_slots["review"]
+
+
+def test_after_a_build_claude_is_told_to_run_the_checks_and_the_review(built_project):
+    assert "下一步" in built_project.stdout
+    assert "checks" in built_project.stdout and "review-prep" in built_project.stdout
+
+
+def test_reporting_an_issue_packs_the_review_rounds(project, tmp_path):
+    import zipfile
+
+    from article_to_video.issue_report import create_report
+
+    assert record(project, REVIEW).returncode == 0
+    rep = create_report(project, out_dir=tmp_path)
+    with zipfile.ZipFile(rep.zip_path) as z:
+        log = json.loads(z.read("project/check_log.json").decode("utf-8"))
+    assert [it["id"] for it in log["rounds"][0]["items"]] == ["R1-1", "R1-2", "R1-3"]

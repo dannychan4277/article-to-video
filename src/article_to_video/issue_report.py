@@ -509,6 +509,10 @@ def create_report(
                 files[f"{PROJECT_DIR}/{arcname}"] = data
         if paths.box_checks.is_file():  # Vox 框核對紀錄（出片被擋時看得出哪些框核對過）
             add_text(f"{PROJECT_DIR}/{paths.box_checks.name}", paths.box_checks.read_text(encoding="utf-8"))
+        if paths.check_log.is_file():  # 獨立審片每一輪、每個問題的處理（出片被擋時看得出擋在哪一項）
+            add_text(f"{PROJECT_DIR}/{paths.check_log.name}", paths.check_log.read_text(encoding="utf-8"))
+        for summary in sorted(paths.build.glob("*/checks.json")) if paths.build.is_dir() else []:  # 自動檢查彙整
+            add_text(f"{PROJECT_DIR}/build/{summary.parent.name}/checks.json", summary.read_text(encoding="utf-8"))
         for variant in sorted(paths.build.glob("*/timeline.json")) if paths.build.is_dir() else []:
             vdir = variant.parent
             add_text(f"{PROJECT_DIR}/build/{vdir.name}/timeline.json", variant.read_text(encoding="utf-8"))

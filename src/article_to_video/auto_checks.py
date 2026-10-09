@@ -2,15 +2,35 @@
 
   run_checks(plan)            每個片段跑 qa、白底片段跑字幕帶檢查（有快取、並行），彙整成 CheckReport，
                               寫 build/<比例>/checks.json。指令列：python -m article_to_video checks <專案>。
+  load_check_report(plan)     只讀快取（不跑）：審片頁（checks_contributor）與出片前的檢查用。
+  require_checks_cleared(plan) build 的 preflight：自動檢查的 fail、獨立審片的必修，沒處理就擋正式出片。
 
-qa（內嵌引擎的 engine/qa.py）：在 Chromium 裡把片段的 spec 逐幀重渲一次（30 fps 取樣），量確定性、動態、
-跳變、框景（半截字、疊字、字進字幕帶、近空白）。qa 自己只在頁面報錯時失敗，門檻在這裡判（THRESHOLDS 那張表）。
-為了快，qa 照比例縮小渲（短邊 QA_SHORT_SIDE＝540 px；引擎依畫面寬度等比排版，量的是比例，結果跟 1080p 一樣）。
+qa（內嵌引擎的 engine/qa.py，原樣使用）：在 Chromium 裡把片段的 spec 逐幀重渲一次（30 fps 取樣），量確定性、動態、
+跳變、框景（半截字、疊字、字進字幕帶、近空白）。qa 自己只在頁面報錯時失敗，門檻在這裡判。
+為了快，qa 照比例縮小渲（短邊 QA_SHORT_SIDE＝540 px；引擎依畫面寬度等比排版，框景用的是比例座標。
+實測同一份 spec 1080p 與 540p：跳變、框景、確定性一樣，Vox 片段快 3.4 倍）。
 
 每項結果是 ok／warn／fail：fail＝必修（沒處理就擋正式出片），warn＝該修（審片頁標出來，不擋）。
 
-快取：qa 的結果放 build/<比例>/checks/qa/<片段>/（qa.json、qa.md、<片段>.jpg 四幀拼圖＋運動熱圖、stamp.json），
-鍵＝QA_VERSION＋片段雜湊（spec＋引擎檔＋圖片）＋取樣設定＋qa.py 本身；片段沒變就不重跑。
+門檻（財經圖表＝t3_finance_chart、Vox＝y2_vox、片尾卡＝a2v_end_card）：
+  檢查        財經圖表                           Vox                               片尾卡
+  頁面報錯    fail                               fail                              fail
+  確定性      像素差 > 24 fail，> 0 warn          同左                              同左
+  動態        靜止幀對 ≥ 60% fail，≥ 40% warn     不判（一拍二動畫平常就 40～50%）  不判（本來就停著）
+  跳變        有就 fail                          不判（滑入、推鏡就是這樣）        有就 warn
+  半截字、疊字 持續 ≥ 0.5 秒 fail，其他 warn       warn（鏡頭經過的卡片本來會被切到）  同財經圖表
+  字進字幕帶  持續 ≥ 0.5 秒 fail，其他 warn       持續 ≥ 1 秒 fail，其他 warn        同財經圖表（直式才有帶子）
+  近空白      持續 ≥ 1 秒 fail，其他 warn         同左                              同左
+  字幕帶      壓進去累計 ≥ 0.3 秒 fail，其他 warn  不查（牛皮紙紋理會誤報）           直式查平台介面區；橫式沒字幕不查
+  停太久      旁白期間 > 5 秒沒有新畫面事件 warn（換圖、新的柱／線／標註／卡片／框；慢推不算）
+理由寫在各常數旁邊。
+
+快取：qa 的結果放 build/<比例>/checks/qa/<片段>/（clip.json、qa.json、qa.md、qa.log、<片段>.jpg 四幀拼圖＋運動熱圖、
+stamp.json），鍵＝QA_VERSION＋片段雜湊（spec＋引擎檔＋圖片）＋取樣設定＋qa.py 本身；片段沒變就不重跑。
+字幕帶放 build/<比例>/checks/band/<片段>.json，看的是渲好的片段（無字幕），所以要出片之後才查得到。
+
+代號（接受不改時用，見 check_log.py）：qa:<片段>:<檢查>@<片段雜湊前 8 碼>、band:<片段>@…、hold:<分鏡>@…。
+片段改了代號就變，舊的接受不會套到新畫面上。
 """
 
 from __future__ import annotations

@@ -56,6 +56,7 @@ __all__ = [
     "record_review",
     "review_contributor",
     "review_enabled",
+    "reviewed_current_video",
     "unresolved_must",
 ]
 
@@ -140,21 +141,52 @@ def _subtitle_at(subs: Sequence[tuple[float, float, str]], t: float) -> str:
     return next((text for a, b, text in subs if a <= t < b), "")
 
 
-def _extract(video: Path, frames: Sequence[int], out_dir: Path, *, width: int | None, ffmpeg: Path) -> list[Path]:
-    """照幀號抽圖（一次解碼），width 給了就縮成這個寬。回傳照幀號排序的 PNG。"""
-    uniq = sorted(set(frames))
-    if not uniq:
-        return []
+def _extract_small(video: Path, frames: Sequence[int], out_dir: Path, *, size: tuple[int, int],
+                   ffmpeg: Path) -> dict[int, Path]:
+    """照幀號抽小圖：整支成片解碼一次、縮成 size，邊讀邊挑要的幀（幾百張也只解碼一次；
+    ffmpeg 的 select 運算式太長會失敗，實測 3 分半的片 300 多個幀號就不行）。"""
+    from PIL import Image
+
+    want = set(frames)
+    out: dict[int, Path] = {}
+    if not want:
+        return out
     out_dir.mkdir(parents=True, exist_ok=True)
-    expr = "+".join(f"eq(n\\,{n})" for n in uniq)
-    vf = f"select={expr}" + (f",scale={width}:-2" if width else "")
-    proc = subprocess.run([str(ffmpeg), "-v", "error", "-i", str(video), "-vf", vf, "-fps_mode", "vfr",
-                           str(out_dir / "%05d.png")], capture_output=True, text=True, encoding="utf-8",
-                          errors="replace")
-    files = sorted(out_dir.glob("*.png"))
-    if proc.returncode != 0 or len(files) != len(uniq):
-        raise ProjectError(f"從成片抽圖失敗：{proc.stderr.strip()[-300:] or '抽到的張數不對'}", title="審片素材做不出來")
-    return files
+    w, h = size
+    proc = subprocess.Popen([str(ffmpeg), "-v", "error", "-i", str(video), "-vf", f"scale={w}:{h}", "-f", "rawvideo",
+                             "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        assert proc.stdout is not None
+        last, n = max(want), 0
+        while n <= last:
+            buf = proc.stdout.read(w * h * 3)
+            if len(buf) < w * h * 3:
+                break
+            if n in want:
+                out[n] = out_dir / f"{n:06d}.png"
+                Image.frombytes("RGB", (w, h), buf).save(out[n])
+            n += 1
+    finally:
+        proc.kill()
+        err = proc.communicate()[1].decode("utf-8", "replace")
+    if len(out) != len(want):
+        raise ProjectError(f"從成片抽圖失敗：{err.strip()[-300:] or '成片比預期短'}", title="審片素材做不出來")
+    return out
+
+
+def _extract_full(video: Path, frames: Sequence[int], fps: int, out_dir: Path, ffmpeg: Path) -> dict[int, Path]:
+    """照幀號抽全解析度圖：每張各跳一次（-ss 在 -i 前面＝跳到那個時間點之後的第一幀，往前讓 0.25 幀確保是這一幀）。"""
+    out: dict[int, Path] = {}
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for n in sorted(set(frames)):
+        dest = out_dir / f"{n:06d}.png"
+        proc = subprocess.run([str(ffmpeg), "-v", "error", "-y", "-ss", f"{max(0.0, (n - 0.25) / fps):.4f}",
+                               "-i", str(video), "-frames:v", "1", str(dest)],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if proc.returncode != 0 or not dest.is_file():
+            raise ProjectError(f"從成片抽圖失敗（第 {n} 幀）：{proc.stderr.strip()[-300:]}", title="抽不了幀")
+        out[n] = dest
+    return out
 
 
 def _font(size: int):
@@ -267,10 +299,10 @@ def prepare_review_kit(plan: BuildPlan, *, log: Log = _quiet) -> ReviewKit:
     cues.sort()
     landscape = fmt.width >= fmt.height
     tile_w = 480 if landscape else 270
+    tile_h = round(fmt.height * tile_w / fmt.width / 2) * 2
     frames = [round(t * fps) for t in overview] + [round(t * fps) for t, _ in cues]
     with tempfile.TemporaryDirectory(prefix="atv-review-") as tmp:
-        files = _extract(video, frames, Path(tmp), width=tile_w, ffmpeg=ffmpeg)
-        by_frame = dict(zip(sorted(set(frames)), files))
+        by_frame = _extract_small(video, frames, Path(tmp), size=(tile_w, tile_h), ffmpeg=ffmpeg)
 
         def tile(t: float, shot: int | None) -> tuple[Path, str, str]:
             where = f"分鏡 {shot}" if shot else "片尾卡"
@@ -283,10 +315,11 @@ def prepare_review_kit(plan: BuildPlan, *, log: Log = _quiet) -> ReviewKit:
     band_top = fmt.height - fmt.safe_bottom
     freeze = _freeze(video, band_top, fmt.width, ffmpeg)
     book = load_log(plan.project.root)
+    said = {"fixed": "做片的說改好了", "accepted": "作者或做片的決定不改"}
     previous = [
         {"id": it["id"], "round": rnd.get("round"), "severity": it.get("severity"), "shot": it.get("shot"),
          "time": it.get("time"), "title": it.get("title"),
-         "status": (resolution(book, it["id"]) or {}).get("status", "沒處理")}
+         "status": said.get((resolution(book, it["id"]) or {}).get("status"), "還沒處理")}
         for rnd in book["rounds"] for it in rnd.get("items") or [] if it.get("severity") in ("必修", "該修")
     ]
     aspect = "" if fmt.name == "16x9" else f" --aspect {fmt.name.replace('x', ':')}"
@@ -391,8 +424,7 @@ def extract_review_frames(kit: ReviewKit, times: Sequence[float]) -> tuple[list[
     out.mkdir(parents=True, exist_ok=True)
     nums = [min(round(t * fps), round(duration * fps) - 1) for t in times]
     with tempfile.TemporaryDirectory(prefix="atv-frames-") as tmp:
-        files = _extract(video, nums, Path(tmp), width=None, ffmpeg=find_ffmpeg())
-        by_frame = dict(zip(sorted(set(nums)), files))
+        by_frame = _extract_full(video, nums, fps, Path(tmp), find_ffmpeg())
         paths = []
         for n in nums:
             dest = out / f"t{n / fps:07.2f}.png"
@@ -507,6 +539,13 @@ def record_review(plan: BuildPlan, answer: Any, kit: ReviewKit) -> dict[str, Any
                                         "by": f"獨立審片第 {rnd_no} 輪", "at": now()}
     save_log(plan.project.root, book)
     return rnd
+
+
+def reviewed_current_video(plan: BuildPlan) -> bool:
+    """這個比例現在的成片審過了沒（有一輪審的就是這份成片）。"""
+    key = _final_key(plan)
+    return bool(key) and any(r.get("videoKey") == key and r.get("aspect") == plan.format.name
+                             for r in load_log(plan.project.root)["rounds"])
 
 
 def unresolved_must(plan: BuildPlan) -> list[tuple[str, str]]:
