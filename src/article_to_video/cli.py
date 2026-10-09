@@ -7,8 +7,9 @@
                                                   預覽：只出分鏡靜態圖＋審片頁（不渲整支片）
   build <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]
                                                   建置成片＋字幕檔，審片頁內嵌成片
-  open-review <專案資料夾> [--aspect …] [--tts …] [--data-dir D]
+  open-review <專案資料夾> [--aspect …] [--tts …] [--no-open] [--data-dir D]
                                                   更新審片頁（最新的檢查結果、還是最新的成片就內嵌）並在瀏覽器打開給作者看
+                                                  （--no-open：只更新、不打開）
   publish <專案資料夾> --version N [--aspect …] [--tts …] [--jobs N] [--no-open] [--data-dir D] [--out 資料夾]
                                                   出片：作者點頭（第 N 版）之後，建置成片、自動檢查，把成片和字幕檔放進
                                                   「影片／解說影片／日期-標題」（見 publish.py、videos.py）
@@ -50,7 +51,7 @@
   test-video [--out 資料夾] [--tts edge|fake] [--no-open] [--data-dir D]
                                                      用外掛自帶的範例做一支約 10 秒的測試片並打開（安裝最後一步）
 
-preview、build 做完會用 macOS 的 open 在預設瀏覽器打開審片頁；--no-open 或環境變數
+preview、build、open-review 做完會用 macOS 的 open 在預設瀏覽器打開審片頁；--no-open 或環境變數
 ARTICLE_TO_VIDEO_NO_OPEN=1（測試、CI）就不打開。會渲染或改審片頁的子指令（preview、build、publish、open-review、
 narrate、boxes、checks、review-prep、review-record、test-video）的輸出與錯誤記在 <專案>/build/last-run.{log,json}
 （只留最後一次），回報問題時打包。
@@ -151,7 +152,8 @@ def _parser() -> argparse.ArgumentParser:
              "tts", "jobs", "no_open", "data_dir", "aspect")
     pb.add_argument("--version", type=int, required=True, help="作者點頭的是審片頁第幾版（頁首寫的）")
     pb.add_argument("--out", help="成片放哪個資料夾（預設：這支片的「日期-標題」資料夾）")
-    add("open-review", "更新審片頁（帶上最新的檢查結果）並在瀏覽器打開給作者看", "tts", "data_dir", "aspect")
+    add("open-review", "更新審片頁（帶上最新的檢查結果）並在瀏覽器打開給作者看；--no-open 只更新、不打開",
+        "tts", "no_open", "data_dir", "aspect")
     add("narrate", "配音（寫分鏡之前）：每段旁白配好音，印出每段的起點、長度與每個詞開始唸的秒數", "tts", "data_dir",
         project="專案資料夾（裡面有 narration.json；還不用有 shots.json）")
     add("boxes", "列出 Vox 框、渲每個框的靜態圖、看哪些還沒核對", "tts", "jobs", "data_dir", "aspect")
@@ -417,7 +419,7 @@ def _open_review(args: argparse.Namespace) -> int:
     """更新審片頁並打開給作者看。會渲分鏡靜態圖，出錯要跟 build、preview 一樣記進 last-run。"""
     def body(log: Log) -> int:
         review = _refresh_review(_plan(args), args, log, what=None)
-        _show_review(review.page, no_open=False, version=review.version)
+        _show_review(review.page, no_open=args.no_open, version=review.version)
         return 0
 
     return _recorded(args, "審片頁打不開", body)

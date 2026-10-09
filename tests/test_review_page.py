@@ -319,16 +319,18 @@ def test_cli_opens_the_review_page_in_the_browser_unless_told_not_to(previewed_p
     fake_open.chmod(0o755)
     from conftest import run_cli as run
 
-    def preview(*extra: str, **more_env: str) -> None:
-        proc = run("preview", root, "--tts", "fake", *extra, unset=("ARTICLE_TO_VIDEO_NO_OPEN", "CI"),
+    def preview(*extra: str, command: str = "preview", **more_env: str) -> None:
+        proc = run(command, root, "--tts", "fake", *extra, unset=("ARTICLE_TO_VIDEO_NO_OPEN", "CI"),
                    env={"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}", **more_env})
         assert proc.returncode == 0, proc.stderr
+        assert str(root / REVIEW_PAGE) in proc.stdout  # 沒打開也印出審片頁在哪
 
     preview()
     assert record.read_text(encoding="utf-8").splitlines() == [str(root / REVIEW_PAGE)]
     record.unlink()
     preview("--no-open")
     preview(ARTICLE_TO_VIDEO_NO_OPEN="1")
+    preview("--no-open", command="open-review")  # 只更新審片頁（例如先給 Claude 看）也可以不打開
     assert not record.exists()
 
 
