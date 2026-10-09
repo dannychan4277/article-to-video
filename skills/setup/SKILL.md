@@ -146,7 +146,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings set -
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings set --channel "<頻道名>" --logo "<logo 檔案路徑>" --brand-color "#1A4E8A" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-- 顏色太淺會被擋下來（白底的圖表上看不清楚）：照訊息請他挑深一點的顏色，再存一次。
+- 顏色很淺（例如淡黃）也照樣存：指令會印一句「頂端色條和小旗用原色，圖表上的字和線用加深的版本」，用口語轉述給他。
 - 存好之後，把印出來的設定唸一遍給他確認。
 
 ## 第 6 步：做一支測試片

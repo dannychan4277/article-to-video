@@ -70,7 +70,8 @@ return {
       every: category ? 1 : Math.max(1, Math.ceil(n / (ctx.portrait ? 6 : 10))) };
     const brand = (d.colors && d.colors.brand) || RED;                    // [article-to-video 內嵌修改] 品牌色
     const main = (d.colors && d.colors.main) || (kind === 'bar' ? '#006BA2' : brand);
-    L.col = { main, accent: (d.colors && d.colors.accent) || main, dim: (d.colors && d.colors.dim) || '#C6D2D8', brand };
+    const ink = (d.colors && d.colors.ink) || brand;                      // [article-to-video 內嵌修改] 品牌色太淺時，要讀的字與記號用加深的 ink（色條、小旗照用原色）
+    L.col = { main, accent: (d.colors && d.colors.accent) || main, dim: (d.colors && d.colors.dim) || '#C6D2D8', brand, ink };
     L.updown = d.upDown === 'us' ? ['#1B9E5A', RED] : [RED, '#1B9E5A'];
     if (!category) {   // [article-to-video 內嵌] 時間軸的名字互相重疊就不寫：直式畫面窄、字又放大兩成，原版的抽稀間隔常讓相鄰名字疊在一起。被標註那根優先，其餘照原本的規則（含 xTicks）從左到右、放得下才寫；沒有重疊時跟原版一樣
       c.font = `400 ${L.xFont}px ${NUM}`;
@@ -100,7 +101,7 @@ return {
       c.globalAlpha = MO.seg(lt, 0.2, 0.6); c.font = `400 ${L.srcF.size}px ${CN}`; c.fillStyle = '#7c868b';
       L.srcF.lines.forEach((ln, k, a) => c.fillText(ln, m, H - 40 * u - ctx.safe.bottom - (a.length - 1 - k) * L.srcF.size * 1.3));
       c.restore();
-      if (d.badge) { c.save(); c.globalAlpha = MO.seg(lt, 0.2, 0.6); CH.demoBadge(c, d.badge, { x: W - L.mR, y: H - 50 * u - ctx.safe.bottom, font: `700 ${28 * u}px ${CN}`, col: L.col.brand, box: rgba(L.col.brand, 0.06, 'rgba(227,18,11,0.06)') }); c.restore(); }
+      if (d.badge) { c.save(); c.globalAlpha = MO.seg(lt, 0.2, 0.6); CH.demoBadge(c, d.badge, { x: W - L.mR, y: H - 50 * u - ctx.safe.bottom, font: `700 ${28 * u}px ${CN}`, col: L.col.ink, box: rgba(L.col.ink, 0.06, 'rgba(227,18,11,0.06)') }); c.restore(); }
     }
     // ---- 坐标系（版式之后 0.25s） ----
     const qd = ctx.of('bar', 'line', 'candle')[0] || { at: qt.at + 0.75 }, gStart = Math.min(qt.at + 0.25, qd.at - 0.4);
@@ -167,7 +168,7 @@ return {
         const cx = clamp(x, F.x + tw / 2, F.x + F.w - 80 * u - tw / 2);
         const cover = L.tops.filter(([bx]) => bx > cx - tw / 2 - L.slot / 2 && bx < cx + tw / 2 + L.slot / 2).map(([, by]) => by);
         const bottom = Math.max(F.y + lh * lines.length, Math.min(y, ...cover) - vlab - 18 * u);   // 文字块底边
-        c.fillStyle = L.col.brand; c.beginPath(); c.arc(x - Math.min(150 * u, L.slot * 0.62) / 2, y, 9 * u * Math.max(0, s), 0, 7); c.fill();   // [Danny 本机改] 圆点放在柱顶左角：放柱顶正中会压到柱上数值的字底
+        c.fillStyle = L.col.ink; c.beginPath(); c.arc(x - Math.min(150 * u, L.slot * 0.62) / 2, y, 9 * u * Math.max(0, s), 0, 7); c.fill();   // [Danny 本机改] 圆点放在柱顶左角：放柱顶正中会压到柱上数值的字底
         const y0 = y - vlab, y1 = bottom + 8 * u;
         if (y0 - y1 > 6 * u) { c.strokeStyle = INK; c.lineWidth = 2 * u; c.beginPath(); c.moveTo(x, y0); c.lineTo(lerp(x, cx, lp), lerp(y0, y1, lp)); c.stroke(); }
         c.globalAlpha = fp; c.fillStyle = INK; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
@@ -179,12 +180,12 @@ return {
       const H0 = d.highlight || {}, lines = [C(qh.text, H0.text), C(qh.sub, H0.sub)].filter(Boolean);
       const right = anchor[0] > F.x + F.w * 0.55, tx = right ? anchor[0] - 60 * u : anchor[0] + 60 * u;
       const ty = L.neg ? Math.min(F.y + F.h - 90 * u, anchor[1] + 70 * u) : Math.max(F.y + 60 * u, anchor[1] - 140 * u);   // 负数柱：标注往下走，别压回零线上方的柱子
-      CH.callout(c, ctx.lt(t, qh.at), 0, { x: anchor[0], y: anchor[1], tx, ty, lines, col: INK, dotCol: L.col.brand, font: `700 ${50 * u}px ${NUM}`, font2: `400 ${28 * u * fs}px ${CN}`, align: right ? 'right' : 'left', r: 9 * u });
+      CH.callout(c, ctx.lt(t, qh.at), 0, { x: anchor[0], y: anchor[1], tx, ty, lines, col: INK, dotCol: L.col.ink, font: `700 ${50 * u}px ${NUM}`, font2: `400 ${28 * u * fs}px ${CN}`, align: right ? 'right' : 'left', r: 9 * u });
     }
     // ---- 大数字（number cue：at = 落定时刻） ----
     for (const q of ctx.of('number')) {
       const nd = q.data || {}, k = MO.expoOut(clamp((t - (q.at - 0.9)) / 0.9)); if (t < q.at - 0.9) continue;
-      c.save(); c.globalAlpha = clamp((t - (q.at - 0.9)) / 0.2); c.font = `700 ${120 * u}px ${NUM}`; c.fillStyle = L.col.brand; c.textAlign = 'right'; c.textBaseline = 'alphabetic';
+      c.save(); c.globalAlpha = clamp((t - (q.at - 0.9)) / 0.2); c.font = `700 ${120 * u}px ${NUM}`; c.fillStyle = L.col.ink; c.textAlign = 'right'; c.textBaseline = 'alphabetic';
       const numStr = (nd.prefix || '') + TY.fmt((nd.value || 0) * k, nd.decimals ?? 0) + (nd.suffix || ''), by = F.y - 62 * u;   // 落在图区上方专留的那一条（让开顶格刻度值）
       const nw = c.measureText((nd.prefix || '') + TY.fmt(nd.value || 0, nd.decimals ?? 0) + (nd.suffix || '')).width;
       TY.tabular(c, numStr, W - L.mR, by, { align: 'right' });

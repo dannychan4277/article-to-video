@@ -72,12 +72,21 @@ def test_bad_values_are_rejected_in_chinese_and_nothing_is_saved(tmp_path):
     data = tmp_path / "plugin-data"
     assert run("settings", "set", "--data-dir", str(data), "--channel", "小明").returncode == 0
     proc = run("settings", "set", "--data-dir", str(data),
-               "--voice", "曉華", "--brand-color", "#FFE680", "--music", "搖滾", "--channel", "改名")
+               "--voice", "曉華", "--brand-color", "藍色", "--music", "搖滾", "--channel", "改名")
     assert proc.returncode == 1
     assert "Traceback" not in proc.stderr
-    for needle in ("聲音「曉華」", "曉臻", "#FFE680", "太淺", "配樂「搖滾」", "沉穩鋼琴"):
+    for needle in ("聲音「曉華」", "曉臻", "品牌色「藍色」", "#1A5FB4", "配樂「搖滾」", "沉穩鋼琴"):
         assert needle in proc.stderr, proc.stderr
     assert show(data)["channel"] == "小明"  # 有任何一個不對就整批不改
+
+
+def test_a_light_brand_color_is_kept_and_the_charts_take_care_of_readability(tmp_path):
+    """作者真正的品牌色可能很淺（例如淡黃）：照樣存起來，跟他說圖表上的字和線會用加深的版本。"""
+    data = tmp_path / "plugin-data"
+    proc = run("settings", "set", "--data-dir", str(data), "--brand-color", "#ffe680")
+    assert proc.returncode == 0, proc.stderr
+    assert show(data)["brand_color"] == "#FFE680"
+    assert "#FFE680" in proc.stdout and "加深" in proc.stdout and "原色" in proc.stdout
 
 
 def test_logo_is_copied_into_the_data_dir(tmp_path):

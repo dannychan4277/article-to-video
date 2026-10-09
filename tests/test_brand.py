@@ -70,3 +70,32 @@ def test_without_a_brand_color_charts_keep_the_default_red_black_white(built_pro
     [title] = frames_rgb(built_project.video, 30, 30, (90, 100, 900, 90))
     px = np.frombuffer(title, dtype=np.uint8).reshape(-1, 3).astype(int)
     assert share_of(px, (255, 255, 255), tol=10) > 0.5 and share_of(px, (12, 12, 12), tol=30) > 0.05
+
+
+def contrast_on_white(rgb) -> float:
+    """WCAG 2 相對亮度算對白底的對比（1～21）。"""
+    def lin(c: float) -> float:
+        s = c / 255
+        return s / 12.92 if s <= 0.04045 else ((s + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (lin(float(c)) for c in rgb)
+    return 1.05 / (0.2126 * r + 0.7152 * g + 0.0722 * b + 0.05)
+
+
+def test_a_light_brand_color_keeps_its_own_color_on_the_stripe_and_reads_well_on_the_chart(tmp_path):
+    """淡黃的品牌色：頂端色條是原色；柱子（還有字、線、標註圓點）用同色相加深的版本，白底上對比至少 3:1。"""
+    light = (0xFF, 0xE6, 0x80)  # #FFE680，對白底只有 1.3
+    plan = plan_build(project(tmp_path, brand_color="#FFE680"), tts="fake")
+    chart = plan.clips[0]
+    early, still = (png_rgb(p) for p in render_stills(chart.spec, tmp_path / "stills",
+                                                      [1.0, chart.spec["duration"] - 0.05]).paths)
+    assert share_of(early[0:3, 400:1800], light) > 0.9  # 頂端色條：作者的原色
+    bars = still[300:900, 200:1700].reshape(-1, 3)
+    colored = bars[(bars.max(axis=1) - bars.min(axis=1)) > 60]  # 有顏色的像素（白底、黑字、灰字都不算）
+    assert len(colored) > 5000
+    shade = np.median(colored, axis=0)
+    assert contrast_on_white(shade) >= 3.0, shade  # 柱子看得清楚
+    assert shade[0] > shade[2] and shade[1] > shade[2]  # 還是黃色系（紅、綠比藍多）
+    assert share_of(still, light) < 0.01  # 圖上沒有一大塊淡黃
+    [card] = [c for c in plan.clips if c.id == END_CARD_ID]
+    assert card.spec["data"]["brand"] == "#FFE680"  # 片尾卡的色條、小旗也是原色

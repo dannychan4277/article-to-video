@@ -641,8 +641,10 @@ def _settings(args: argparse.Namespace) -> int:
     from pathlib import Path
 
     from article_to_video.project import SETTINGS_FILE
+    from article_to_video.brand import brand_note
     from article_to_video.user_settings import (
-        SNAPSHOT_KEYS, load_user_settings, resolve_data_dir, update_project_settings, update_user_settings,
+        SNAPSHOT_KEYS, load_user_settings, normalize_value, resolve_data_dir, update_project_settings,
+        update_user_settings,
     )
 
     if args.action == "set":
@@ -661,6 +663,8 @@ def _settings(args: argparse.Namespace) -> int:
             us = update_user_settings(changes, args.data_dir)
             print(f"已更新使用者設定：{resolve_data_dir(args.data_dir) / 'settings.json'}")
             print(_describe(us.to_json()))
+        if "brand_color" in changes and (note := brand_note(normalize_value("brand_color", changes["brand_color"]))):
+            print(note)  # 淺色照樣收：告訴作者圖表上的字和線用加深的版本
         return 0
 
     if args.project:

@@ -38,7 +38,6 @@ __all__ = [
     "USER_ONLY_KEYS",
     "SettingsError",
     "UserSettings",
-    "contrast_on_white",
     "load_user_settings",
     "normalize_value",
     "resolve_data_dir",
@@ -60,8 +59,6 @@ _ASPECT_ALIASES = {"16x9": "16x9", "16:9": "16x9", "橫式": "16x9", "横式": "
 _NONE_WORDS = {"", "none", "無", "不要", "沒有", "null"}
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 _RATE_RE = re.compile(r"^[+-]\d{1,3}%$")
-MIN_BRAND_CONTRAST = 3.0
-"""品牌色對白底的最低對比（WCAG 非文字圖形的門檻）：比這個淺，柱子和線在白底圖表上會看不清楚。"""
 MAX_CHANNEL_CHARS = 40
 _IMAGE_KINDS = ((b"\x89PNG\r\n\x1a\n", ".png"), (b"\xff\xd8\xff", ".jpg"))
 
@@ -126,17 +123,6 @@ def _hex(value: str) -> str | None:
     return "#" + h.upper()
 
 
-def contrast_on_white(color: str) -> float:
-    """#RRGGBB 對白色的對比（WCAG 2 相對亮度公式，1～21）。"""
-    def lin(c: int) -> float:
-        s = c / 255
-        return s / 12.92 if s <= 0.04045 else ((s + 0.055) / 1.055) ** 2.4
-
-    r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
-    lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
-    return 1.05 / (lum + 0.05)
-
-
 def _is_none(value: Any) -> bool:
     return value is None or (isinstance(value, str) and value.strip().lower() in _NONE_WORDS)
 
@@ -156,13 +142,7 @@ def normalize_value(key: str, value: Any) -> Any:
         hx = _hex(value) if isinstance(value, str) else None
         if hx is None:
             raise SettingsError(f"品牌色「{value}」看不懂，要寫成色碼，例如 #1A5FB4")
-        ratio = contrast_on_white(hx)
-        if ratio < MIN_BRAND_CONTRAST:
-            raise SettingsError(
-                f"品牌色 {hx} 太淺了：放在白底圖表上對比只有 {ratio:.1f}（至少要 {MIN_BRAND_CONTRAST:g}），"
-                "柱子和線會看不清楚。請挑深一點的顏色"
-            )
-        return hx
+        return hx  # 多淺都收：圖表上的可讀性由 brand.readable_on_white 處理（字、線、柱用加深的版本）
     if key == "voice":
         by_name = {name: vid for vid, name in ZH_TW_VOICES.items()}
         v = by_name.get(value, value) if isinstance(value, str) else value
