@@ -1,4 +1,5 @@
-"""讀使用者給的文字：標準輸入（作者貼上的文章、審片留言、審片 agent 的回答）或檔案，一律照 UTF-8 讀。
+"""讀文字：使用者給的（標準輸入：作者貼上的文章、審片留言、審片 agent 的回答；或檔案）一律照 UTF-8 讀；
+我們自己寫的 JSON（快取戳記之類）用 read_json_or_none，壞了就當沒有。
 
 sys.stdin.read() 會照這台電腦的語系設定解碼；作者的 Mac 語系不是 UTF-8 時，中文就變成亂碼，所以這裡一律
 讀位元組再用 UTF-8 解（開頭的 BOM 拿掉）。不是 UTF-8 的內容丟 TextInputError（繁中，OSError 的子類：
@@ -7,11 +8,13 @@ sys.stdin.read() 會照這台電腦的語系設定解碼；作者的 Mac 語系�
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
-__all__ = ["STDIN", "TextInputError", "read_stdin", "read_text_input"]
+__all__ = ["STDIN", "TextInputError", "read_json_or_none", "read_stdin", "read_text_input"]
 
 STDIN = "-"
 """指令列寫「-」＝從標準輸入讀。"""
@@ -46,3 +49,12 @@ def read_text_input(source: str | os.PathLike) -> str:
     except OSError as e:
         raise TextInputError(f"讀不到 {path}（{e.strerror or e}）") from None
     return _decode(data, f"「{path.name}」")
+
+
+def read_json_or_none(path: str | os.PathLike) -> Any | None:
+    """讀我們自己寫的 JSON（快取戳記、核對紀錄、審片頁版本…）：檔案不在、讀不到、不是合法 JSON 都回 None，
+    呼叫端當成「沒有」處理（重渲、重查）。使用者寫的設定檔不要用這個——那要報出哪一行壞了。"""
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None

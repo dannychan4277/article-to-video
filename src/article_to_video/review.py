@@ -25,11 +25,9 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -37,7 +35,10 @@ from urllib.parse import quote
 
 from article_to_video.build import BuildPlan, plan_build
 from article_to_video.clip_cache import clip_hash
-from article_to_video.clips import ClipRenderError, render_stills
+from article_to_video.clips import ClipRenderError, default_jobs, render_stills, run_parallel
+from article_to_video.macos import open_path
+from article_to_video.progress import Log, quiet
+from article_to_video.textio import read_json_or_none
 from article_to_video.review_page import CardModel, CardSection, CheckItem, PageModel, StillModel, render_review_html
 from article_to_video.timeline import ClipPlan, Timeline, VideoFormat
 
@@ -69,9 +70,6 @@ MAX_MOMENTS = 3
 NO_OPEN_ENV = "ARTICLE_TO_VIDEO_NO_OPEN"
 """設成 1 就不自動打開審片頁（測試、CI 用）；指令列也可以加 --no-open。"""
 
-Log = Callable[[str], None]
-
-
 @dataclass(frozen=True)
 class ReviewExtras:
     """其他檢查要放上審片頁的結果。cards：分鏡 id → 那張卡上的幾區（數字對帳放 slot "numbers"、
@@ -96,10 +94,6 @@ def default_contributors(data_dir: str | os.PathLike | None = None) -> list[Cont
     from article_to_video.publish import output_contributor
 
     return [number_review, boxes_contributor, checks_contributor, review_contributor(data_dir), output_contributor]
-
-
-def _quiet(_: str) -> None:
-    pass
 
 
 # ---------------------------------------------------------------- 每個分鏡的旁白
@@ -201,13 +195,11 @@ def _still_name(t: float) -> str:
 
 
 def _stamp_key(path: Path) -> str | None:
-    try:
-        return json.loads(path.read_text(encoding="utf-8")).get("key")
-    except (OSError, ValueError, AttributeError):
-        return None
+    doc = read_json_or_none(path)
+    return doc.get("key") if isinstance(doc, dict) else None
 
 
-def render_review_stills(plan: BuildPlan, *, jobs: int | None = None, log: Log = _quiet) -> dict[str, list[Still]]:
+def render_review_stills(plan: BuildPlan, *, jobs: int | None = None, log: Log = quiet) -> dict[str, list[Still]]:
     """渲（或從快取拿）每個分鏡的靜態圖。回傳分鏡 id → 靜態圖（完成狀態排第一張，其餘照時間）。"""
     fps = plan.timeline.fps
     root = plan.paths.stills
@@ -239,14 +231,14 @@ def render_review_stills(plan: BuildPlan, *, jobs: int | None = None, log: Log =
             continue
         todo.append((cp, key))
 
-    def one(cp: ClipPlan, key: str) -> None:
+    def one(item: tuple[ClipPlan, str]) -> None:
+        cp, key = item
         d = root / cp.id
         with tempfile.TemporaryDirectory(prefix="atv-stills-", dir=root) as tmp:
             try:
                 render_stills(cp.spec, tmp, per_clip[cp.id], base_dir=plan.project.root)
             except ClipRenderError as e:
-                shots = "、".join(cp.shot_ids)
-                raise ClipRenderError(f"分鏡 {shots} 的靜態圖渲染失敗：{e}", page_errors=e.page_errors, log=e.log) from e
+                raise e.about(cp.shot_ids, "靜態圖") from e
             if d.exists():
                 shutil.rmtree(d)
             d.mkdir()
@@ -255,20 +247,8 @@ def render_review_stills(plan: BuildPlan, *, jobs: int | None = None, log: Log =
         (d / "stamp.json").write_text(json.dumps({"key": key}), encoding="utf-8")
 
     if todo:
-        n_jobs = jobs or min(4, max(1, (os.cpu_count() or 2) // 2))
         log(f"分鏡靜態圖：{len(todo)} 個片段要渲（{len(plan.clips) - len(todo)} 個用快取）")
-        with ThreadPoolExecutor(max_workers=max(1, min(n_jobs, len(todo)))) as pool:
-            futures = [pool.submit(one, cp, key) for cp, key in todo]
-            errors = []
-            for f in futures:
-                try:
-                    f.result()
-                except ClipRenderError as e:
-                    errors.append(e)
-            if errors:
-                if len(errors) == 1:
-                    raise errors[0]
-                raise ClipRenderError("\n\n".join(str(e) for e in errors), log="\n".join(e.log for e in errors))
+        run_parallel(todo, one, jobs=jobs or default_jobs())
     else:
         log("分鏡靜態圖：全部用快取")
 
@@ -417,7 +397,7 @@ def make_review(
     video: Path | None = None,
     contributors: Sequence[Contributor] = (),
     jobs: int | None = None,
-    log: Log = _quiet,
+    log: Log = quiet,
 ) -> ReviewResult:
     """渲靜態圖（有快取）、寫審片頁。video＝成片（出片後才有）；contributors＝要加在卡片上的檢查結果。"""
     extras = ReviewExtras()
@@ -447,7 +427,7 @@ def preview_project(
     jobs: int | None = None,
     data_dir: str | os.PathLike | None = None,
     fmt: VideoFormat | None = None,
-    log: Log = _quiet,
+    log: Log = quiet,
 ) -> ReviewResult:
     """預覽模式：配音＋時間軸＋分鏡靜態圖＋審片頁，不渲片段、不出成片。data_dir：使用者資料位置（設定快照用）。
     fmt：畫面比例（不給就照設定快照的預設比例，見 plan_build）。"""
@@ -469,8 +449,4 @@ def auto_open_allowed() -> bool:
 
 def open_in_browser(page: Path) -> bool:
     """用 macOS 的 open 打開審片頁（.html 交給預設瀏覽器）。打不開就回傳 False，不當成建置失敗。"""
-    try:
-        proc = subprocess.run(["open", str(page)], capture_output=True, text=True, encoding="utf-8", timeout=20)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return proc.returncode == 0
+    return open_path(page)

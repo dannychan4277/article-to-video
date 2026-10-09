@@ -12,12 +12,12 @@ import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 
+from article_to_video.homebrew import PREFIXES, keg_ffmpeg
+
 __all__ = ["FFmpegNotFoundError", "default_ffmpeg_candidates", "find_ffmpeg"]
 
-_KEG_FALLBACKS = (
-    Path("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"),  # Apple Silicon
-    Path("/usr/local/opt/ffmpeg-full/bin/ffmpeg"),  # Intel
-)
+_KEG_FALLBACKS = tuple(keg_ffmpeg(prefix) for prefix in PREFIXES.values())
+"""Apple Silicon、Intel 的 Homebrew 裡 ffmpeg-full 的位置（homebrew.py 是唯一記這兩個位置的地方）。"""
 
 
 class FFmpegNotFoundError(RuntimeError):

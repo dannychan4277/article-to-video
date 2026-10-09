@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 from pathlib import Path
+
+from article_to_video.macos import open_path
 
 __all__ = ["MARKER", "SAMPLE_PROJECT", "SampleVideoError", "default_test_video_dir", "open_file",
            "prepare_test_project"]
@@ -54,8 +55,4 @@ def prepare_test_project(out_dir: str | os.PathLike | None = None) -> Path:
 
 def open_file(path: str | os.PathLike) -> bool:
     """用 macOS 的 open 打開（.mp4 交給預設的播放程式，通常是 QuickTime Player）。打不開回 False。"""
-    try:
-        proc = subprocess.run(["open", str(path)], capture_output=True, text=True, encoding="utf-8", timeout=20)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return proc.returncode == 0
+    return open_path(path)

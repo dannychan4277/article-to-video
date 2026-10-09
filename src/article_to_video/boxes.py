@@ -22,20 +22,21 @@ import json
 import os
 import shutil
 import tempfile
-from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from article_to_video.clip_cache import clip_hash
-from article_to_video.clips import FONTS_DIR, ClipRenderError, render_stills
+from article_to_video.clips import ClipRenderError, default_jobs, render_stills, run_parallel, text_font
 from article_to_video.commands import cli_command
 from article_to_video.project import ProjectError, ProjectPaths, load_project
+from article_to_video.progress import Log, quiet
+from article_to_video.textio import read_json_or_none
 from article_to_video.vox import VoxBox, resolve_vox
 
 if TYPE_CHECKING:
@@ -61,12 +62,6 @@ SETTLE = 1.25
 """框出現後幾秒出畫面靜態圖：螢光筆掃完、紅圈畫完、鏡頭推近到位（引擎：推近 at+0.2～at+1.2）。"""
 STILLS_VERSION = "1"
 CHECKS_VERSION = 1
-
-Log = Callable[[str], None]
-
-
-def _quiet(_: str) -> None:
-    pass
 
 
 # ---------------------------------------------------------------- 核對紀錄
@@ -232,15 +227,12 @@ def _swatch_warning(box: VoxBox) -> list[str]:
 
 
 def _stamp(path: Path) -> dict:
-    try:
-        doc = json.loads(path.read_text(encoding="utf-8"))
-        return doc if isinstance(doc, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    doc = read_json_or_none(path)
+    return doc if isinstance(doc, dict) else {}
 
 
 def render_box_stills(plan: BuildPlan, statuses: Sequence[BoxStatus], *, jobs: int | None = None,
-                      log: Log = _quiet) -> None:
+                      log: Log = quiet) -> None:
     """渲每個框的畫面靜態圖（同一個片段的框一次渲完）＋畫原圖對照。內容沒變就用快取。"""
     if not statuses:
         return
@@ -261,33 +253,26 @@ def render_box_stills(plan: BuildPlan, statuses: Sequence[BoxStatus], *, jobs: i
             continue
         todo.append((cp, sts, key))
 
-    def one(cp: ClipPlan, sts: list[BoxStatus]) -> None:
+    def one(item: tuple[ClipPlan, list[BoxStatus], str]) -> None:
+        cp, sts, _ = item
         times = sorted({s.still_time for s in sts})
         with tempfile.TemporaryDirectory(prefix="atv-boxes-", dir=root) as tmp:
             try:
                 res = render_stills(cp.spec, tmp, times, base_dir=plan.project.root)
             except ClipRenderError as e:
-                raise ClipRenderError(f"分鏡 {'、'.join(cp.shot_ids)} 的框靜態圖渲染失敗：{e}",
-                                      page_errors=e.page_errors, log=e.log) from e
+                raise e.about(cp.shot_ids, "框靜態圖") from e
             by_time = dict(zip(times, res.paths))
             for s in sts:
                 shutil.copyfile(by_time[s.still_time], s.screen)
 
     if todo:
         log(f"框的靜態圖：{sum(len(s) for _, s, _ in todo)} 個框要渲")
-        n_jobs = jobs or min(4, max(1, (os.cpu_count() or 2) // 2))
-        with ThreadPoolExecutor(max_workers=max(1, min(n_jobs, len(todo)))) as pool:
-            for f in [pool.submit(one, cp, sts) for cp, sts, _ in todo]:
-                f.result()
+        run_parallel(todo, one, jobs=jobs or default_jobs())
         for cp, _, key in todo:
             stamps[cp.id] = key
         stamp_path.write_text(json.dumps(stamps), encoding="utf-8")
     for st in statuses:
         _draw_overlay(st)
-
-
-def _overlay_font(size: int) -> ImageFont.FreeTypeFont:
-    return ImageFont.truetype(str(FONTS_DIR / "NotoSansTC-500.woff"), size)
 
 
 def _draw_overlay(st: BoxStatus) -> None:
@@ -300,7 +285,7 @@ def _draw_overlay(st: BoxStatus) -> None:
         im = src.convert("RGB")
     d = ImageDraw.Draw(im, "RGBA")
     size = max(14, min(t.width, t.height) // 40)
-    font = _overlay_font(size)
+    font = text_font(size)
     for k in range(1, 10):
         x, y = round(t.width * k / 10), round(t.height * k / 10)
         d.line([(x, 0), (x, t.height)], fill=(0, 120, 255, 110), width=1)
@@ -355,7 +340,7 @@ def format_box_listing(statuses: Sequence[BoxStatus], project_dir: Path) -> str:
     return "\n".join(out)
 
 
-def require_boxes_ready(plan: BuildPlan, *, jobs: int | None = None, log: Log = _quiet) -> None:
+def require_boxes_ready(plan: BuildPlan, *, jobs: int | None = None, log: Log = quiet) -> None:
     """正式出片前：每個框都核對過、跟下一件隔夠久，才放行。不然丟 ProjectError（列出框與靜態圖位置）。"""
     statuses = box_statuses(plan)
     bad = [s for s in statuses if not s.ready]

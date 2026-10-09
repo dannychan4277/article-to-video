@@ -21,12 +21,12 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from PIL import __version__ as PIL_VERSION
 
-from article_to_video.clips import FONTS_DIR
+from article_to_video.clips import TEXT_FONT
 
 __all__ = ["MAX_LINES", "Excerpt", "ExcerptError", "make_excerpt", "sentence_span"]
 
 EXCERPT_VERSION = "1"
-FONT_FILE = FONTS_DIR / "NotoSansTC-500.woff"
+FONT_FILE = TEXT_FONT
 FONT_PX = 88
 LINE_PX = 150
 MAX_LINE_PX = 20 * FONT_PX

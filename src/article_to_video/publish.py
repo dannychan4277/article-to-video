@@ -18,12 +18,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from article_to_video.progress import Log, quiet
 from article_to_video.build import BlockedBuild, BuildPlan, build_project, plan_build
 from article_to_video.commands import aspect_args, cli_command
 from article_to_video.project import ProjectError
@@ -31,12 +31,6 @@ from article_to_video.timeline import VideoFormat
 from article_to_video.videos import OUTPUT_RECORD, load_outputs, output_paths, video_folder, video_title
 
 __all__ = ["PublishResult", "output_contributor", "publish_project"]
-
-Log = Callable[[str], None]
-
-
-def _quiet(_: str) -> None:
-    pass
 
 
 @dataclass(frozen=True)
@@ -111,7 +105,7 @@ def publish_project(
     fmt: VideoFormat | None = None,
     data_dir: str | os.PathLike | None = None,
     out_dir: str | os.PathLike | None = None,
-    log: Log = _quiet,
+    log: Log = quiet,
 ) -> PublishResult:
     from article_to_video.auto_checks import format_report, require_checks_cleared, run_checks
     from article_to_video.numbers import check_numbers

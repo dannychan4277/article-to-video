@@ -23,13 +23,13 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from article_to_video.clips import GRAMMAR_VOX
 from article_to_video.commands import cli_command
 from article_to_video.excerpt import Excerpt, ExcerptError, make_excerpt
 from article_to_video.project import Anchor, Cue, Project, ProjectError, Shot, VoxConfig
 
 __all__ = ["ARTICLE_SOURCE", "EXCERPT_LABEL", "Target", "VoxBox", "VoxPlan", "resolve_vox", "vox_clip_spec", "vox_texts"]
 
-Y2 = "y2_vox"
 DRIFT = 0.008
 """相機停在同一件素材超過 1.5 秒時，每秒慢慢推近 0.8%（停留慢漂）。"""
 EXCERPT_LABEL = "原文段落"
@@ -303,4 +303,4 @@ def vox_texts(plan: Any, st: Any) -> list[Any]:
 def vox_clip_spec(cues: list[dict[str, Any]], duration: float, fmt: Any) -> dict[str, Any]:
     """一個 Vox 片段給引擎的 spec。cues：給引擎的欄位＋片段內秒數 at。fmt.spec_base()：寬高、fps、要讓開的邊
     （字幕帶；直式再加平台介面區，引擎的相機會讓開）。"""
-    return {"grammar": Y2, "duration": duration, **fmt.spec_base(), "data": {"drift": DRIFT}, "cues": cues}
+    return {"grammar": GRAMMAR_VOX, "duration": duration, **fmt.spec_base(), "data": {"drift": DRIFT}, "cues": cues}

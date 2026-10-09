@@ -12,15 +12,15 @@ import functools
 import hashlib
 import json
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from article_to_video.clips import ENGINE_DIR, ClipRenderError, render_clip
+from article_to_video.clips import ENGINE_DIR, ClipRenderError, render_clip, run_parallel
 from article_to_video.project import VariantPaths
 from article_to_video.timeline import ClipPlan
 
-__all__ = ["CACHE_VERSION", "RenderReport", "clip_hash", "engine_fingerprint", "render_planned_clips"]
+__all__ = ["CACHE_VERSION", "RenderReport", "clip_hash", "clip_is_current", "clip_stamp", "engine_fingerprint",
+           "render_planned_clips"]
 
 CACHE_VERSION = "1"
 _OUR_SUFFIXES = {".json", ".mp4", ".sha256", ".log"}
@@ -71,6 +71,23 @@ def clip_hash(plan: ClipPlan) -> str:
     return h.hexdigest()
 
 
+def clip_stamp(paths: VariantPaths, clip_id: str) -> Path:
+    """片段的戳記：渲成功才寫，內容是快取鍵（clip_hash）。"""
+    return paths.clips / f"{clip_id}.sha256"
+
+
+def _stamped(mp4: Path, stamp: Path, key: str) -> bool:
+    try:
+        return mp4.is_file() and stamp.read_text(encoding="utf-8").strip() == key
+    except OSError:
+        return False
+
+
+def clip_is_current(plan: ClipPlan, paths: VariantPaths) -> bool:
+    """這個片段的 mp4 是不是照現在這份 spec（含引擎檔、圖片）渲出來的。"""
+    return _stamped(paths.clips / f"{plan.id}.mp4", clip_stamp(paths, plan.id), clip_hash(plan))
+
+
 def render_planned_clips(
     plans: Sequence[ClipPlan],
     paths: VariantPaths,
@@ -91,8 +108,8 @@ def render_planned_clips(
     for p in plans:
         spec_path = paths.specs / f"{p.id}.json"
         spec_path.write_text(json.dumps(p.spec, ensure_ascii=False, indent=1), encoding="utf-8")
-        mp4, stamp = paths.clips / f"{p.id}.mp4", paths.clips / f"{p.id}.sha256"
-        if mp4.is_file() and stamp.is_file() and stamp.read_text(encoding="utf-8").strip() == hashes[p.id]:
+        mp4, stamp = paths.clips / f"{p.id}.mp4", clip_stamp(paths, p.id)
+        if _stamped(mp4, stamp, hashes[p.id]):
             cached.append(p.id)
             if on_clip:
                 on_clip(p.id, True)
@@ -107,29 +124,13 @@ def render_planned_clips(
             res = render_clip(paths.specs / f"{p.id}.json", mp4, ffmpeg=ffmpeg)
         except ClipRenderError as e:
             log.write_text(e.log, encoding="utf-8")
-            shots = "、".join(p.shot_ids)
-            raise ClipRenderError(f"分鏡 {shots} 的片段渲染失敗：{e}", page_errors=e.page_errors, log=e.log) from e
+            raise e.about(p.shot_ids, "片段") from e
         log.write_text("\n".join(res.warnings), encoding="utf-8")
-        (paths.clips / f"{p.id}.sha256").write_text(hashes[p.id], encoding="utf-8")
+        clip_stamp(paths, p.id).write_text(hashes[p.id], encoding="utf-8")
         return p.id
 
-    rendered: list[str] = []
-    if todo:
-        with ThreadPoolExecutor(max_workers=max(1, min(jobs, len(todo)))) as pool:
-            futures = [pool.submit(one, p) for p in todo]
-            errors: list[ClipRenderError] = []
-            for f in futures:
-                try:
-                    pid = f.result()
-                    rendered.append(pid)
-                    if on_clip:
-                        on_clip(pid, False)
-                except ClipRenderError as e:
-                    errors.append(e)
-            if errors:
-                if len(errors) == 1:
-                    raise errors[0]
-                raise ClipRenderError("\n\n".join(str(e) for e in errors), log="\n".join(e.log for e in errors))
+    rendered = run_parallel(todo, one, jobs=jobs,
+                            on_done=(lambda _p, pid: on_clip(pid, False)) if on_clip else None)
 
     return RenderReport(rendered=rendered, cached=cached,
                         clips={p.id: paths.clips / f"{p.id}.mp4" for p in plans}, hashes=hashes)

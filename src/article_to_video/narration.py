@@ -37,6 +37,7 @@ __all__ = [
     "TTSEngine",
     "WordTiming",
     "get_tts_engine",
+    "cached_timing_file",
     "map_word_boundaries",
     "narrate",
 ]
@@ -244,6 +245,11 @@ def get_tts_engine(name: str) -> TTSEngine:
 
 def _cache_key(engine: str, voice: str, rate: str, text: str) -> str:
     return hashlib.sha256(f"{_CACHE_VERSION}|{engine}|{voice}|{rate}|{text}".encode()).hexdigest()[:24]
+
+
+def cached_timing_file(cache_dir: str | os.PathLike, engine: str, voice: str, rate: str, text: str) -> Path:
+    """這段旁白在配音快取裡的時間點檔（<鍵>.json；同名的 .wav 是音檔）。檔案在不在要自己看。"""
+    return Path(cache_dir) / f"{_cache_key(engine, voice, rate, text)}.json"
 
 
 def _wav_params_ok(path: Path) -> bool:

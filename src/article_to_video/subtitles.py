@@ -15,7 +15,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from article_to_video.clips import FONTS_DIR
+from article_to_video.clips import TEXT_FONT
 from article_to_video.fonts import font_codepoints
 from article_to_video.timeline import SegmentTiming, VideoFormat
 
@@ -32,7 +32,7 @@ __all__ = [
     "write_srt",
 ]
 
-SUBTITLE_FONT_FILE = FONTS_DIR / "NotoSansTC-500.woff"
+SUBTITLE_FONT_FILE = TEXT_FONT
 SUBTITLE_FONT_FAMILY = "Noto Sans CJK TC Medium"
 SUBTITLE_FONT_PS_NAME = "NotoSansCJKtc-Medium"
 PUNCT = "，。？！；"

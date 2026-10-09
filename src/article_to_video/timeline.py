@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from article_to_video.brand import apply_brand
+from article_to_video.clips import GRAMMAR_CHART
 from article_to_video.end_card import END_CARD_ID, plan_end_card
 from article_to_video.narration import SegmentAudio
 from article_to_video.project import Anchor, Cue, Project, ProjectError, Shot
@@ -48,7 +49,6 @@ __all__ = [
     "video_format",
 ]
 
-T3 = "t3_finance_chart"
 CONTINUATION_AT = -3.0
 """接續分鏡沿用的 cue 改成這個時間（或更早，見 _carry）：引擎在 t=0 之前就把它們畫完。"""
 DEFAULT_AXIS_NOTE = "縱軸未從 0 開始"
@@ -469,7 +469,7 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
         data["push"] = round(rate * st.frames / fps, 6)
         cues = [{**c.fields, "at": c.at} for c in st.cues]
         spec = {
-            "grammar": T3,
+            "grammar": GRAMMAR_CHART,
             "duration": st.frames / fps,
             **fmt.spec_base(),
             "data": data,

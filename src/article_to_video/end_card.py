@@ -16,6 +16,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from article_to_video.clips import GRAMMAR_END_CARD
 from article_to_video.commands import cli_command
 from article_to_video.project import Project, ProjectError
 
@@ -26,7 +27,7 @@ __all__ = ["END_CARD_GRAMMAR", "END_CARD_ID", "NOTES", "merge_sources", "missing
 
 END_CARD_ID = "end.card"
 """片尾卡的片段 id（檔名 specs/end.card.json、clips/end.card.mp4）。有句點，分鏡 id 不會跟它撞名。"""
-END_CARD_GRAMMAR = "a2v_end_card"
+END_CARD_GRAMMAR = GRAMMAR_END_CARD
 NOTES = ("僅供教育，非投資建議", "配音為 AI 合成")
 _PREFIX_RE = re.compile(r"^\s*(?:資料來源|数据来源|資料出處|來源|来源|出處|出处|sources?)\s*[:：]\s*", re.IGNORECASE)
 _GROUP_RE = re.compile(r"^(?P<name>[^（(]+?)\s*[（(](?P<items>[^（()）]+)[）)](?P<rest>.*)$")

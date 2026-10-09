@@ -278,8 +278,10 @@ def check_plugin() -> EnvCheck:
 
 def _uv_candidates() -> list[str]:
     """uv run 會把自己的路徑放在環境變數 UV；剛用官方安裝程式裝好、PATH 還沒更新時在 ~/.local/bin。"""
+    from article_to_video.homebrew import PREFIXES
+
     found = [os.environ.get("UV"), shutil.which("uv"), str(Path.home() / ".local" / "bin" / "uv"),
-             "/opt/homebrew/bin/uv", "/usr/local/bin/uv"]
+             *(str(prefix / "bin" / "uv") for prefix in PREFIXES.values())]
     out: list[str] = []
     for c in found:
         if c and c not in out:

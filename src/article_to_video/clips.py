@@ -12,7 +12,8 @@ import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,20 +24,37 @@ __all__ = [
     "ENGINE_DIR",
     "EXAMPLE_T3_SPEC",
     "FONTS_DIR",
+    "GRAMMAR_CHART",
+    "GRAMMAR_END_CARD",
+    "GRAMMAR_VOX",
     "QA_SCRIPT",
     "RENDER_SCRIPT",
+    "TEXT_FONT",
     "ClipRenderError",
     "MissingGlyphError",
     "RenderResult",
+    "absolutize_images",
+    "default_jobs",
     "render_clip",
     "render_stills",
+    "run_parallel",
+    "text_font",
 ]
 
 ENGINE_DIR = Path(__file__).resolve().parent / "engine"
 RENDER_SCRIPT = ENGINE_DIR / "render.py"
 QA_SCRIPT = ENGINE_DIR / "qa.py"
 FONTS_DIR = ENGINE_DIR / "lib" / "fonts"
+TEXT_FONT = FONTS_DIR / "NotoSansTC-500.woff"
+"""外掛附帶的內文字型（Noto Sans CJK TC 500 子集）：燒錄字幕、原文剪報、審片素材與框對照圖上的字都用它。"""
 EXAMPLE_T3_SPEC = ENGINE_DIR / "examples" / "t3_finance_chart.json"
+
+GRAMMAR_CHART = "t3_finance_chart"
+"""財經圖表的片段語法（engine/clips/<語法>.js）。"""
+GRAMMAR_VOX = "y2_vox"
+"""Vox 剪報的片段語法。"""
+GRAMMAR_END_CARD = "a2v_end_card"
+"""片尾卡的片段語法（外掛自己寫的）。"""
 
 SpecInput = Mapping | str | os.PathLike
 
@@ -61,6 +79,11 @@ class ClipRenderError(RuntimeError):
         self.page_errors = list(page_errors)
         self.log = log
 
+    def about(self, shot_ids: Sequence[str], what: str) -> ClipRenderError:
+        """同一個錯誤，訊息前面加上是哪幾個分鏡的什麼（片段、靜態圖…）渲不出來。"""
+        return ClipRenderError(f"分鏡 {'、'.join(shot_ids)} 的{what}渲染失敗：{self}", page_errors=self.page_errors,
+                               log=self.log)
+
 
 class MissingGlyphError(ClipRenderError):
     """分鏡設定裡有外掛附帶字型沒有的字。"""
@@ -76,6 +99,46 @@ class MissingGlyphError(ClipRenderError):
         )
         self.missing_chars = chars
         self.missing_by_font = dict(missing_by_font)
+
+
+def text_font(size: int):
+    """TEXT_FONT 的 PIL 字型（在審片素材、框對照圖上寫字用）。"""
+    from PIL import ImageFont
+
+    return ImageFont.truetype(str(TEXT_FONT), size)
+
+
+def default_jobs(cap: int = 4) -> int:
+    """同時開幾個 Chromium（渲片段、靜態圖、跑 qa）：CPU 核心數的一半，至少 1 個、最多 cap 個。"""
+    return min(cap, max(1, (os.cpu_count() or 2) // 2))
+
+
+def run_parallel(items: Iterable, work: Callable, *, jobs: int, on_done: Callable | None = None) -> list:
+    """並行跑 work(item)（最多 jobs 個），照 items 的順序回傳結果；on_done(item, 結果) 照順序在每個做完時呼叫（印進度）。
+
+    ClipRenderError 收齊了再丟：只有一個就原樣丟，好幾個就併成一個（訊息、紀錄接起來），作者／Claude 一次看到
+    所有渲壞的分鏡。其他例外照常往外丟。"""
+    items = list(items)
+    results: list = []
+    errors: list[ClipRenderError] = []
+    if not items:
+        return results
+    with ThreadPoolExecutor(max_workers=max(1, min(jobs, len(items)))) as pool:
+        futures = [pool.submit(work, it) for it in items]
+        for it, fut in zip(items, futures):
+            try:
+                res = fut.result()
+            except ClipRenderError as e:
+                errors.append(e)
+                continue
+            results.append(res)
+            if on_done is not None:
+                on_done(it, res)
+    if len(errors) == 1:
+        raise errors[0]
+    if errors:
+        raise ClipRenderError("\n\n".join(str(e) for e in errors), log="\n".join(e.log for e in errors))
+    return results
 
 
 def render_clip(
@@ -128,7 +191,7 @@ def render_stills(
 @contextmanager
 def _spec_file(spec: SpecInput, base_dir: str | os.PathLike | None) -> Iterator[Path]:
     if isinstance(spec, Mapping):
-        data = _absolutize_images(copy.deepcopy(dict(spec)), Path(base_dir or Path.cwd()).absolute())
+        data = absolutize_images(copy.deepcopy(dict(spec)), Path(base_dir or Path.cwd()).absolute())
         with tempfile.TemporaryDirectory(prefix="atv-spec-") as tmp:
             path = Path(tmp) / "clip.json"
             path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -140,7 +203,8 @@ def _spec_file(spec: SpecInput, base_dir: str | os.PathLike | None) -> Iterator[
     yield path
 
 
-def _absolutize_images(spec: dict, base: Path) -> dict:
+def absolutize_images(spec: dict, base: Path) -> dict:
+    """spec 裡的相對圖片路徑（cue.image、data.image）改成相對 base 的絕對路徑（原地改，也回傳它）。"""
     def fix(v: object) -> object:
         if not isinstance(v, str) or not v or v.startswith(("data:", "http:", "https:")):
             return v

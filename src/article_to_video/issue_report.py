@@ -35,11 +35,12 @@ import tempfile
 import time
 import wave
 import zipfile
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from article_to_video.progress import Log, quiet
 from article_to_video.commands import MAINTAINER_PREFIX
 from article_to_video.environment import collect_environment, plugin_version
 from article_to_video.project import ProjectError, ProjectPaths, load_project
@@ -65,8 +66,6 @@ ENV_TEXT = "environment.txt"
 PROJECT_DIR = "project"
 STILLS_DIR = "stills"
 
-Log = Callable[[str], None]
-
 
 class ReportError(RuntimeError):
     """打包或重現本身出了問題（不是被回報的那個問題）。"""
@@ -74,10 +73,6 @@ class ReportError(RuntimeError):
 
 def default_report_dir() -> Path:
     return Path.home() / "Desktop"
-
-
-def _quiet(_: str) -> None:
-    pass
 
 
 # ---------------------------------------------------------------- 最後一次執行的紀錄
@@ -197,7 +192,7 @@ def _engine_with_full_cache(paths: ProjectPaths) -> tuple[str | None, list[Path]
 
     打包與重現都只用快取裡的時間點，不會重新配音（不連網、跟作者那台的時間一模一樣）。
     """
-    from article_to_video.narration import _cache_key
+    from article_to_video.narration import cached_timing_file
 
     try:
         project = load_project(paths.root)
@@ -208,7 +203,7 @@ def _engine_with_full_cache(paths: ProjectPaths) -> tuple[str | None, list[Path]
     names = [s.tts] + sorted({info["engine"] for _, info in metas} - {s.tts})
     cache = paths.narration_cache
     for name in names:
-        files = [cache / f"{_cache_key(name, s.voice, s.rate, text)}.json" for text in project.segments.values()]
+        files = [cached_timing_file(cache, name, s.voice, s.rate, text) for text in project.segments.values()]
         if all(f.is_file() and f.with_suffix(".wav").is_file() for f in files):
             return name, files
     return None, []
@@ -437,7 +432,7 @@ def create_report(
     shots: Sequence[str] = (),
     note: str = "",
     out_dir: str | os.PathLike | None = None,
-    log: Log = _quiet,
+    log: Log = quiet,
 ) -> ReportResult:
     """打包回報用的 zip，回傳它在哪裡。除了寫不進 zip，什麼錯都不會讓打包失敗（錯誤本身就是要回報的東西）。
 
@@ -683,7 +678,7 @@ def reproduce_report(
     *,
     out_dir: str | os.PathLike | None = None,
     shots: Sequence[str] = (),
-    log: Log = _quiet,
+    log: Log = quiet,
 ) -> ReproduceResult:
     """解開回報的 zip，用作者那台的旁白時間點重算分鏡，重渲出錯分鏡的片段與靜態圖（全程不連網）。"""
     from article_to_video.build import plan_build

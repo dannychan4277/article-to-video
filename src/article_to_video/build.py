@@ -17,11 +17,13 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from article_to_video.progress import Log, quiet
 from article_to_video.assemble import (
     ASSEMBLY_VERSION, assemble_video, file_digest, final_key, write_narration_track,
 )
 from article_to_video.boxes import require_boxes_ready
 from article_to_video.clip_cache import RenderReport, render_planned_clips
+from article_to_video.clips import default_jobs
 from article_to_video.end_card import missing_channel_error
 from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.music import TRACKS, ensure_track
@@ -38,10 +40,11 @@ from article_to_video.timeline import (
 from article_to_video.user_settings import snapshot_into_project
 from article_to_video.vox import VoxPlan, resolve_vox
 
+RENDER_JOBS = 3
+"""渲整段片段（Chromium＋ffmpeg 編碼）最多同時幾個；只渲靜態圖、跑 qa 用 clips.default_jobs() 的預設 4。"""
+
 __all__ = ["BlockedBuild", "BuildPlan", "BuildResult", "Voicing", "build_project", "format_voicing", "plan_build",
            "voice_narration"]
-
-Log = Callable[[str], None]
 
 
 @dataclass(frozen=True)
@@ -86,10 +89,6 @@ class BuildResult:
     @property
     def duration(self) -> float:
         return self.plan.timeline.duration
-
-
-def _quiet(_: str) -> None:
-    pass
 
 
 def _snapshot(project_dir: str | os.PathLike, data_dir: str | os.PathLike | None, log: Log) -> None:
@@ -145,7 +144,7 @@ def voice_narration(
     *,
     tts: str | None = None,
     data_dir: str | os.PathLike | None = None,
-    log: Log = _quiet,
+    log: Log = quiet,
 ) -> Voicing:
     """配音（指令列 narrate）：寫完旁白稿、還沒寫分鏡就配。只要 narration.json 與設定快照（沒有就從使用者設定補）；
     跟預覽、建置同一個快取，之後 preview／build 不會重配。"""
@@ -181,7 +180,7 @@ def plan_build(
     fmt: VideoFormat | None = None,
     ffmpeg: Path | None = None,
     data_dir: str | os.PathLike | None = None,
-    log: Log = _quiet,
+    log: Log = quiet,
 ) -> BuildPlan:
     """data_dir：使用者資料位置（見 user_settings.py）。專案還沒有設定快照時，從那裡的使用者設定補進 settings.json。
 
@@ -220,7 +219,7 @@ def build_project(
     fmt: VideoFormat | None = None,
     preflight: Sequence[Callable[[BuildPlan], None]] = (),
     data_dir: str | os.PathLike | None = None,
-    log: Log = _quiet,
+    log: Log = quiet,
 ) -> BuildResult:
     """建置成片。preflight：渲染前的檢查（數字對帳 numbers.check_numbers），丟 ProjectError 就不出片——
     改丟 BlockedBuild（帶著算好的 plan，審片頁照樣能用它更新）。"""
@@ -240,7 +239,7 @@ def build_project(
         raise BlockedBuild(cause, plan) from errors[0]
 
     vp = plan.paths
-    n_jobs = jobs or min(3, max(1, (os.cpu_count() or 2) // 2))
+    n_jobs = jobs or default_jobs(RENDER_JOBS)
 
     def clip_done(cid: str, cached: bool) -> None:
         log(f"  {'＝' if cached else '✓'} {cid}{'（快取）' if cached else ''}")

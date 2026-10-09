@@ -50,8 +50,12 @@
                                                      用外掛自帶的範例做一支約 10 秒的測試片並打開（安裝最後一步）
 
 preview、build 做完會用 macOS 的 open 在預設瀏覽器打開審片頁；--no-open 或環境變數
-ARTICLE_TO_VIDEO_NO_OPEN=1（測試、CI）就不打開。preview、build 的輸出與錯誤記在
-<專案>/build/last-run.{log,json}（只留最後一次），回報問題時打包。
+ARTICLE_TO_VIDEO_NO_OPEN=1（測試、CI）就不打開。會渲染或改審片頁的子指令（preview、build、publish、open-review、
+narrate、boxes、checks、review-prep、review-record、test-video）的輸出與錯誤記在 <專案>/build/last-run.{log,json}
+（只留最後一次），回報問題時打包。
+
+結構：每個子指令一個處理函式（HANDLERS），共用的選項（--tts、--jobs、--no-open、--data-dir、--aspect、--json）
+各寫一次（_shared_options，argparse 的 parents），留紀錄、印錯誤、被擋下時重寫審片頁都在 _recorded。
 
 --aspect：畫面比例。作者說「直式」就給 9:16（也收「直式」「9x16」）；不給就用設定快照裡的預設比例
 （使用者設定 aspect，沒設就是 16:9）。直式的產物：成片-9x16.mp4、字幕-9x16.srt、審片頁-9x16.html、build/9x16/，
@@ -68,13 +72,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from article_to_video.assemble import AssemblyError
-from article_to_video.commands import aspect_args, cli_command
 from article_to_video.clips import ClipRenderError
+from article_to_video.commands import aspect_args, cli_command
 from article_to_video.ffmpeg import FFmpegNotFoundError
 from article_to_video.narration import TTS_ENGINES, NarrationError
+from article_to_video.progress import Log
 from article_to_video.project import ZH_TW_VOICES, ProjectError
 from article_to_video.user_settings import SettingsError
 
@@ -90,11 +95,13 @@ _SET_OPTIONS = {  # 選項 → 設定鍵
     "aspect": "預設比例：16:9（橫式）或 9:16（直式）",
     "independent_review": "出片後派 agent 獨立審片一輪：開（預設）或 關（全部影片共用，不能加 --project）",
 }
-_DATA_DIR_HELP = "使用者資料位置（主 skill 傳 ${CLAUDE_PLUGIN_DATA}）"
 VOICE_SAMPLE = "大家好，歡迎來到我的頻道。今天用三分鐘，帶你看懂殖利率曲線在說什麼。"
+_PROJECT = "專案資料夾"
+_PROJECT_FILES = "專案資料夾（裡面有 narration.json、shots.json）"
+_ARTICLE_SOURCE = "文章檔（.pdf .docx .txt .md .html 或 Google 文件的網頁 .zip）；- ＝從標準輸入讀貼上的文字"
 
 
-_ASPECT_HELP = "畫面比例：16:9（橫式）或 9:16（直式，也收「直式」「9x16」）；不給就用設定裡的預設比例"
+# ---------------------------------------------------------------- 選項
 
 
 def _aspect(value: str):
@@ -106,204 +113,188 @@ def _aspect(value: str):
         raise argparse.ArgumentTypeError(e.problems[0]) from None
 
 
+def _shared_options() -> dict[str, argparse.ArgumentParser]:
+    """好幾個子指令共用的選項（argparse 的 parents）：說明只寫一次。"""
+    def option(*flags: str, **kw) -> argparse.ArgumentParser:
+        p = argparse.ArgumentParser(add_help=False)
+        p.add_argument(*flags, **kw)
+        return p
+
+    return {
+        "tts": option("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）"),
+        "jobs": option("--jobs", type=int,
+                       help="最多同時開幾個 Chromium 渲片段、靜態圖或跑 qa（預設照這台電腦的核心數，最多 3～4 個）"),
+        "no_open": option("--no-open", action="store_true", help="做完不要自動打開（審片頁、成片）"),
+        "data_dir": option("--data-dir", help="使用者資料位置（主 skill 傳 ${CLAUDE_PLUGIN_DATA}）"),
+        "aspect": option("--aspect", type=_aspect,
+                         help="畫面比例：16:9（橫式）或 9:16（直式，也收「直式」「9x16」）；不給就用設定裡的預設比例"),
+        "json": option("--json", action="store_true", help="印 JSON（給程式讀）"),
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="article_to_video", description="把財經文章做成解說影片")
     sub = p.add_subparsers(dest="command", required=True)
-    b = sub.add_parser("build", help="建置成片與字幕檔")
-    b.add_argument("project", help="專案資料夾（裡面有 narration.json、shots.json）")
-    b.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
-    b.add_argument("--jobs", type=int, help="最多同時渲幾個片段（預設 3）")
-    b.add_argument("--no-open", action="store_true", help="做完不要自動在瀏覽器打開審片頁")
-    b.add_argument("--data-dir", help=_DATA_DIR_HELP)
-    b.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
-    v = sub.add_parser("preview", help="只出分鏡靜態圖與審片頁（不渲整支片）")
-    v.add_argument("project", help="專案資料夾（裡面有 narration.json、shots.json）")
-    v.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
-    v.add_argument("--jobs", type=int, help="最多同時渲幾個分鏡的靜態圖（預設 4）")
-    v.add_argument("--no-open", action="store_true", help="做完不要自動在瀏覽器打開審片頁")
-    v.add_argument("--data-dir", help=_DATA_DIR_HELP)
-    v.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
-    pb = sub.add_parser("publish", help="出片：作者點頭之後，建置成片、跑自動檢查，把成片和字幕檔放進「影片／解說影片／日期-標題」")
-    pb.add_argument("project", help="專案資料夾")
+    o = _shared_options()
+
+    def add(name: str, help_: str, *shared: str, project: str | None = _PROJECT, into=sub) -> argparse.ArgumentParser:
+        sp = into.add_parser(name, help=help_, parents=[o[k] for k in shared])
+        if project:
+            sp.add_argument("project", help=project)
+        return sp
+
+    add("build", "建置成片與字幕檔", "tts", "jobs", "no_open", "data_dir", "aspect", project=_PROJECT_FILES)
+    add("preview", "只出分鏡靜態圖與審片頁（不渲整支片）", "tts", "jobs", "no_open", "data_dir", "aspect",
+        project=_PROJECT_FILES)
+    pb = add("publish", "出片：作者點頭之後，建置成片、跑自動檢查，把成片和字幕檔放進「影片／解說影片／日期-標題」",
+             "tts", "jobs", "no_open", "data_dir", "aspect")
     pb.add_argument("--version", type=int, required=True, help="作者點頭的是審片頁第幾版（頁首寫的）")
-    pb.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
-    pb.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
-    pb.add_argument("--jobs", type=int, help="最多同時渲幾個片段（預設 3）")
-    pb.add_argument("--no-open", action="store_true", help="做完不要在 Finder 裡指出成片")
-    pb.add_argument("--data-dir", help=_DATA_DIR_HELP)
     pb.add_argument("--out", help="成片放哪個資料夾（預設：這支片的「日期-標題」資料夾）")
-    orv = sub.add_parser("open-review", help="更新審片頁（帶上最新的檢查結果）並在瀏覽器打開給作者看")
-    orv.add_argument("project", help="專案資料夾")
-    orv.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
-    orv.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
-    orv.add_argument("--data-dir", help=_DATA_DIR_HELP)
-    bx = sub.add_parser("boxes", help="列出 Vox 框、渲每個框的靜態圖、看哪些還沒核對")
-    bx.add_argument("project", help="專案資料夾")
-    bx.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
-    bx.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
-    bx.add_argument("--jobs", type=int, help="最多同時渲幾個片段的框靜態圖（預設 4）")
-    bx.add_argument("--data-dir", help=_DATA_DIR_HELP)
-    ck = sub.add_parser("checks", help="自動檢查（出片之後跑）：每個片段跑 qa、白底片段查字幕帶，結果寫進審片頁")
-    ck.add_argument("project", help="專案資料夾")
-    ck.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
-    ck.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
-    ck.add_argument("--jobs", type=int, help="最多同時跑幾個片段的 qa（預設 4）")
-    ck.add_argument("--data-dir", help=_DATA_DIR_HELP)
-    ck.add_argument("--json", action="store_true", help="最後印 checks.json 的內容（給程式讀）")
-    rp = sub.add_parser("review-prep", help="獨立審片：從成片準備審片素材（總覽圖、畫面事件圖、字幕檔），印出派 agent 的 prompt")
-    rp.add_argument("project", help="專案資料夾")
-    rp.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
-    rp.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
-    rp.add_argument("--data-dir", help=_DATA_DIR_HELP)
-    rf = sub.add_parser("review-frames", help="（審片 agent 用）從成片抽全解析度幀：--at 秒（可重複），或 --from --to --step")
-    rf.add_argument("project", help="專案資料夾")
+    add("open-review", "更新審片頁（帶上最新的檢查結果）並在瀏覽器打開給作者看", "tts", "data_dir", "aspect")
+    add("narrate", "配音（寫分鏡之前）：每段旁白配好音，印出每段的起點、長度與每個詞開始唸的秒數", "tts", "data_dir",
+        project="專案資料夾（裡面有 narration.json；還不用有 shots.json）")
+    add("boxes", "列出 Vox 框、渲每個框的靜態圖、看哪些還沒核對", "tts", "jobs", "data_dir", "aspect")
+    add("checks", "自動檢查（出片之後跑）：每個片段跑 qa、白底片段查字幕帶，結果寫進審片頁",
+        "tts", "jobs", "data_dir", "aspect", "json")
+    add("review-prep", "獨立審片：從成片準備審片素材（總覽圖、畫面事件圖、字幕檔），印出派 agent 的 prompt",
+        "tts", "data_dir", "aspect")
+    rf = add("review-frames", "（審片 agent 用）從成片抽全解析度幀：--at 秒（可重複），或 --from --to --step")
     rf.add_argument("--aspect", type=_aspect, help="哪個比例的成片（預設：最近準備審片素材的那個）")
     rf.add_argument("--at", action="append", default=[], help="秒數或時間碼（例 12.4、0:12.4），可重複")
     rf.add_argument("--from", dest="start", help="一段連續幀的起點（秒或時間碼）")
     rf.add_argument("--to", dest="end", help="一段連續幀的終點")
     rf.add_argument("--step", type=float, default=0.25, help="連續幀的間隔秒數（預設 0.25）")
-    rr = sub.add_parser("review-record", help="記下獨立審片 agent 的回答（review.json），寫進審片頁")
-    rr.add_argument("project", help="專案資料夾")
-    rr.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
+    rr = add("review-record", "記下獨立審片 agent 的回答（review.json），寫進審片頁", "tts", "data_dir", "aspect")
     rr.add_argument("--file", help="回答檔（預設：審片素材資料夾裡的 review.json；- ＝從標準輸入讀）")
-    rr.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
-    rr.add_argument("--data-dir", help=_DATA_DIR_HELP)
-    rs = sub.add_parser("resolve", help="記下必修／該修的處理：--fixed 改好了（獨立審片的問題）、--accept 看過、接受不改")
-    rs.add_argument("project", help="專案資料夾")
+    rs = add("resolve", "記下必修／該修的處理：--fixed 改好了（獨立審片的問題）、--accept 看過、接受不改")
     rs.add_argument("tokens", nargs="*", help="代號，例 R1-2（獨立審片）、qa:SH03:jump@1a2b3c4d（自動檢查），可以一次給好幾個")
     how = rs.add_mutually_exclusive_group(required=True)
     how.add_argument("--fixed", metavar="說明", help="改好了：寫怎麼改的（只用在獨立審片的問題）")
     how.add_argument("--accept", metavar="理由", help="接受不改：寫為什麼（作者決定的加 --by 作者）")
     rs.add_argument("--by", default="Claude", help="誰決定的：Claude（預設）或 作者")
-    cb = sub.add_parser("confirm-box", help="記下 Claude 看過靜態圖、確認沒問題的框（核對代號從 boxes 指令來）")
-    cb.add_argument("project", help="專案資料夾")
+    cb = add("confirm-box", "記下 Claude 看過靜態圖、確認沒問題的框（核對代號從 boxes 指令來）")
     cb.add_argument("tokens", nargs="*", help="核對代號，例 SH02:1@1a2b3c4d（可以一次給好幾個）")
     cb.add_argument("--note", default="", help="備註（例：框在「十年期」那一列的 3.96 上）")
-    nw = sub.add_parser("new", help="開新專案：在「影片／解說影片」建「日期-標題/專案」資料夾，擷取文章（含截字檢查）")
-    nw.add_argument("source", help="文章檔（.pdf .docx .txt .md .html 或 Google 文件的網頁 .zip）；- ＝從標準輸入讀貼上的文字")
+    nw = add("new", "開新專案：在「影片／解說影片」建「日期-標題/專案」資料夾，擷取文章（含截字檢查）", project=None)
+    nw.add_argument("source", help=_ARTICLE_SOURCE)
     nw.add_argument("--title", help="片名（資料夾與成片的檔名；不給就用文章第一段）")
     nw.add_argument("--root", help="影片資料夾（預設 ~/Movies/解說影片）")
-    pj = sub.add_parser("projects", help="列出做過的影片（最近動過的在前面），找舊專案用")
+    pj = add("projects", "列出做過的影片（最近動過的在前面），找舊專案用", "json", project=None)
     pj.add_argument("query", nargs="?", default="", help="只列標題含這幾個字的")
     pj.add_argument("--root", help="影片資料夾（預設 ~/Movies/解說影片）")
-    pj.add_argument("--json", action="store_true", help="印 JSON（給程式讀）")
-    na = sub.add_parser("narrate", help="配音（寫分鏡之前）：每段旁白配好音，印出每段的起點、長度與每個詞開始唸的秒數")
-    na.add_argument("project", help="專案資料夾（裡面有 narration.json；還不用有 shots.json）")
-    na.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
-    na.add_argument("--data-dir", help=_DATA_DIR_HELP)
-    ln = sub.add_parser("lint", help="旁白規則檢查：narration.json 每個旁白段的字數、斷句、數字寫法、套話、開場")
-    ln.add_argument("project", help="專案資料夾（裡面有 narration.json）")
-    ol = sub.add_parser("outline", help="列出每個分鏡：編號、種類、畫什麼、唸哪幾個旁白段（照分鏡編號改的時候用）")
-    ol.add_argument("project", help="專案資料夾")
-    f = sub.add_parser("feedback", help="把審片頁「複製給 Claude」的文字（從 stdin 讀）解析成 JSON")
-    f.add_argument("project", help="專案資料夾（用來把分鏡編號對到分鏡 id）")
-    f.add_argument("--file", help="從這個檔讀，不從 stdin 讀")
-    e = sub.add_parser("extract", help="擷取文章全文與原圖到 <專案>/article/")
-    e.add_argument("project", help="專案資料夾（沒有會自動建立）")
-    e.add_argument("source", help="文章檔（.pdf .docx .txt .md .html 或 Google 文件的網頁 .zip）；- ＝從標準輸入讀貼上的文字")
-    r = sub.add_parser("report-issue", help="回報問題：把錯誤紀錄、分鏡設定、出錯畫面、環境檢查打包成 zip（預設放桌面）")
-    r.add_argument("project", nargs="?", help="出問題的專案資料夾（沒有專案就只打包環境檢查）")
-    r.add_argument("--shot", action="append", default=[], help="出錯的分鏡：id（SH03）或編號（3），可重複；不給就從最後一次建置的錯誤找")
-    r.add_argument("--note", default="", help="問題描述（作者怎麼說的）")
-    r.add_argument("--out-dir", help="zip 放哪裡（預設桌面）")
-    x = sub.add_parser("reproduce-issue", help="（維護者用）解開回報的 zip，重渲出錯的分鏡")
-    x.add_argument("zip", help="作者傳來的回報 zip")
-    x.add_argument("--out", help="解開到哪裡（預設 zip 旁邊、同名資料夾）")
-    x.add_argument("--shot", action="append", default=[], help="只重渲這些分鏡（預設是回報裡出錯的分鏡）")
+    add("lint", "旁白規則檢查：narration.json 每個旁白段的字數、斷句、數字寫法、套話、開場",
+        project="專案資料夾（裡面有 narration.json）")
+    add("outline", "列出每個分鏡：編號、種類、畫什麼、唸哪幾個旁白段（照分鏡編號改的時候用）")
+    fb = add("feedback", "把審片頁「複製給 Claude」的文字（從 stdin 讀）解析成 JSON",
+             project="專案資料夾（用來把分鏡編號對到分鏡 id）")
+    fb.add_argument("--file", help="從這個檔讀，不從 stdin 讀")
+    ex = add("extract", "擷取文章全文與原圖到 <專案>/article/", project="專案資料夾（沒有會自動建立）")
+    ex.add_argument("source", help=_ARTICLE_SOURCE)
+    ri = add("report-issue", "回報問題：把錯誤紀錄、分鏡設定、出錯畫面、環境檢查打包成 zip（預設放桌面）", project=None)
+    ri.add_argument("project", nargs="?", help="出問題的專案資料夾（沒有專案就只打包環境檢查）")
+    ri.add_argument("--shot", action="append", default=[], help="出錯的分鏡：id（SH03）或編號（3），可重複；不給就從最後一次建置的錯誤找")
+    ri.add_argument("--note", default="", help="問題描述（作者怎麼說的）")
+    ri.add_argument("--out-dir", help="zip 放哪裡（預設桌面）")
+    rx = add("reproduce-issue", "（維護者用）解開回報的 zip，重渲出錯的分鏡", project=None)
+    rx.add_argument("zip", help="作者傳來的回報 zip")
+    rx.add_argument("--out", help="解開到哪裡（預設 zip 旁邊、同名資料夾）")
+    rx.add_argument("--shot", action="append", default=[], help="只重渲這些分鏡（預設是回報裡出錯的分鏡）")
 
-    s = sub.add_parser("settings", help="看或改使用者設定")
-    ss = s.add_subparsers(dest="action", required=True)
-    show = ss.add_parser("show", help="看設定")
-    show.add_argument("--json", action="store_true", help="印 JSON（給程式讀）")
-    show.add_argument("--data-dir", help=_DATA_DIR_HELP)
+    st = add("settings", "看或改使用者設定", project=None).add_subparsers(dest="action", required=True)
+    show = add("show", "看設定", "json", "data_dir", project=None, into=st)
     show.add_argument("--project", help="看這支片的設定快照")
-    st = ss.add_parser("set", help="改設定")
+    change = add("set", "改設定", "data_dir", project=None, into=st)
     for key, help_ in _SET_OPTIONS.items():
         # argparse 會拿 help 做 % 格式化：「+5%、-10%」不跳脫的話 settings set --help 直接當掉
-        st.add_argument("--" + key.replace("_", "-"), dest=key, help=help_.replace("%", "%%"))
-    st.add_argument("--data-dir", help=_DATA_DIR_HELP)
-    st.add_argument("--project", help="只改這支片的設定快照（不動使用者設定）")
+        change.add_argument("--" + key.replace("_", "-"), dest=key, help=help_.replace("%", "%%"))
+    change.add_argument("--project", help="只改這支片的設定快照（不動使用者設定）")
 
-    sm = sub.add_parser("samples", help="產生試聽檔（安裝時挑聲音、挑配樂用）")
-    sms = sm.add_subparsers(dest="what", required=True)
-    pm = sms.add_parser("music", help="每首配樂一個試聽檔")
-    pm.add_argument("--out", required=True, help="試聽檔放哪個資料夾")
-    pm.add_argument("--seconds", type=float, default=20.0, help="每個試聽檔幾秒（預設 20）")
-    pm.add_argument("--data-dir", help=_DATA_DIR_HELP)
-    pvv = sms.add_parser("voice", help="每個聲音一個試聽檔（edge-tts 要連網）")
-    pvv.add_argument("--out", required=True, help="試聽檔放哪個資料夾")
-    pvv.add_argument("--rate", default=None, help="語速（預設用使用者設定）")
-    pvv.add_argument("--text", default=VOICE_SAMPLE, help="試聽唸的句子")
-    pvv.add_argument("--tts", choices=sorted(TTS_ENGINES), default="edge")
-    pvv.add_argument("--data-dir", help=_DATA_DIR_HELP)
+    sm = add("samples", "產生試聽檔（安裝時挑聲音、挑配樂用）", project=None).add_subparsers(dest="what", required=True)
+    music = add("music", "每首配樂一個試聽檔", "data_dir", project=None, into=sm)
+    music.add_argument("--out", required=True, help="試聽檔放哪個資料夾")
+    music.add_argument("--seconds", type=float, default=20.0, help="每個試聽檔幾秒（預設 20）")
+    voice = add("voice", "每個聲音一個試聽檔（edge-tts 要連網）", "data_dir", project=None, into=sm)
+    voice.add_argument("--out", required=True, help="試聽檔放哪個資料夾")
+    voice.add_argument("--rate", default=None, help="語速（預設用使用者設定）")
+    voice.add_argument("--text", default=VOICE_SAMPLE, help="試聽唸的句子")
+    voice.add_argument("--tts", choices=sorted(TTS_ENGINES), default="edge", help="配音層（預設 edge，要連網）")
 
-    ce = sub.add_parser("check-env", help="檢查環境：逐項列出做片要用的工具狀態與修法（含 edge-tts 連線）")
-    ce.add_argument("--json", action="store_true", help="印 JSON（給程式讀）")
-    ce.add_argument("--data-dir", help=_DATA_DIR_HELP)
-
-    ins = sub.add_parser("install", help="安裝做片要用的工具（Homebrew、能燒字幕的 ffmpeg、Chromium），已經有的略過")
-    ins.add_argument("--data-dir", help=_DATA_DIR_HELP)
-
-    tv = sub.add_parser("test-video", help="做一支約 10 秒的測試片並打開（安裝最後一步，確認做片的環境沒問題）")
+    add("check-env", "檢查環境：逐項列出做片要用的工具狀態與修法（含 edge-tts 連線）", "json", "data_dir", project=None)
+    add("install", "安裝做片要用的工具（Homebrew、能燒字幕的 ffmpeg、Chromium），已經有的略過", "data_dir", project=None)
+    tv = add("test-video", "做一支約 10 秒的測試片並打開（安裝最後一步，確認做片的環境沒問題）", "no_open", "data_dir",
+             project=None)
     tv.add_argument("--out", help="測試片放哪個資料夾（預設 ~/Movies/解說影片/安裝測試片，Finder 裡的「影片」）")
     tv.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設 edge，用設定好的聲音；要連網）")
-    tv.add_argument("--no-open", action="store_true", help="做完不要自動打開")
-    tv.add_argument("--data-dir", help=_DATA_DIR_HELP)
     return p
 
 
-def _test_video(args: argparse.Namespace) -> int:
-    from article_to_video.build import build_project
+# ---------------------------------------------------------------- 共用：留紀錄地跑、建置計畫、審片頁
+
+
+def _failure(label: str, e: BaseException) -> str:
+    """錯誤訊息前面加上哪一步失敗；訊息自己已經說了「還不能出片」就不重複。"""
+    msg = str(e)
+    return msg if msg.startswith(("還不能出片", f"{label}：")) else f"{label}：{msg}"
+
+
+def _recorded(args: argparse.Namespace, failed: str | Callable[[], str], body: Callable[[Log], int], *, project=None,
+              blocked: str | None = None, after_error: Callable[[], None] | None = None) -> int:
+    """跑一個會留紀錄的子指令：印出來的每一行和結果記在 <專案>/build/last-run.{log,json}（回報問題時打包）。
+
+    已知錯誤印繁中到 stderr（前面加上 failed；可以是函式，跑到哪一步再決定怎麼說）、結束碼 1；
+    程式錯誤連 traceback 一起記下再往外丟。
+    blocked：渲染前的檢查擋下正式出片（BlockedBuild）時印的開頭；審片頁照這一版重寫，被擋的原因標在卡上。
+    project：紀錄放哪個專案（預設 args.project）；after_error：已知錯誤印完之後再補一句。"""
+    from article_to_video.build import BlockedBuild
     from article_to_video.issue_report import RunRecord
-    from article_to_video.review import auto_open_allowed
-    from article_to_video.sample_video import SampleVideoError, open_file, prepare_test_project
 
-    try:
-        out = prepare_test_project(args.out)
-    except (SampleVideoError, OSError) as e:
-        print(f"測試片做不出來：{e}", file=sys.stderr)
-        return 1
-    rec = RunRecord(out, "test-video", {"tts": args.tts})  # 出錯時「回報問題」帶這個資料夾就拿得到紀錄
+    aspect = getattr(args, "aspect", None)
+    options = {k: getattr(args, k, None) for k in ("tts", "jobs", "version")}
+    options["aspect"] = aspect.name if aspect is not None else None
+    rec = RunRecord(project if project is not None else getattr(args, "project", None), args.command, options)
     log = rec.tee(lambda m: print(m, flush=True))
+    label = failed if isinstance(failed, str) else None
     try:
-        from article_to_video.numbers import check_numbers
-
-        # 跟正式出片一樣先數字對帳（範例的數字都寫在範例的 article/text.txt 裡）
-        res = build_project(out, tts=args.tts, data_dir=args.data_dir, preflight=[check_numbers], log=log)
+        code = body(log)
+    except BlockedBuild as e:
+        rec.finish(e)
+        print(_failure(blocked or label or failed(), e), file=sys.stderr)
+        try:
+            _refresh_review(e.plan, args, log, what="審片頁已更新（被擋下的原因標在卡片上）")
+        except KNOWN_ERRORS as e2:
+            print(f"審片頁也沒更新：{e2}", file=sys.stderr)
+        return 1
     except KNOWN_ERRORS as e:
         rec.finish(e)
-        print(f"測試片做不出來：{e}", file=sys.stderr)
-        print(f"（要回報問題時，出問題的專案資料夾是 {out}）", file=sys.stderr)
+        print(_failure(label or failed(), e), file=sys.stderr)
+        if after_error is not None:
+            after_error()
         return 1
     except BaseException as e:
         rec.finish(e, unexpected=True)
         raise
     rec.finish()
-    print(f"測試片做好了：{res.video}（{res.duration:.1f} 秒）")
-    if not args.no_open and auto_open_allowed():
-        if not open_file(res.video):
-            print("沒能自動打開，請在 Finder 找到上面這個檔案，點兩下播放。")
-    return 0
+    return code
 
 
-def _install(args: argparse.Namespace) -> int:
-    from article_to_video.installer import Installer
+def _plan(args: argparse.Namespace, log: Log | None = None):
+    """這個子指令的建置計畫（配音、時間軸、每個片段的 spec；不渲染）。"""
+    from article_to_video.build import plan_build
 
-    report = Installer(args.data_dir, log=lambda m: print(m, flush=True)).run()
-    return 0 if report.ok else 1
+    kw = {"log": log} if log is not None else {}
+    return plan_build(args.project, tts=args.tts, fmt=args.aspect, data_dir=args.data_dir, **kw)
 
 
-def _check_env(args: argparse.Namespace) -> int:
-    from article_to_video.environment import collect_environment, environment_checks
+def _refresh_review(plan, args: argparse.Namespace, log: Log, *, what: str | None = "審片頁已更新"):
+    """審片頁照這份計畫重寫（帶上最新的檢查結果）：成片還是這份分鏡做的就照樣內嵌，不然是預覽的樣子。"""
+    from article_to_video.auto_checks import current_video
+    from article_to_video.review import default_contributors, make_review
 
-    report = collect_environment(environment_checks(args.data_dir))
-    if args.json:
-        print(json.dumps(report.to_json(), ensure_ascii=False, indent=1))
-    else:
-        print("環境檢查（✓ 正常、✗ 要處理、・ 只是資訊）：")
-        print(report.to_text(), end="")
-        print(report.summary())
-    return 0 if report.ok else 1
+    review = make_review(plan, video=current_video(plan), contributors=default_contributors(args.data_dir),
+                         jobs=getattr(args, "jobs", None), log=log)
+    if what:
+        log(f"{what}：{review.page}")
+    return review
 
 
 def _show_review(page, *, no_open: bool, version: int | None = None) -> None:
@@ -314,6 +305,9 @@ def _show_review(page, *, no_open: bool, version: int | None = None) -> None:
         return
     if not open_in_browser(page):
         print("沒能自動打開審片頁，請在 Finder 找到上面這個檔案，點兩下打開。")
+
+
+# ---------------------------------------------------------------- 做片：預覽、建置、出片
 
 
 def _list_stills(review) -> str:
@@ -335,172 +329,21 @@ def _list_stills(review) -> str:
     return "\n".join(lines)
 
 
-def _publish(args: argparse.Namespace) -> int:
-    from article_to_video.build import BlockedBuild
-    from article_to_video.issue_report import RunRecord
-    from article_to_video.publish import publish_project
-    from article_to_video.review import auto_open_allowed, default_contributors, make_review
+def _preview(args: argparse.Namespace) -> int:
+    """預覽：配音（有快取就不重配）、分鏡靜態圖、審片頁；印數字對帳的摘要與每張靜態圖給 Claude 看。"""
+    from article_to_video.numbers import summary_line
+    from article_to_video.review import default_contributors, preview_project
 
-    rec = RunRecord(args.project, "publish", {"tts": args.tts, "jobs": args.jobs, "version": args.version,
-                                              "aspect": args.aspect.name if args.aspect else None})
-    log = rec.tee(lambda m: print(m, flush=True))
-    try:
-        res = publish_project(args.project, version=args.version, tts=args.tts, jobs=args.jobs, fmt=args.aspect,
-                              data_dir=args.data_dir, out_dir=args.out, log=log)
-        review = make_review(res.plan, video=res.project_video, contributors=default_contributors(args.data_dir),
-                             jobs=args.jobs, log=log)
-    except BlockedBuild as e:
-        rec.finish(e)
-        print(f"還不能出片：{e}", file=sys.stderr)
-        try:
-            from article_to_video.auto_checks import current_video
-
-            review = make_review(e.plan, video=current_video(e.plan), contributors=default_contributors(args.data_dir),
-                                 jobs=args.jobs, log=log)
-            print(f"審片頁已更新（擋下的原因標在卡片上）：{review.page}", file=sys.stderr)
-        except KNOWN_ERRORS as e2:
-            print(f"審片頁也沒更新：{e2}", file=sys.stderr)
-        return 1
-    except KNOWN_ERRORS as e:
-        rec.finish(e)
-        print(f"出片失敗：{e}" if not str(e).startswith("還不能出片") else str(e), file=sys.stderr)
-        return 1
-    except BaseException as e:
-        rec.finish(e, unexpected=True)
-        raise
-    rec.finish()
-    minutes, secs = divmod(res.duration, 60)
-    print(f"出片完成（審片頁第 {res.version} 版，{int(minutes)} 分 {secs:.0f} 秒）：")
-    print(f"  成片：{res.video}")
-    print(f"  字幕檔：{res.srt}")
-    print(f"審片頁：{review.page}")
-    if not args.no_open and auto_open_allowed():
-        if not open_file_reveal(res.video):
-            print("沒能在 Finder 打開，請到「影片」→「解說影片」找這個資料夾。")
-    return 0
-
-
-def open_file_reveal(path) -> bool:
-    """在 Finder 裡選取這個檔（open -R）。"""
-    import subprocess
-
-    try:
-        proc = subprocess.run(["open", "-R", str(path)], capture_output=True, text=True, encoding="utf-8", timeout=20)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return proc.returncode == 0
-
-
-def _open_review(args: argparse.Namespace) -> int:
-    from article_to_video.auto_checks import current_video
-    from article_to_video.build import plan_build
-    from article_to_video.issue_report import RunRecord
-    from article_to_video.review import default_contributors, make_review
-
-    # 會渲分鏡靜態圖：出錯要跟 build、preview 一樣記進 last-run，回報問題才拿得到
-    rec = RunRecord(args.project, "open-review", {"tts": args.tts, "aspect": args.aspect.name if args.aspect else None})
-    log = rec.tee(lambda m: print(m, flush=True))
-    try:
-        plan = plan_build(args.project, tts=args.tts, fmt=args.aspect, data_dir=args.data_dir)
-        review = make_review(plan, video=current_video(plan), contributors=default_contributors(args.data_dir), log=log)
-    except KNOWN_ERRORS as e:
-        rec.finish(e)
-        print(f"審片頁打不開：{e}", file=sys.stderr)
-        return 1
-    except BaseException as e:
-        rec.finish(e, unexpected=True)
-        raise
-    rec.finish()
-    _show_review(review.page, no_open=False, version=review.version)
-    return 0
-
-
-def _samples(args: argparse.Namespace) -> int:
-    from pathlib import Path
-
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
-    if args.what == "music":
-        from article_to_video.music import TRACKS, write_preview
-
-        for name, track in TRACKS.items():
-            f = write_preview(name, out / f"music-{name}.wav", args.seconds, args.data_dir)
-            print(f"{track.label}（{name}）：{track.mood}\n  {f}")
+    def body(log: Log) -> int:
+        review = preview_project(args.project, tts=args.tts, contributors=default_contributors(args.data_dir),
+                                 jobs=args.jobs, data_dir=args.data_dir, fmt=args.aspect, log=log)
+        if review.plan is not None:
+            log(summary_line(review.plan))
+            log(_list_stills(review))
+        _show_review(review.page, no_open=args.no_open, version=review.version)
         return 0
 
-    from article_to_video.narration import get_tts_engine, narrate
-    from article_to_video.user_settings import load_user_settings, normalize_value, resolve_data_dir
-
-    rate = normalize_value("rate", args.rate) if args.rate else load_user_settings(args.data_dir).rate
-    cache = resolve_data_dir(args.data_dir) / "previews" / "voice-cache"
-    for vid, name in ZH_TW_VOICES.items():
-        audio = narrate({"sample": args.text}, engine=get_tts_engine(args.tts), voice=vid, rate=rate, cache_dir=cache)
-        f = out / f"voice-{vid}.wav"
-        f.write_bytes(audio["sample"].audio.read_bytes())
-        print(f"{name}（{vid}）：\n  {f}")
-    return 0
-
-
-def _narrate(args: argparse.Namespace) -> int:
-    """配音（寫分鏡之前）：印總長、每段起點與長度、每個詞開始唸的秒數。"""
-    from article_to_video.build import format_voicing, voice_narration
-    from article_to_video.issue_report import RunRecord
-
-    rec = RunRecord(args.project, "narrate", {"tts": args.tts})
-    log = rec.tee(lambda m: print(m, flush=True))
-    try:
-        voicing = voice_narration(args.project, tts=args.tts, data_dir=args.data_dir, log=log)
-    except KNOWN_ERRORS as e:
-        rec.finish(e)
-        print(f"配音失敗：{e}", file=sys.stderr)
-        return 1
-    except BaseException as e:
-        rec.finish(e, unexpected=True)
-        raise
-    log(format_voicing(voicing))
-    rec.finish()
-    return 0
-
-
-def _boxes(args: argparse.Namespace) -> int:
-    """boxes：列出每個 Vox 框＋渲靜態圖；confirm-box：記下核對過的框。"""
-    from pathlib import Path
-
-    from article_to_video.boxes import box_statuses, confirm_boxes, format_box_listing, render_box_stills
-
-    if args.command == "confirm-box":
-        try:
-            res = confirm_boxes(args.project, args.tokens, note=args.note)
-        except ProjectError as e:
-            print(f"核對失敗：{e}", file=sys.stderr)
-            return 1
-        print("已記下核對：" + "、".join(b.id for b in res.confirmed))
-        if res.remaining:
-            print("還沒核對：" + "、".join(b.id for b in res.remaining))
-        else:
-            print("所有 Vox 框都核對過了，可以正式出片。")
-        return 0
-
-    from article_to_video.build import plan_build
-    from article_to_video.issue_report import RunRecord
-
-    rec = RunRecord(args.project, "boxes",
-                    {"tts": args.tts, "jobs": args.jobs, "aspect": args.aspect.name if args.aspect else None})
-    log = rec.tee(lambda m: print(m, flush=True))
-    try:
-        plan = plan_build(args.project, tts=args.tts, fmt=args.aspect, data_dir=args.data_dir, log=log)
-        statuses = box_statuses(plan)
-        render_box_stills(plan, statuses, jobs=args.jobs, log=log)
-    except KNOWN_ERRORS as e:
-        rec.finish(e)
-        print(f"列不出框：{e}", file=sys.stderr)
-        return 1
-    except BaseException as e:
-        rec.finish(e, unexpected=True)
-        raise
-    log(format_box_listing(statuses, Path(args.project).absolute()))
-    rec.finish()
-    return 0
+    return _recorded(args, "預覽失敗", body)
 
 
 def _after_build_hint(plan, data_dir) -> str:
@@ -522,25 +365,114 @@ def _after_build_hint(plan, data_dir) -> str:
             " 打開審片頁給作者看；作者點頭之後 publish --version <他看的那一版> 才是出片。")
 
 
-def _refresh_review(plan, data_dir, log) -> None:
-    """自動檢查、獨立審片的結果寫進審片頁：成片還是最新的就照樣內嵌（出片後的樣子），不然是預覽的樣子。"""
-    from article_to_video.auto_checks import current_video
+def _build(args: argparse.Namespace) -> int:
+    """建置審片用的成片（還不是出片）。正式出片前先數字對帳；自動檢查、獨立審片查出的必修還沒處理（沒改掉、也沒明確
+    接受）也擋。被擋下時審片頁照這一版重寫（沒有成片、被擋的原因標在卡上），作者打開看到的就是現況。"""
+    from article_to_video.auto_checks import require_checks_cleared
+    from article_to_video.build import build_project
+    from article_to_video.numbers import check_numbers
     from article_to_video.review import default_contributors, make_review
 
-    review = make_review(plan, video=current_video(plan), contributors=default_contributors(data_dir), log=log)
-    log(f"審片頁已更新：{review.page}")
+    failed = ["建置失敗"]
+
+    def body(log: Log) -> int:
+        res = build_project(args.project, tts=args.tts, jobs=args.jobs, fmt=args.aspect, data_dir=args.data_dir,
+                            preflight=[check_numbers, require_checks_cleared], log=log)
+        print(f"完成：{res.video}（{res.duration:.2f} 秒）")
+        print(f"字幕檔：{res.srt}")
+        failed[0] = "成片做好了，但審片頁沒更新"
+        review = make_review(res.plan, video=res.video, contributors=default_contributors(args.data_dir),
+                             jobs=args.jobs, log=log)
+        print(_after_build_hint(res.plan, args.data_dir))
+        _show_review(review.page, no_open=args.no_open, version=review.version)
+        return 0
+
+    return _recorded(args, lambda: failed[0], body, blocked="建置失敗")
+
+
+def _publish(args: argparse.Namespace) -> int:
+    from article_to_video.macos import open_path
+    from article_to_video.publish import publish_project
+    from article_to_video.review import auto_open_allowed, default_contributors, make_review
+
+    def body(log: Log) -> int:
+        res = publish_project(args.project, version=args.version, tts=args.tts, jobs=args.jobs, fmt=args.aspect,
+                              data_dir=args.data_dir, out_dir=args.out, log=log)
+        review = make_review(res.plan, video=res.project_video, contributors=default_contributors(args.data_dir),
+                             jobs=args.jobs, log=log)
+        minutes, secs = divmod(res.duration, 60)
+        print(f"出片完成（審片頁第 {res.version} 版，{int(minutes)} 分 {secs:.0f} 秒）：")
+        print(f"  成片：{res.video}")
+        print(f"  字幕檔：{res.srt}")
+        print(f"審片頁：{review.page}")
+        if not args.no_open and auto_open_allowed() and not open_path(res.video, reveal=True):
+            print("沒能在 Finder 打開，請到「影片」→「解說影片」找這個資料夾。")
+        return 0
+
+    return _recorded(args, "出片失敗", body, blocked="還不能出片")
+
+
+def _open_review(args: argparse.Namespace) -> int:
+    """更新審片頁並打開給作者看。會渲分鏡靜態圖，出錯要跟 build、preview 一樣記進 last-run。"""
+    def body(log: Log) -> int:
+        review = _refresh_review(_plan(args), args, log, what=None)
+        _show_review(review.page, no_open=False, version=review.version)
+        return 0
+
+    return _recorded(args, "審片頁打不開", body)
+
+
+def _narrate(args: argparse.Namespace) -> int:
+    """配音（寫分鏡之前）：印總長、每段起點與長度、每個詞開始唸的秒數。"""
+    from article_to_video.build import format_voicing, voice_narration
+
+    def body(log: Log) -> int:
+        log(format_voicing(voice_narration(args.project, tts=args.tts, data_dir=args.data_dir, log=log)))
+        return 0
+
+    return _recorded(args, "配音失敗", body)
+
+
+# ---------------------------------------------------------------- 檢查：框、自動檢查、獨立審片、處理紀錄
+
+
+def _boxes(args: argparse.Namespace) -> int:
+    """列出每個 Vox 框＋渲靜態圖。"""
+    from pathlib import Path
+
+    from article_to_video.boxes import box_statuses, format_box_listing, render_box_stills
+
+    def body(log: Log) -> int:
+        plan = _plan(args, log)
+        statuses = box_statuses(plan)
+        render_box_stills(plan, statuses, jobs=args.jobs, log=log)
+        log(format_box_listing(statuses, Path(args.project).absolute()))
+        return 0
+
+    return _recorded(args, "列不出框", body)
+
+
+def _confirm_box(args: argparse.Namespace) -> int:
+    from article_to_video.boxes import confirm_boxes
+
+    try:
+        res = confirm_boxes(args.project, args.tokens, note=args.note)
+    except ProjectError as e:
+        print(f"核對失敗：{e}", file=sys.stderr)
+        return 1
+    print("已記下核對：" + "、".join(b.id for b in res.confirmed))
+    if res.remaining:
+        print("還沒核對：" + "、".join(b.id for b in res.remaining))
+    else:
+        print("所有 Vox 框都核對過了，可以正式出片。")
+    return 0
 
 
 def _checks(args: argparse.Namespace) -> int:
     from article_to_video.auto_checks import clips_not_built, format_report, report_json, run_checks
-    from article_to_video.build import plan_build
-    from article_to_video.issue_report import RunRecord
 
-    rec = RunRecord(args.project, "checks",
-                    {"tts": args.tts, "jobs": args.jobs, "aspect": args.aspect.name if args.aspect else None})
-    log = rec.tee(lambda m: print(m, flush=True))
-    try:
-        plan = plan_build(args.project, tts=args.tts, fmt=args.aspect, data_dir=args.data_dir, log=log)
+    def body(log: Log) -> int:
+        plan = _plan(args, log)
         missing = clips_not_built(plan)
         if missing:
             raise ProjectError(
@@ -551,97 +483,241 @@ def _checks(args: argparse.Namespace) -> int:
             )
         report = run_checks(plan, jobs=args.jobs, log=log)
         log(format_report(plan, report))
-        _refresh_review(plan, args.data_dir, log)
-    except KNOWN_ERRORS as e:
-        rec.finish(e)
-        print(f"自動檢查失敗：{e}", file=sys.stderr)
-        return 1
-    except BaseException as e:
-        rec.finish(e, unexpected=True)
-        raise
-    rec.finish()
-    if args.json:
-        print(json.dumps(report_json(plan, report), ensure_ascii=False, indent=1))
-    return 0
-
-
-def _review(args: argparse.Namespace) -> int:
-    """review-prep、review-frames、review-record。"""
-    from pathlib import Path
-
-    from article_to_video import independent_review as ir
-    from article_to_video.build import plan_build
-    from article_to_video.issue_report import RunRecord
-    from article_to_video.textio import TextInputError, read_text_input
-
-    if args.command == "review-frames":
-        try:
-            kit = ir.find_kit(args.project, args.aspect.name if args.aspect else None)
-            times = [ir.parse_time_arg(t) for t in args.at]
-            if args.start is not None or args.end is not None:
-                if args.start is None or args.end is None or args.step <= 0:
-                    raise ProjectError("連續幀要同時給 --from 和 --to（--step 要大於 0）", title="抽不了幀")
-                a, b = ir.parse_time_arg(args.start), ir.parse_time_arg(args.end)
-                n = int(round((b - a) / args.step))
-                times += [round(a + k * args.step, 3) for k in range(n + 1)]
-            if not times:
-                raise ProjectError("要給 --at 秒數，或 --from／--to", title="抽不了幀")
-            paths, sheet = ir.extract_review_frames(kit, times)
-        except ProjectError as e:
-            print(f"抽幀失敗：{e}", file=sys.stderr)
-            return 1
-        print("\n".join(str(p) for p in paths))
-        if sheet:
-            print(f"拼在一起：{sheet}")
+        _refresh_review(plan, args, log)
+        if args.json:
+            print(json.dumps(report_json(plan, report), ensure_ascii=False, indent=1))
         return 0
 
-    rec = RunRecord(args.project, args.command, {"tts": args.tts, "aspect": args.aspect.name if args.aspect else None})
-    log = rec.tee(lambda m: print(m, flush=True))
+    return _recorded(args, "自動檢查失敗", body)
+
+
+def _review_prep(args: argparse.Namespace) -> int:
+    from article_to_video import independent_review as ir
+
+    def body(log: Log) -> int:
+        plan = _plan(args, log)
+        if not ir.review_enabled(args.data_dir):
+            log("注意：使用者設定把獨立審片關掉了（"
+                f"{cli_command('settings set', '--independent-review', '開', data_dir=args.data_dir)} 可以打開）；照樣準備素材。")
+        kit = ir.prepare_review_kit(plan, log=log)
+        log(f"派審片 agent 時把這個檔的內容當 prompt：{kit.prompt}")
+        log("agent 寫完 review.json 之後跑："
+            + cli_command("review-record", plan.project.root, *aspect_args(plan.format.name), data_dir=args.data_dir))
+        return 0
+
+    return _recorded(args, "審片素材做不出來", body)
+
+
+def _review_frames(args: argparse.Namespace) -> int:
+    """審片 agent 自己叫的：從成片抽幀。"""
+    from article_to_video import independent_review as ir
+
     try:
-        plan = plan_build(args.project, tts=args.tts, fmt=args.aspect, data_dir=args.data_dir, log=log)
-        if args.command == "review-prep":
-            if not ir.review_enabled(args.data_dir):
-                log("注意：使用者設定把獨立審片關掉了（"
-                    f"{cli_command('settings set', '--independent-review', '開', data_dir=args.data_dir)} 可以打開）；照樣準備素材。")
-            kit = ir.prepare_review_kit(plan, log=log)
-            log(f"派審片 agent 時把這個檔的內容當 prompt：{kit.prompt}")
-            log("agent 寫完 review.json 之後跑：" + cli_command("review-record", plan.project.root,
-                                                                 *aspect_args(plan.format.name), data_dir=args.data_dir))
-        else:
-            kit = ir.find_kit(args.project, plan.format.name)
-            src = args.file or str(kit.answer)
-            try:
-                text = read_text_input(src)
-            except TextInputError as e:
-                raise ProjectError(str(e), title="沒有審片結果",
-                                   hint="審片 agent 要把結果寫到審片素材資料夾的 review.json。") from None
-            try:
-                answer = json.loads(text)
-            except json.JSONDecodeError as e:
-                raise ProjectError(f"{src} 第 {e.lineno} 行附近不是合法的 JSON", title="審片結果格式不對") from None
-            rnd = ir.record_review(plan, answer, kit)
-            counts = "、".join(f"{s} {sum(1 for it in rnd['items'] if it['severity'] == s)}" for s in ir.SEVERITIES)
-            log(f"已記下獨立審片第 {rnd['round']} 輪：{counts}")
-            for it in rnd["items"]:
-                log(f"  {it['id']} {it['severity']} {ir.item_where(it)}：{it['title']}")
-            for p in rnd["previous"]:
-                log(f"  上一輪 {p['id']}：{p['status']}")
-            must = ir.unresolved_must(plan)
-            if must:
-                root = plan.project.root
-                log(f"還有 {len(must)} 項必修沒處理，正式出片會被擋下：改好之後 "
-                    + cli_command("resolve", root, "<代號>", "--fixed", '"怎麼改的"') + "；作者決定不改的 "
-                    + cli_command("resolve", root, "<代號>", "--accept", '"理由"', "--by", "作者"))
-            _refresh_review(plan, args.data_dir, log)
-    except KNOWN_ERRORS as e:
-        rec.finish(e)
-        print(f"{'審片素材做不出來' if args.command == 'review-prep' else '審片結果沒記下來'}：{e}", file=sys.stderr)
+        kit = ir.find_kit(args.project, args.aspect.name if args.aspect else None)
+        times = [ir.parse_time_arg(t) for t in args.at]
+        if args.start is not None or args.end is not None:
+            if args.start is None or args.end is None or args.step <= 0:
+                raise ProjectError("連續幀要同時給 --from 和 --to（--step 要大於 0）", title="抽不了幀")
+            a, b = ir.parse_time_arg(args.start), ir.parse_time_arg(args.end)
+            n = int(round((b - a) / args.step))
+            times += [round(a + k * args.step, 3) for k in range(n + 1)]
+        if not times:
+            raise ProjectError("要給 --at 秒數，或 --from／--to", title="抽不了幀")
+        paths, sheet = ir.extract_review_frames(kit, times)
+    except ProjectError as e:
+        print(f"抽幀失敗：{e}", file=sys.stderr)
         return 1
-    except BaseException as e:
-        rec.finish(e, unexpected=True)
-        raise
-    rec.finish()
+    print("\n".join(str(p) for p in paths))
+    if sheet:
+        print(f"拼在一起：{sheet}")
     return 0
+
+
+def _review_record(args: argparse.Namespace) -> int:
+    from article_to_video import independent_review as ir
+    from article_to_video.textio import TextInputError, read_text_input
+
+    def body(log: Log) -> int:
+        plan = _plan(args, log)
+        kit = ir.find_kit(args.project, plan.format.name)
+        src = args.file or str(kit.answer)
+        try:
+            text = read_text_input(src)
+        except TextInputError as e:
+            raise ProjectError(str(e), title="沒有審片結果",
+                               hint="審片 agent 要把結果寫到審片素材資料夾的 review.json。") from None
+        try:
+            answer = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ProjectError(f"{src} 第 {e.lineno} 行附近不是合法的 JSON", title="審片結果格式不對") from None
+        rnd = ir.record_review(plan, answer, kit)
+        counts = "、".join(f"{s} {sum(1 for it in rnd['items'] if it['severity'] == s)}" for s in ir.SEVERITIES)
+        log(f"已記下獨立審片第 {rnd['round']} 輪：{counts}")
+        for it in rnd["items"]:
+            log(f"  {it['id']} {it['severity']} {ir.item_where(it)}：{it['title']}")
+        for p in rnd["previous"]:
+            log(f"  上一輪 {p['id']}：{p['status']}")
+        must = ir.unresolved_must(plan)
+        if must:
+            root = plan.project.root
+            log(f"還有 {len(must)} 項必修沒處理，正式出片會被擋下：改好之後 "
+                + cli_command("resolve", root, "<代號>", "--fixed", '"怎麼改的"') + "；作者決定不改的 "
+                + cli_command("resolve", root, "<代號>", "--accept", '"理由"', "--by", "作者"))
+        _refresh_review(plan, args, log)
+        return 0
+
+    return _recorded(args, "審片結果沒記下來", body)
+
+
+def _resolve(args: argparse.Namespace) -> int:
+    from article_to_video.check_log import record_resolutions
+
+    status, note = ("fixed", args.fixed) if args.fixed is not None else ("accepted", args.accept)
+    try:
+        what = record_resolutions(args.project, args.tokens, status=status, note=note, by=args.by)
+    except ProjectError as e:
+        print(f"處理紀錄失敗：{e}", file=sys.stderr)
+        return 1
+    verb = "改好了" if status == "fixed" else f"接受不改（{args.by}）"
+    print(f"已記下 {len(what)} 項{verb}：")
+    print("\n".join(f"  {t}　{w}" for t, w in zip(args.tokens, what)))
+    print("審片頁下次 build／checks 時更新；正式出片不會再被這幾項擋下。")
+    return 0
+
+
+# ---------------------------------------------------------------- 專案：開新片、找舊片、旁白、留言、文章
+
+
+def _new(args: argparse.Namespace) -> int:
+    from article_to_video.videos import new_project
+
+    return new_project(args.source, title=args.title, root=args.root)
+
+
+def _projects(args: argparse.Namespace) -> int:
+    from article_to_video.videos import format_projects, list_projects, videos_root
+
+    infos = list_projects(args.root, args.query)
+    if args.json:
+        print(json.dumps([i.to_json() for i in infos], ensure_ascii=False, indent=1))
+    else:
+        print(format_projects(infos, videos_root(args.root)))
+    return 0
+
+
+def _outline(args: argparse.Namespace) -> int:
+    from article_to_video.feedback import format_outline, project_outline
+
+    try:
+        outline, narration = project_outline(args.project)
+    except ProjectError as e:
+        print(f"讀不到分鏡設定：{e}", file=sys.stderr)
+        return 1
+    print(format_outline(outline, narration))
+    return 0
+
+
+def _lint(args: argparse.Namespace) -> int:
+    from article_to_video.lint import format_lint, lint_project
+
+    try:
+        report = lint_project(args.project)
+    except ProjectError as e:
+        print(f"旁白檢查失敗：{e}", file=sys.stderr)
+        return 1
+    print(format_lint(report))
+    return 0 if report.ok else 1
+
+
+def _feedback(args: argparse.Namespace) -> int:
+    from article_to_video.feedback import parse_feedback, project_outline
+    from article_to_video.textio import STDIN, TextInputError, read_text_input
+
+    try:
+        outline, narration = project_outline(args.project)
+    except ProjectError as e:
+        print(f"讀不到分鏡設定：{e}", file=sys.stderr)
+        return 1
+    try:
+        text = read_text_input(args.file or STDIN)
+    except TextInputError as e:
+        print(f"讀不到留言：{e}", file=sys.stderr)
+        return 1
+    fb = parse_feedback(text)
+    ids = [o.id for o in outline]
+    by_id = {o.id: o for o in outline}
+
+    def comment(c, sid):
+        item = {"number": c.number, "id": sid, "text": c.text}
+        o = by_id.get(sid)
+        if o is not None:  # 要改的地方：畫面是哪種、唸到哪幾段旁白（改旁白就改這幾段）
+            item.update(kind=o.kind, shows=o.shows, segments=o.segments,
+                        narration={k: narration[k] for k in o.segments})
+        return item
+
+    print(json.dumps({
+        "project": fb.project,
+        "version": fb.version,
+        "shots": [comment(c, sid) for c, sid in zip(fb.shots, fb.resolve(ids))],
+        "overall": fb.overall,
+        "problems": fb.check(ids),
+    }, ensure_ascii=False, indent=1))
+    return 0
+
+
+def _extract(args: argparse.Namespace) -> int:
+    from article_to_video.article import run_extract
+
+    return run_extract(args.project, args.source)
+
+
+# ---------------------------------------------------------------- 回報問題
+
+
+def _report_issue(args: argparse.Namespace) -> int:
+    from article_to_video.issue_report import create_report
+
+    try:
+        rep = create_report(args.project, shots=args.shot, note=args.note, out_dir=args.out_dir,
+                            log=lambda m: print(m, flush=True))
+    except OSError as e:
+        print(f"打包失敗：{e}", file=sys.stderr)
+        return 1
+    for w in rep.warnings:
+        print(f"注意：{w}")
+    print(f"已打包：{rep.zip_path}（{rep.size_mb:.1f} MB）")
+    print(f"裡面有：{'、'.join(rep.contents)}")
+    print("沒放：文章全文、成片、配音檔；路徑裡的使用者名稱已遮掉")
+    print("請把這個檔案用 LINE 傳給 Danny。")
+    return 0
+
+
+def _reproduce_issue(args: argparse.Namespace) -> int:
+    from article_to_video.issue_report import ReportError, reproduce_report
+
+    try:
+        res = reproduce_report(args.zip, out_dir=args.out, shots=args.shot, log=lambda m: print(m, flush=True))
+    except ReportError as e:
+        print(f"沒辦法重現：{e}", file=sys.stderr)
+        return 1
+    print(f"解開在：{res.out_dir}")
+    if res.report_note:
+        print(f"作者說：{res.report_note}")
+    if res.author_environment:
+        print("作者那台的環境：\n" + res.author_environment)
+    for n in res.notes:
+        print(f"注意：{n}")
+    for cid, mp4 in res.clips.items():
+        print(f"片段 {cid}：{mp4}")
+    for sid, ps in res.stills.items():
+        print(f"分鏡 {sid} 靜態圖：{ps[0].parent}（{len(ps)} 張）")
+    if res.errors:
+        print("重現出錯誤：\n" + "\n\n".join(res.errors), file=sys.stderr)
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------- 設定、安裝、環境
 
 
 def _describe(values: dict) -> str:
@@ -665,34 +741,47 @@ def _describe(values: dict) -> str:
 
 
 def _settings(args: argparse.Namespace) -> int:
+    try:
+        return _settings_set(args) if args.action == "set" else _settings_show(args)
+    except SettingsError as e:
+        print(f"設定失敗：{e}", file=sys.stderr)
+        return 1
+
+
+def _settings_set(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from article_to_video.brand import brand_note
+    from article_to_video.project import SETTINGS_FILE
+    from article_to_video.user_settings import (
+        SNAPSHOT_KEYS, normalize_value, resolve_data_dir, update_project_settings, update_user_settings,
+    )
+
+    changes = {k: getattr(args, k) for k in _SET_OPTIONS if getattr(args, k) is not None}
+    if not changes:
+        print("沒有要改的設定（例：settings set --voice 曉雨）", file=sys.stderr)
+        return 1
+    if args.project:
+        if "independent_review" in changes:
+            print("獨立審片的開關是全部影片共用的，不用加 --project", file=sys.stderr)
+            return 1
+        snap = update_project_settings(args.project, changes)
+        print(f"已更新這支片的設定快照：{Path(args.project) / SETTINGS_FILE}")
+        print(_describe({k: snap.get(k) for k in SNAPSHOT_KEYS}))
+    else:
+        us = update_user_settings(changes, args.data_dir)
+        print(f"已更新使用者設定：{resolve_data_dir(args.data_dir) / 'settings.json'}")
+        print(_describe(us.to_json()))
+    if "brand_color" in changes and (note := brand_note(normalize_value("brand_color", changes["brand_color"]))):
+        print(note)  # 淺色照樣收：告訴作者圖表上的字和線用加深的版本
+    return 0
+
+
+def _settings_show(args: argparse.Namespace) -> int:
     from pathlib import Path
 
     from article_to_video.project import SETTINGS_FILE
-    from article_to_video.brand import brand_note
-    from article_to_video.user_settings import (
-        SNAPSHOT_KEYS, load_user_settings, normalize_value, resolve_data_dir, update_project_settings,
-        update_user_settings,
-    )
-
-    if args.action == "set":
-        changes = {k: getattr(args, k) for k in _SET_OPTIONS if getattr(args, k) is not None}
-        if not changes:
-            print("沒有要改的設定（例：settings set --voice 曉雨）", file=sys.stderr)
-            return 1
-        if args.project:
-            if "independent_review" in changes:
-                print("獨立審片的開關是全部影片共用的，不用加 --project", file=sys.stderr)
-                return 1
-            snap = update_project_settings(args.project, changes)
-            print(f"已更新這支片的設定快照：{Path(args.project) / SETTINGS_FILE}")
-            print(_describe({k: snap.get(k) for k in SNAPSHOT_KEYS}))
-        else:
-            us = update_user_settings(changes, args.data_dir)
-            print(f"已更新使用者設定：{resolve_data_dir(args.data_dir) / 'settings.json'}")
-            print(_describe(us.to_json()))
-        if "brand_color" in changes and (note := brand_note(normalize_value("brand_color", changes["brand_color"]))):
-            print(note)  # 淺色照樣收：告訴作者圖表上的字和線用加深的版本
-        return 0
+    from article_to_video.user_settings import load_user_settings, resolve_data_dir
 
     if args.project:
         path = Path(args.project) / SETTINGS_FILE
@@ -709,6 +798,114 @@ def _settings(args: argparse.Namespace) -> int:
     return 0
 
 
+def _samples(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    out = Path(args.out)
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        if args.what == "music":
+            from article_to_video.music import TRACKS, write_preview
+
+            for name, track in TRACKS.items():
+                f = write_preview(name, out / f"music-{name}.wav", args.seconds, args.data_dir)
+                print(f"{track.label}（{name}）：{track.mood}\n  {f}")
+            return 0
+
+        from article_to_video.narration import get_tts_engine, narrate
+        from article_to_video.user_settings import load_user_settings, normalize_value, resolve_data_dir
+
+        rate = normalize_value("rate", args.rate) if args.rate else load_user_settings(args.data_dir).rate
+        cache = resolve_data_dir(args.data_dir) / "previews" / "voice-cache"
+        for vid, name in ZH_TW_VOICES.items():
+            audio = narrate({"sample": args.text}, engine=get_tts_engine(args.tts), voice=vid, rate=rate, cache_dir=cache)
+            f = out / f"voice-{vid}.wav"
+            f.write_bytes(audio["sample"].audio.read_bytes())
+            print(f"{name}（{vid}）：\n  {f}")
+        return 0
+    except KNOWN_ERRORS as e:
+        print(f"試聽檔產生失敗：{e}", file=sys.stderr)
+        return 1
+
+
+def _check_env(args: argparse.Namespace) -> int:
+    from article_to_video.environment import collect_environment, environment_checks
+
+    report = collect_environment(environment_checks(args.data_dir))
+    if args.json:
+        print(json.dumps(report.to_json(), ensure_ascii=False, indent=1))
+    else:
+        print("環境檢查（✓ 正常、✗ 要處理、・ 只是資訊）：")
+        print(report.to_text(), end="")
+        print(report.summary())
+    return 0 if report.ok else 1
+
+
+def _install(args: argparse.Namespace) -> int:
+    from article_to_video.installer import Installer
+
+    report = Installer(args.data_dir, log=lambda m: print(m, flush=True)).run()
+    return 0 if report.ok else 1
+
+
+def _test_video(args: argparse.Namespace) -> int:
+    from article_to_video.build import build_project
+    from article_to_video.numbers import check_numbers
+    from article_to_video.review import auto_open_allowed
+    from article_to_video.sample_video import SampleVideoError, open_file, prepare_test_project
+
+    try:
+        out = prepare_test_project(args.out)
+    except (SampleVideoError, OSError) as e:
+        print(f"測試片做不出來：{e}", file=sys.stderr)
+        return 1
+
+    def body(log: Log) -> int:
+        # 跟正式出片一樣先數字對帳（範例的數字都寫在範例的 article/text.txt 裡）
+        res = build_project(out, tts=args.tts, data_dir=args.data_dir, preflight=[check_numbers], log=log)
+        print(f"測試片做好了：{res.video}（{res.duration:.1f} 秒）")
+        if not args.no_open and auto_open_allowed() and not open_file(res.video):
+            print("沒能自動打開，請在 Finder 找到上面這個檔案，點兩下播放。")
+        return 0
+
+    # 出錯時「回報問題」帶這個資料夾就拿得到紀錄
+    return _recorded(args, "測試片做不出來", body, project=out,
+                     after_error=lambda: print(f"（要回報問題時，出問題的專案資料夾是 {out}）", file=sys.stderr))
+
+
+# ---------------------------------------------------------------- 進入點
+
+
+HANDLERS: dict[str, Callable[[argparse.Namespace], int]] = {
+    "new": _new,
+    "projects": _projects,
+    "lint": _lint,
+    "narrate": _narrate,
+    "preview": _preview,
+    "build": _build,
+    "open-review": _open_review,
+    "publish": _publish,
+    "boxes": _boxes,
+    "confirm-box": _confirm_box,
+    "checks": _checks,
+    "review-prep": _review_prep,
+    "review-frames": _review_frames,
+    "review-record": _review_record,
+    "resolve": _resolve,
+    "outline": _outline,
+    "feedback": _feedback,
+    "extract": _extract,
+    "report-issue": _report_issue,
+    "reproduce-issue": _reproduce_issue,
+    "settings": _settings,
+    "samples": _samples,
+    "check-env": _check_env,
+    "install": _install,
+    "test-video": _test_video,
+}
+"""子指令 → 處理函式（每個子指令一個）。"""
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -716,219 +913,4 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (AttributeError, ValueError):
             pass
     args = _parser().parse_args(argv)
-    if args.command in ("build", "preview"):
-        from article_to_video.build import BlockedBuild
-        from article_to_video.issue_report import RunRecord
-        from article_to_video.numbers import check_numbers, summary_line
-        from article_to_video.review import default_contributors, make_review
-
-        # 回報問題時打包：preview、build（含審片頁）出的錯都記進 last-run
-        rec = RunRecord(args.project, args.command,
-                        {"tts": args.tts, "jobs": args.jobs, "aspect": args.aspect.name if args.aspect else None})
-        log = rec.tee(lambda m: print(m, flush=True))
-        failed = "建置失敗" if args.command == "build" else "預覽失敗"
-        try:
-            if args.command == "build":
-                from article_to_video.auto_checks import require_checks_cleared
-                from article_to_video.build import build_project
-
-                # 正式出片前先數字對帳：有無出處的數字就擋下（不渲染、不出片）；自動檢查、獨立審片查出的必修
-                # 還沒處理（沒改掉、也沒明確接受）也擋
-                res = build_project(args.project, tts=args.tts, jobs=args.jobs, fmt=args.aspect, data_dir=args.data_dir,
-                                    preflight=[check_numbers, require_checks_cleared], log=log)
-                print(f"完成：{res.video}（{res.duration:.2f} 秒）")
-                print(f"字幕檔：{res.srt}")
-                failed = "成片做好了，但審片頁沒更新"
-                review = make_review(res.plan, video=res.video, contributors=default_contributors(args.data_dir),
-                                     jobs=args.jobs, log=log)
-                print(_after_build_hint(res.plan, args.data_dir))
-            else:
-                from article_to_video.review import preview_project
-
-                review = preview_project(args.project, tts=args.tts, contributors=default_contributors(args.data_dir),
-                                         jobs=args.jobs, data_dir=args.data_dir, fmt=args.aspect, log=log)
-                if review.plan is not None:
-                    log(summary_line(review.plan))
-                    log(_list_stills(review))
-        except BlockedBuild as e:
-            # 擋下正式出片：審片頁照這一版重寫（沒有成片、被擋的數字標在卡上），作者打開看到的就是現況
-            rec.finish(e)
-            print(f"{failed}：{e}", file=sys.stderr)
-            try:
-                from article_to_video.auto_checks import current_video
-
-                # 成片還是這份分鏡做的（例如只是被審片的必修擋下）就照樣內嵌，作者看得到被擋的是哪一版
-                review = make_review(e.plan, video=current_video(e.plan), contributors=default_contributors(args.data_dir),
-                                     jobs=args.jobs, log=log)
-                print(f"審片頁已更新（被擋下的原因標在卡片上）：{review.page}")
-            except KNOWN_ERRORS as e2:
-                print(f"審片頁也沒更新：{e2}", file=sys.stderr)
-            return 1
-        except KNOWN_ERRORS as e:
-            rec.finish(e)
-            print(f"{failed}：{e}", file=sys.stderr)
-            return 1
-        except BaseException as e:
-            rec.finish(e, unexpected=True)
-            raise
-        rec.finish()
-        _show_review(review.page, no_open=args.no_open, version=review.version)
-        return 0
-    if args.command == "narrate":
-        return _narrate(args)
-    if args.command == "publish":
-        return _publish(args)
-    if args.command == "open-review":
-        return _open_review(args)
-    if args.command in ("boxes", "confirm-box"):
-        return _boxes(args)
-    if args.command == "checks":
-        return _checks(args)
-    if args.command in ("review-prep", "review-frames", "review-record"):
-        return _review(args)
-    if args.command == "resolve":
-        from article_to_video.check_log import record_resolutions
-
-        status, note = ("fixed", args.fixed) if args.fixed is not None else ("accepted", args.accept)
-        try:
-            what = record_resolutions(args.project, args.tokens, status=status, note=note, by=args.by)
-        except ProjectError as e:
-            print(f"處理紀錄失敗：{e}", file=sys.stderr)
-            return 1
-        verb = "改好了" if status == "fixed" else f"接受不改（{args.by}）"
-        print(f"已記下 {len(what)} 項{verb}：")
-        print("\n".join(f"  {t}　{w}" for t, w in zip(args.tokens, what)))
-        print("審片頁下次 build／checks 時更新；正式出片不會再被這幾項擋下。")
-        return 0
-    if args.command == "new":
-        from article_to_video.videos import new_project
-
-        return new_project(args.source, title=args.title, root=args.root)
-    if args.command == "projects":
-        from article_to_video.videos import format_projects, list_projects, videos_root
-
-        infos = list_projects(args.root, args.query)
-        if args.json:
-            print(json.dumps([i.to_json() for i in infos], ensure_ascii=False, indent=1))
-        else:
-            print(format_projects(infos, videos_root(args.root)))
-        return 0
-    if args.command == "outline":
-        from article_to_video.feedback import format_outline, project_outline
-
-        try:
-            outline, narration = project_outline(args.project)
-        except ProjectError as e:
-            print(f"讀不到分鏡設定：{e}", file=sys.stderr)
-            return 1
-        print(format_outline(outline, narration))
-        return 0
-    if args.command == "lint":
-        from article_to_video.lint import format_lint, lint_project
-
-        try:
-            report = lint_project(args.project)
-        except ProjectError as e:
-            print(f"旁白檢查失敗：{e}", file=sys.stderr)
-            return 1
-        print(format_lint(report))
-        return 0 if report.ok else 1
-    if args.command == "feedback":
-        from pathlib import Path
-
-        from article_to_video.feedback import parse_feedback, project_outline
-        from article_to_video.textio import STDIN, TextInputError, read_text_input
-
-        try:
-            outline, narration = project_outline(args.project)
-        except ProjectError as e:
-            print(f"讀不到分鏡設定：{e}", file=sys.stderr)
-            return 1
-        ids = [o.id for o in outline]
-        by_id = {o.id: o for o in outline}
-        try:
-            text = read_text_input(args.file or STDIN)
-        except TextInputError as e:
-            print(f"讀不到留言：{e}", file=sys.stderr)
-            return 1
-        fb = parse_feedback(text)
-
-        def comment(c, sid):
-            item = {"number": c.number, "id": sid, "text": c.text}
-            o = by_id.get(sid)
-            if o is not None:  # 要改的地方：畫面是哪種、唸到哪幾段旁白（改旁白就改這幾段）
-                item.update(kind=o.kind, shows=o.shows, segments=o.segments,
-                            narration={k: narration[k] for k in o.segments})
-            return item
-
-        out = {
-            "project": fb.project,
-            "version": fb.version,
-            "shots": [comment(c, sid) for c, sid in zip(fb.shots, fb.resolve(ids))],
-            "overall": fb.overall,
-            "problems": fb.check(ids),
-        }
-        print(json.dumps(out, ensure_ascii=False, indent=1))
-        return 0
-    if args.command == "extract":
-        from article_to_video.article import run_extract
-
-        return run_extract(args.project, args.source)
-    if args.command == "report-issue":
-        from article_to_video.issue_report import create_report
-
-        try:
-            rep = create_report(args.project, shots=args.shot, note=args.note, out_dir=args.out_dir,
-                                log=lambda m: print(m, flush=True))
-        except OSError as e:
-            print(f"打包失敗：{e}", file=sys.stderr)
-            return 1
-        for w in rep.warnings:
-            print(f"注意：{w}")
-        print(f"已打包：{rep.zip_path}（{rep.size_mb:.1f} MB）")
-        print(f"裡面有：{'、'.join(rep.contents)}")
-        print("沒放：文章全文、成片、配音檔；路徑裡的使用者名稱已遮掉")
-        print("請把這個檔案用 LINE 傳給 Danny。")
-        return 0
-    if args.command == "reproduce-issue":
-        from article_to_video.issue_report import ReportError, reproduce_report
-
-        try:
-            res = reproduce_report(args.zip, out_dir=args.out, shots=args.shot, log=lambda m: print(m, flush=True))
-        except ReportError as e:
-            print(f"沒辦法重現：{e}", file=sys.stderr)
-            return 1
-        print(f"解開在：{res.out_dir}")
-        if res.report_note:
-            print(f"作者說：{res.report_note}")
-        if res.author_environment:
-            print("作者那台的環境：\n" + res.author_environment)
-        for n in res.notes:
-            print(f"注意：{n}")
-        for cid, mp4 in res.clips.items():
-            print(f"片段 {cid}：{mp4}")
-        for sid, ps in res.stills.items():
-            print(f"分鏡 {sid} 靜態圖：{ps[0].parent}（{len(ps)} 張）")
-        if res.errors:
-            print("重現出錯誤：\n" + "\n\n".join(res.errors), file=sys.stderr)
-            return 1
-        return 0
-    if args.command == "settings":
-        try:
-            return _settings(args)
-        except SettingsError as e:
-            print(f"設定失敗：{e}", file=sys.stderr)
-            return 1
-    if args.command == "samples":
-        try:
-            return _samples(args)
-        except KNOWN_ERRORS as e:
-            print(f"試聽檔產生失敗：{e}", file=sys.stderr)
-            return 1
-    if args.command == "check-env":
-        return _check_env(args)
-    if args.command == "install":
-        return _install(args)
-    if args.command == "test-video":
-        return _test_video(args)
-    return 2
+    return HANDLERS[args.command](args)

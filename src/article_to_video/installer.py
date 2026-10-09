@@ -28,10 +28,12 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from article_to_video.progress import Log
 from article_to_video.environment import (
     EnvCheck, SAY_INSTALL, check_chromium, check_edge_tts_online, check_uv,
 )
 from article_to_video.ffmpeg import FFmpegNotFoundError, default_ffmpeg_candidates, find_ffmpeg
+from article_to_video.macos import open_path
 from article_to_video.homebrew import (
     FFMPEG_FORMULA, INSTALL_SCRIPT_URL, BrewInfo, BrewLayout, default_layout, find_brew, keg_ffmpeg,
 )
@@ -39,7 +41,6 @@ from article_to_video.user_settings import resolve_data_dir
 
 __all__ = ["InstallReport", "Installer", "StepResult", "open_in_terminal", "run_streaming", "user_is_admin"]
 
-Log = Callable[[str], None]
 Act = Callable[..., int]
 """act(args, *, env=None, log) -> 結束碼：執行一個安裝指令，輸出逐行交給 log。"""
 
@@ -70,12 +71,7 @@ def run_streaming(args: Sequence[str], *, env: dict[str, str] | None = None, log
 
 def open_in_terminal(script: Path) -> bool:
     """用「終端機」打開 .command 腳本（不需要「自動化」權限；本機寫的檔沒有隔離屬性，不會跳警告）。"""
-    try:
-        proc = subprocess.run(["open", "-a", "Terminal", str(script)], capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return proc.returncode == 0
+    return open_path(script, app="Terminal", timeout=30)
 
 
 def user_is_admin() -> bool:

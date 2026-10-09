@@ -34,8 +34,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from article_to_video.progress import Log, quiet
 from article_to_video.check_log import load_log, now, resolution, save_log
-from article_to_video.clips import FONTS_DIR
+from article_to_video.clips import text_font
 from article_to_video.commands import PLUGIN_ROOT, aspect_args, cli_command
 from article_to_video.environment import SAY_UPDATE_PLUGIN
 from article_to_video.ffmpeg import find_ffmpeg
@@ -74,12 +75,6 @@ SHEET_ROWS = 4
 FREEZE_NOISE = "-35dB"
 FREEZE_SECONDS = 5
 """靜止片段：字幕帶以外連續這麼久幾乎不動（審片學到：−35 dB 才抓得到慢推的靜止，−40 dB 會被騙）。"""
-
-Log = Callable[[str], None]
-
-
-def _quiet(_: str) -> None:
-    pass
 
 
 # ---------------------------------------------------------------- 設定
@@ -190,12 +185,6 @@ def _extract_full(video: Path, frames: Sequence[int], fps: int, out_dir: Path, f
     return out
 
 
-def _font(size: int):
-    from PIL import ImageFont
-
-    return ImageFont.truetype(str(FONTS_DIR / "NotoSansTC-500.woff"), size)
-
-
 def _fit(draw, text: str, font, width: int) -> str:
     if draw.textlength(text, font=font) <= width:
         return text
@@ -210,7 +199,7 @@ def _sheets(tiles: Sequence[tuple[Path, str, str]], out_dir: Path, prefix: str, 
 
     names: list[str] = []
     per = SHEET_COLS * SHEET_ROWS
-    f1, f2 = _font(18), _font(16)
+    f1, f2 = text_font(18), text_font(16)
     for k in range(math.ceil(len(tiles) / per)):
         chunk = tiles[k * per:(k + 1) * per]
         with Image.open(chunk[0][0]) as im0:
@@ -259,7 +248,7 @@ def _shot_of(plan: BuildPlan, t: float) -> int | None:
     return None
 
 
-def prepare_review_kit(plan: BuildPlan, *, log: Log = _quiet) -> ReviewKit:
+def prepare_review_kit(plan: BuildPlan, *, log: Log = quiet) -> ReviewKit:
     """從成片做審片素材（見模組說明）。成片不是現在這份分鏡設定做出來的（改過還沒重新出片）就丟 ProjectError。"""
     from article_to_video.auto_checks import current_video
 

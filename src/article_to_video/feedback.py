@@ -22,6 +22,10 @@
 以及它唸到哪幾個旁白段——只看 shots.json 的切入點與 narration.json 的段落順序，不用配音：
 分鏡從某段開頭切入就從那段算起，到下一個分鏡切入為止；下一個分鏡從段中間（有寫 word）切入時，那段兩個分鏡都有份。
 作者說「旁白改成…」就改這些旁白段；`outline <專案>` 把整份列出來（打開舊專案、照分鏡編號改的時候用）。
+
+為什麼這裡自己讀 shots.json、不用 project.load_project：對留言的時候，分鏡設定常常正改到一半（作者一次留好幾則，
+Claude 改完第一則就要對下一則），load_project 會因為任何一個欄位不對就整份拒絕（那是建置要的嚴格）。這裡只拿
+編號、id、切入點和畫面上的字，看不懂的欄位就當沒有，讓留言照樣對得到分鏡；設定錯在哪由 preview／build 報。
 """
 
 from __future__ import annotations
@@ -32,9 +36,9 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from article_to_video.project import ProjectError, ProjectPaths
+from article_to_video.textio import read_json_or_none
 
 __all__ = ["HEADER_PREFIX", "ReviewFeedback", "ShotComment", "ShotOutline", "format_outline", "parse_feedback",
            "project_outline", "project_shot_ids"]
@@ -124,13 +128,6 @@ class ShotOutline:
     """畫面上主要的東西：圖表標題或標註；Vox 的圖N、剪報、框、卡片。"""
 
 
-def _read_loose(path: Path) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
 def _shows(shot: dict) -> str:
     chart, vox = shot.get("chart"), shot.get("vox")
     if isinstance(chart, dict):
@@ -168,9 +165,9 @@ def project_outline(project_dir: str | os.PathLike) -> tuple[list[ShotOutline], 
     """每個分鏡的大綱與它唸到的旁白段，加上全部旁白段的文字。只讀 JSON、寬鬆（設定改到一半也能用）。"""
     paths = ProjectPaths(Path(project_dir).absolute())
     ids = project_shot_ids(project_dir)
-    raw = _read_loose(paths.shots)
+    raw = read_json_or_none(paths.shots)
     shots = [s if isinstance(s, dict) else {} for s in raw["shots"]]
-    nraw = _read_loose(paths.narration)
+    nraw = read_json_or_none(paths.narration)
     segs = nraw.get("segments") if isinstance(nraw, dict) else None
     narration = {k: v for k, v in segs.items() if isinstance(v, str)} if isinstance(segs, dict) else {}
     order = list(narration)

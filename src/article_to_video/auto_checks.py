@@ -43,19 +43,22 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from article_to_video.progress import Log, quiet
 from article_to_video.check_log import load_log, now, resolution
-from article_to_video.clip_cache import clip_hash
+from article_to_video.clip_cache import clip_hash, clip_is_current, clip_stamp
 from article_to_video.commands import cli_command
-from article_to_video.clips import QA_SCRIPT, _absolutize_images
+from article_to_video.clips import (
+    GRAMMAR_CHART, GRAMMAR_END_CARD, GRAMMAR_VOX, QA_SCRIPT, absolutize_images, default_jobs, run_parallel,
+)
 from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.project import ProjectError
 from article_to_video.review_page import timecode
+from article_to_video.textio import read_json_or_none
 
 if TYPE_CHECKING:
     from article_to_video.build import BuildPlan
@@ -79,16 +82,14 @@ __all__ = [
     "run_checks",
 ]
 
-Log = Callable[[str], None]
 
 QA_VERSION = "1"
 QA_SHORT_SIDE = 540
 """qa 渲的畫面短邊（px）：1080p 的片段縮一半渲，快 2～3 倍，量到的東西一樣（比例）。"""
 QA_FPS = 30
 
-CHART = "t3_finance_chart"
-VOX = "y2_vox"
-CARD = "a2v_end_card"
+CHART, VOX, CARD = GRAMMAR_CHART, GRAMMAR_VOX, GRAMMAR_END_CARD
+"""門檻表的三欄（財經圖表、Vox、片尾卡）。"""
 
 CHECK_LABELS = {
     "page-error": "頁面報錯",
@@ -128,10 +129,6 @@ BAND_FAIL = 0.3
 """壓進字幕帶累計這麼多秒以上算 fail（過場一閃 0.1～0.2 秒算 warn）。"""
 HOLD_WARN = 5.0
 """旁白期間超過這麼多秒沒有新的畫面事件就提醒（審片規則：一句旁白一個畫面事件，6 秒沒新資訊就算靜止）。"""
-
-
-def _quiet(_: str) -> None:
-    pass
 
 
 # ---------------------------------------------------------------- 結果
@@ -224,7 +221,7 @@ def _qa_scale(spec: dict[str, Any]) -> float:
 
 
 def _qa_spec(cp: ClipPlan, project_root: Path) -> dict[str, Any]:
-    spec = _absolutize_images(copy.deepcopy(cp.spec), project_root)
+    spec = absolutize_images(copy.deepcopy(cp.spec), project_root)
     s = _qa_scale(spec)
     if s < 1.0:
         spec["width"] = round(int(spec.get("width", 1920)) * s / 2) * 2
@@ -242,15 +239,8 @@ def _qa_key(cp: ClipPlan) -> str:
     return h.hexdigest()
 
 
-def _read_json(path: Path) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-
-
 def _load_qa(out: Path) -> dict[str, Any] | None:
-    report = _read_json(out / "qa.json")
+    report = read_json_or_none(out / "qa.json")
     if not isinstance(report, dict) or not report.get("segments"):
         return None
     rec = dict(report["segments"][0])
@@ -288,7 +278,7 @@ def _qa_dir(plan: BuildPlan) -> Path:
 
 
 def _cached_qa(out: Path, key: str) -> dict[str, Any] | None:
-    stamp = _read_json(out / "stamp.json")
+    stamp = read_json_or_none(out / "stamp.json")
     if isinstance(stamp, dict) and stamp.get("key") == key and isinstance(stamp.get("result"), dict):
         return stamp["result"]
     return None
@@ -307,14 +297,6 @@ def _band_px(cp: ClipPlan) -> int:
 def _band_key(cp: ClipPlan) -> str:
     payload = [BAND_VERSION, clip_hash(cp), _band_px(cp), BAND_FPS, BAND_DARK, BAND_RATIO]
     return hashlib.sha256(json.dumps(payload).encode()).hexdigest()
-
-
-def _clip_is_current(plan: BuildPlan, cp: ClipPlan) -> bool:
-    mp4, stamp = plan.paths.clips / f"{cp.id}.mp4", plan.paths.clips / f"{cp.id}.sha256"
-    try:
-        return mp4.is_file() and stamp.read_text(encoding="utf-8").strip() == clip_hash(cp)
-    except OSError:
-        return False
 
 
 def _scan_band(plan: BuildPlan, cp: ClipPlan, ffmpeg: Path) -> dict[str, Any]:
@@ -355,12 +337,12 @@ def _check_band(plan: BuildPlan, cp: ClipPlan, ffmpeg: Path | None) -> dict[str,
         return None
     path = plan.paths.root / "checks" / "band" / f"{cp.id}.json"
     key = _band_key(cp)
-    cached = _read_json(path)
+    cached = read_json_or_none(path)
     if isinstance(cached, dict) and cached.get("key") == key and isinstance(cached.get("result"), dict):
         return cached["result"]
     if ffmpeg is None:
         return {"top": int(cp.spec["height"]) - _band_px(cp), "pending": True}
-    if not _clip_is_current(plan, cp):
+    if not clip_is_current(cp, plan.paths):
         return {"top": int(cp.spec["height"]) - _band_px(cp), "error": "這個片段還沒渲好（先出片再檢查）"}
     result = _scan_band(plan, cp, ffmpeg)
     if "error" not in result:
@@ -523,8 +505,6 @@ def _shots_at(plan: BuildPlan, cc: ClipCheck, times: Sequence[tuple[float, float
     return tuple(hit) or cc.shot_ids
 
 
-
-
 # ---------------------------------------------------------------- 執行
 
 
@@ -551,12 +531,10 @@ def _collect(plan: BuildPlan, *, run: bool, jobs: int | None, log: Log) -> Check
             if d.is_dir() and d.name not in keep:
                 shutil.rmtree(d)
         if todo:
-            n_jobs = jobs or min(4, max(1, (os.cpu_count() or 2) // 2))
+            n_jobs = jobs or default_jobs()
             log(f"qa：{len(todo)} 個片段要跑（{len(cached)} 個用快取，最多同時 {n_jobs} 個）…")
-            with ThreadPoolExecutor(max_workers=max(1, min(n_jobs, len(todo)))) as pool:
-                futures = {cp.id: pool.submit(_run_qa, cp, root / cp.id, plan.project.root, key) for cp, key in todo}
-                for cid, fut in futures.items():
-                    results[cid] = fut.result()
+            done = run_parallel(todo, lambda t: _run_qa(t[0], root / t[0].id, plan.project.root, t[1]), jobs=n_jobs)
+            results.update((cp.id, rec) for (cp, _), rec in zip(todo, done))
         else:
             log(f"qa：{len(cached)} 個片段都沒變，用快取")
     ffmpeg = find_ffmpeg() if run else None
@@ -572,7 +550,7 @@ def _collect(plan: BuildPlan, *, run: bool, jobs: int | None, log: Log) -> Check
                        ran=[cp.id for cp, _ in todo] if run else [], cached=cached)
 
 
-def run_checks(plan: BuildPlan, *, jobs: int | None = None, log: Log = _quiet) -> CheckReport:
+def run_checks(plan: BuildPlan, *, jobs: int | None = None, log: Log = quiet) -> CheckReport:
     """每個片段跑 qa、白底片段跑字幕帶檢查（有快取、並行），彙整成 CheckReport，寫 build/<比例>/checks.json。
     字幕帶檢查看的是渲好的片段（出片之後才有）；片段還沒渲好的，那一項記成 fail「先出片再檢查」。"""
     report = _collect(plan, run=True, jobs=jobs, log=log)
@@ -582,7 +560,7 @@ def run_checks(plan: BuildPlan, *, jobs: int | None = None, log: Log = _quiet) -
 
 def load_check_report(plan: BuildPlan) -> CheckReport:
     """只讀快取、不跑任何東西（審片頁、出片前的檢查用）：片段沒變的拿上次的結果，改過的算還沒檢查。"""
-    return _collect(plan, run=False, jobs=None, log=_quiet)
+    return _collect(plan, run=False, jobs=None, log=quiet)
 
 
 def checks_json(plan: BuildPlan) -> Path:
@@ -591,7 +569,7 @@ def checks_json(plan: BuildPlan) -> Path:
 
 def clips_not_built(plan: BuildPlan) -> list[str]:
     """還沒渲、或渲的是舊內容的片段 id（自動檢查要在出片之後跑）。"""
-    return [cp.id for cp in plan.clips if not _clip_is_current(plan, cp)]
+    return [cp.id for cp in plan.clips if not clip_is_current(cp, plan.paths)]
 
 
 def current_video(plan: BuildPlan) -> Path | None:
@@ -599,7 +577,7 @@ def current_video(plan: BuildPlan) -> Path | None:
     video = plan.project.paths.video(plan.format.name)
     if not video.is_file() or not plan.paths.final_stamp.is_file() or clips_not_built(plan):
         return None
-    newest = max((plan.paths.clips / f"{cp.id}.sha256").stat().st_mtime for cp in plan.clips)
+    newest = max(clip_stamp(plan.paths, cp.id).stat().st_mtime for cp in plan.clips)
     return video if video.stat().st_mtime >= newest else None
 
 
