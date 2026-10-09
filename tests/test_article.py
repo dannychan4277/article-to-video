@@ -92,6 +92,12 @@ def _normal_html() -> str:
     )
 
 
+INDENTED = [
+    "第一段沒有段落間距，只靠開頭空兩格分段。這一段要寫得夠長，長到在紙上一定會換成兩行以上，才看得出換行跟分段的差別。",
+    "第二段也是一樣，開頭空兩格。長天期利率反映市場對未來的預期，短天期利率跟著政策利率走，兩者的差距就是殖利率曲線的斜率。",
+    "第三段短一點，也要換行才行：這是第三段的內容，寫到這裡應該已經超過一行的寬度了吧，再多寫幾個字比較保險。",
+]
+WIDGET_URL = "https://example.com/p/一個很長很長很長的網址會被分享卡片的窄框藏起來"
 TRUNCATED_TEXT = ("這一段放在固定寬度的版面裡，版面比紙張能印的範圍還寬，所以每一行最後幾個字都會被切掉，"
                   "存成 PDF 之後那些字就不見了。") * 6
 
@@ -112,6 +118,8 @@ class SamplePdfs:
     normal: Path
     truncated: Path
     scanned: Path  # 整頁只有一張圖、沒有文字層（像掃描檔）
+    indented: Path  # 段落之間不空行、靠首行縮排分段（中文 Word 文件常見）
+    widget: Path  # 頁面裡有個窄框把超出的網址藏起來（網頁的分享卡片），不是截字
 
 
 @pytest.fixture(scope="session")
@@ -126,6 +134,9 @@ def sample_pdfs(tmp_path_factory) -> SamplePdfs:
         "normal": (_normal_html(), margin, True),
         "truncated": (_truncated_html(), wide_margin, True),
         "scanned": (_html(f"<img src='{_data_uri(_photo_jpeg(), 'image/jpeg')}' style='width:100%'>"), margin, False),
+        "indented": (_html("".join(f"<p style='margin:0; text-indent:2em'>{t}</p>" for t in INDENTED)), margin, False),
+        "widget": (_html(f"<p>{P1}</p><div style='width:180px; overflow:hidden; white-space:nowrap; font-size:10pt'>"
+                         f"{WIDGET_URL}</div><p>{END}</p>"), margin, False),
     }
     paths = {}
     with sync_playwright() as p:
@@ -185,27 +196,6 @@ def test_pdf_images_are_full_resolution_originals_numbered_in_order(tmp_path, sa
     assert (second["caption"], second["before"], second["after"]) == (None, n[P2], n[P3])
 
 
-def test_pasted_text_is_saved_as_paragraphs(tmp_path):
-    project = tmp_path / "影片" / "2026-10-09-測試"
-    pasted = "短天期利率比較高。\n\n長天期利率比較低，\n這一行是同一段的後半。\n"
-
-    extract_article(project, text=pasted)
-
-    article = project / "article"
-    assert (article / "source.txt").read_text(encoding="utf-8") == pasted
-    assert (article / "text.txt").read_text(encoding="utf-8") == (
-        "短天期利率比較高。\n\n長天期利率比較低，這一行是同一段的後半。\n"
-    )
-    manifest = _manifest(project)
-    assert [p["text"] for p in manifest["paragraphs"]] == [
-        "短天期利率比較高。",
-        "長天期利率比較低，這一行是同一段的後半。",
-    ]
-    assert [p["n"] for p in manifest["paragraphs"]] == [1, 2]
-    assert manifest["images"] == []
-    assert manifest["source"]["kind"] == "text"
-
-
 def test_pdf_with_text_cut_off_at_the_page_edge_is_rejected_with_how_to_resave(tmp_path, sample_pdfs):
     project = tmp_path / "專案"
     extract_article(project, text="先前擷取的文章。")  # 已經有一份擷取結果
@@ -226,10 +216,25 @@ def test_pdf_with_text_cut_off_at_the_page_edge_is_rejected_with_how_to_resave(t
     assert sorted(f.name for f in article.iterdir()) == ["article.json", "images", "source.txt", "text.txt"]
 
 
+def test_pdf_paragraphs_split_by_first_line_indent(tmp_path, sample_pdfs):
+    extract_article(tmp_path / "專案", sample_pdfs.indented)
+    assert [p["text"] for p in _manifest(tmp_path / "專案")["paragraphs"]] == INDENTED
+
+
+def test_text_hidden_inside_a_narrow_box_is_not_called_truncation(tmp_path, sample_pdfs):
+    """網頁上的小卡片（overflow:hidden）把長網址藏起來是排版，不是印的時候被頁面切掉。"""
+    extract_article(tmp_path / "專案", sample_pdfs.widget)
+    texts = [p["text"] for p in _manifest(tmp_path / "專案")["paragraphs"]]
+    assert texts[0] == P1 and texts[-1] == END
+
+
 def test_pdf_without_a_text_layer_is_rejected(tmp_path, sample_pdfs):
     with pytest.raises(ArticleError, match="沒有文字"):
         extract_article(tmp_path / "專案", sample_pdfs.scanned)
     assert not (tmp_path / "專案" / "article").exists()
+
+
+# ---------------------------------------------------------------- 讀不了的檔案
 
 
 @pytest.mark.parametrize(("name", "hint"), [("文章.pages", "輸出至"), ("文章.doc", "另存新檔"), ("文章.key", ".docx")])
@@ -367,6 +372,41 @@ def test_google_docs_markdown_export_with_embedded_image(tmp_path):
     (image,) = manifest["images"]
     assert (image["width"], image["height"], image["caption"], image["before"]) == (1200, 800, CAPTION1, 2)
     assert (project / "article" / image["file"]).read_bytes() == _chart_png()
+
+
+# ---------------------------------------------------------------- 貼上的文字、重跑
+
+
+def test_pasted_text_is_saved_as_paragraphs(tmp_path):
+    project = tmp_path / "影片" / "2026-10-09-測試"
+    pasted = "短天期利率比較高。\n\n長天期利率比較低，\n這一行是同一段的後半。\n"
+
+    extract_article(project, text=pasted)
+
+    article = project / "article"
+    assert (article / "source.txt").read_text(encoding="utf-8") == pasted
+    assert (article / "text.txt").read_text(encoding="utf-8") == (
+        "短天期利率比較高。\n\n長天期利率比較低，這一行是同一段的後半。\n"
+    )
+    manifest = _manifest(project)
+    assert [p["text"] for p in manifest["paragraphs"]] == [
+        "短天期利率比較高。",
+        "長天期利率比較低，這一行是同一段的後半。",
+    ]
+    assert [p["n"] for p in manifest["paragraphs"]] == [1, 2]
+    assert manifest["images"] == []
+    assert manifest["source"]["kind"] == "text"
+
+
+def test_rerun_replaces_the_previous_extraction(tmp_path, sample_pdfs):
+    project = tmp_path / "專案"
+    extract_article(project, sample_pdfs.normal)
+    extract_article(project, text="換成貼上的文字。")
+
+    article = project / "article"
+    assert sorted(f.name for f in article.iterdir()) == ["article.json", "images", "source.txt", "text.txt"]
+    assert list((article / "images").iterdir()) == []  # 上一份的圖1、圖2 不會留著
+    assert _manifest(project)["images"] == []
 
 
 # ---------------------------------------------------------------- 指令列
