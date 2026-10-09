@@ -13,6 +13,7 @@ zip 裡只放重現需要的東西：
       narration.json       旁白稿
       shots.json           分鏡設定（出錯分鏡引用專案外的圖時，改指 _外部圖片/）
       settings.json        設定快照
+      public_data/<代號>.json   公有數據快照（公有領域；重現不用重抓，數字跟作者那台一樣）
       article/…            只有出錯分鏡引用到的圖（原本的相對路徑）
       _外部圖片/…           出錯分鏡引用到、但在專案資料夾外的圖
       build/narration/<鍵>.json   配音層的時間點（沒有音檔：重現時補同長度的靜音，不重新配音、不連網）
@@ -427,6 +428,9 @@ def create_report(
         for f in (paths.narration, paths.settings):
             if f.is_file():
                 add_text(f"{PROJECT_DIR}/{f.name}", f.read_text(encoding="utf-8"))
+        # 公有數據快照（公有領域、很小）：維護者那台不用重抓，數字也跟作者那台一樣
+        for f in sorted(paths.public_data.glob("*.json")) if paths.public_data.is_dir() else []:
+            add_text(f"{PROJECT_DIR}/public_data/{f.name}", f.read_text(encoding="utf-8"))
         if paths.shots.is_file():
             shots_text, images, external = _pack_images(paths, target)
             add_text(f"{PROJECT_DIR}/{paths.shots.name}", shots_text)

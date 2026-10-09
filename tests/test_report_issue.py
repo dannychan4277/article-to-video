@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from conftest import MINI_PROJECT
+from test_public_data import fred  # noqa: F401 — 127.0.0.1 上的假 FRED（#7 的 fixture）
 
 
 def cli(*args: str, env: dict | None = None) -> subprocess.CompletedProcess:
@@ -211,6 +212,26 @@ def test_report_without_a_project_still_carries_the_environment(tmp_path):
         names = z.namelist()
         assert "environment.json" in names and "問題描述.txt" in names
         assert not [n for n in names if n.startswith("project/")]
+
+
+def test_public_data_chart_reproduces_from_the_zip_without_fetching_again(tmp_path, fred, monkeypatch, capsys):
+    """公有數據的圖：zip 帶著作者那台抓到的數字快照，維護者那台不用再抓（數字也可能已經改了）。"""
+    from test_public_data import chart_shot, make_project
+
+    root = make_project(tmp_path, [chart_shot({"series": "DGS10", "from": "2024-12-16", "to": "2024-12-20", "every": "day"})])
+    assert cli("build", str(root), "--tts", "fake").returncode == 0
+    fetched = len(fred.requests)
+    rep = cli("report-issue", str(root), "--shot", "SH01", "--out-dir", str(tmp_path / "桌面"))
+    assert rep.returncode == 0, rep.stdout + rep.stderr
+    [zpath] = (tmp_path / "桌面").glob("*.zip")
+
+    monkeypatch.setenv("ARTICLE_TO_VIDEO_FRED_URL", "http://127.0.0.1:9/graph/fredgraph.csv")  # 維護者那台抓不到
+    forbid_narration(monkeypatch)
+    from article_to_video.cli import main
+
+    assert main(["reproduce-issue", str(zpath), "--out", str(tmp_path / "重現")]) == 0, capsys.readouterr().err
+    assert len(fred.requests) == fetched
+    assert (tmp_path / "重現" / "重現" / "clips" / "SH01.mp4").is_file()
 
 
 SKILL = Path(__file__).resolve().parent.parent / "skills" / "report-issue" / "SKILL.md"
