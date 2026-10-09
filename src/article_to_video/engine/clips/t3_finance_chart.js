@@ -12,6 +12,9 @@ const RED = '#E3120B', INK = '#0C0C0C', SUB = '#4F5B61', GRID = 'rgba(12,12,12,0
 const CN = '"PuHui-Medium"', CNB = '"PuHui-Bold"', NUM = '"RobotoCondensed", "PuHui-Medium"';
 let L, BUF;
 const fmtv = (d, v) => (d.prefix || '') + TY.fmt(v, d.decimals ?? 1) + (d.suffix || '');
+// [article-to-video 內嵌修改] 負數柱標註的版面（×u×字級倍數）：數值標籤占柱底下方多高（CH.bars 寫在柱底 +12、字最大 34）、
+// 標籤到文字塊的間隔、第一行（50 號粗體）基線離文字塊上緣多遠、第二行基線再往下多少
+const NEG_LABEL = 50, NEG_GAP = 18, NEG_LINE1 = 44, NEG_LINE2 = 40;
 // [article-to-video 內嵌修改] 品牌色：data.colors.brand 取代「當品牌用的紅」（頂端色條、小旗、角標、標註圓點、大數字、折線預設色）；
 // 沒寫就是原本的紅。K 線的漲跌紅綠是語意色，不跟品牌走。#RRGGBB／#RGB 換成 rgba（折線下方漸層、角標底色用）。
 const rgba = (col, a, fb) => { const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(col || ''); if (!m) return fb; let h = m[1]; if (h.length === 3) h = [...h].map(x => x + x).join('');
@@ -61,6 +64,11 @@ return {
     if (kind === 'bar' && hiI >= 0 && S[hiI] && S[hiI].value >= 0) {   // 标注的柱子上方要留够文字块（[Danny 本机改] 原本只管「不是最高那根」；标最高那根时斜向标注被 ty 夹在 F.y+60，文字压回柱子上）
       const nL = [C(qh1.text, H1.text), C(qh1.sub, H1.sub)].filter(Boolean).length, need = (52 * nL + 44 + 30) * u * fs0, vmax = Math.max(...vals); roomFor(need);
       while ((ticks[ticks.length - 1] - vmax) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
+    }
+    if (kind === 'bar' && hiI >= 0 && S[hiI] && S[hiI].value < 0) {    // [article-to-video 內嵌修改] 負數柱的標註放在數值標籤正下方：最低那根柱下面再留出標註文字的高度
+      const nL = [C(qh1.text, H1.text), C(qh1.sub, H1.sub)].filter(Boolean).length, vmin = Math.min(...vals);
+      const need = (NEG_LABEL + NEG_GAP + NEG_LINE1 + NEG_LINE2 * (nL - 1) + 12) * u * fs0; roomFor(need);
+      while ((vmin - ticks[0]) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.unshift(+(ticks[0] - step).toFixed(10));
     }
     if (kind === 'line' && hiI >= 0) {                                    // [Danny 本机改] 折线标注：线的最高点之上留够文字块，斜向标注才不会压在线上
       const vmax = Math.max(...vals), need = 170 * u * fs0; roomFor(need);
@@ -158,7 +166,25 @@ return {
       const bx0 = right ? tx - 12 - tw : tx + 12, bx1 = bx0 + tw, by1 = ty + (ls.length > 1 ? 56 : 16) * u;
       above = L.tops.some(([bx, by], j) => j !== hi && bx + L.slot * 0.45 > bx0 && bx - L.slot * 0.45 < bx1 && by - 44 * u * fs < by1);
     }
-    if (qh && anchor && kind === 'bar' && above) {
+    if (qh && anchor && kind === 'bar' && L.neg) {
+      // [article-to-video 內嵌修改] 負數柱：數值標籤寫在柱底下方（CH.bars），原版的斜向標註往下拉會壓在標籤上（「-2.6%」被「跌最深」蓋住）。
+      // 改成文字塊放在這根柱的數值標籤正下方（也讓開它橫跨到的其他負數柱與它們的標籤），引線從標籤下緣垂直拉下來；圓點照舊在柱底左角。
+      const H0 = d.highlight || {}, lines = [C(qh.text, H0.text), C(qh.sub, H0.sub)].filter(Boolean), k = ctx.lt(t, qh.at);
+      if (k > 0) {
+        const s = MO.spring(k, { duration: 0.45, bounce: 0.25 }), lp = MO.quintOut(MO.seg(k, 0.12, 0.45)), fp = MO.quintOut(MO.seg(k, 0.3, 0.7));
+        const [x, y] = anchor, vlab = NEG_LABEL * u * fs;
+        c.save(); c.font = `700 ${50 * u * fs}px ${NUM}`; let tw = c.measureText(lines[0]).width; c.font = `400 ${28 * u * fs}px ${CN}`; if (lines[1]) tw = Math.max(tw, c.measureText(lines[1]).width);
+        const cx = clamp(x, F.x + tw / 2, F.x + F.w - 80 * u - tw / 2);
+        const cover = L.tops.filter(([bx]) => bx > cx - tw / 2 - L.slot / 2 && bx < cx + tw / 2 + L.slot / 2).map(([, by]) => by > yS(0) ? by + vlab : yS(0));
+        const top = Math.max(y + vlab, ...cover) + NEG_GAP * u * fs;   // 文字塊上緣
+        c.fillStyle = L.col.ink; c.beginPath(); c.arc(x - Math.min(150 * u, L.slot * 0.62) / 2, y, 9 * u * Math.max(0, s), 0, 7); c.fill();
+        const y0 = y + vlab, y1 = top - 6 * u;
+        if (y1 - y0 > 6 * u) { c.strokeStyle = INK; c.lineWidth = 2 * u; c.beginPath(); c.moveTo(x, y0); c.lineTo(lerp(x, cx, lp), lerp(y0, y1, lp)); c.stroke(); }
+        c.globalAlpha = fp; c.fillStyle = INK; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
+        lines.forEach((ln, i) => { c.font = i === 0 ? `700 ${50 * u * fs}px ${NUM}` : `400 ${28 * u * fs}px ${CN}`; c.fillText(ln, cx, top + (NEG_LINE1 + i * NEG_LINE2) * u * fs + (1 - fp) * 12 * u); });
+        c.restore();
+      }
+    } else if (qh && anchor && kind === 'bar' && above) {
       const H0 = d.highlight || {}, lines = [C(qh.text, H0.text), C(qh.sub, H0.sub)].filter(Boolean), k = ctx.lt(t, qh.at);
       if (k > 0) {
         const s = MO.spring(k, { duration: 0.45, bounce: 0.25 }), lp = MO.quintOut(MO.seg(k, 0.12, 0.45)), fp = MO.quintOut(MO.seg(k, 0.3, 0.7));
@@ -179,7 +205,7 @@ return {
       if (kind === 'bar') anchor = [anchor[0] - Math.min(150 * u, L.slot * 0.62) / 2, anchor[1]];
       const H0 = d.highlight || {}, lines = [C(qh.text, H0.text), C(qh.sub, H0.sub)].filter(Boolean);
       const right = anchor[0] > F.x + F.w * 0.55, tx = right ? anchor[0] - 60 * u : anchor[0] + 60 * u;
-      const ty = L.neg ? Math.min(F.y + F.h - 90 * u, anchor[1] + 70 * u) : Math.max(F.y + 60 * u, anchor[1] - 140 * u);   // 负数柱：标注往下走，别压回零线上方的柱子
+      const ty = Math.max(F.y + 60 * u, anchor[1] - 140 * u);   // [article-to-video 內嵌修改] 負數柱另外處理（上面那段），這裡只剩正數柱與折線、K 線
       CH.callout(c, ctx.lt(t, qh.at), 0, { x: anchor[0], y: anchor[1], tx, ty, lines, col: INK, dotCol: L.col.ink, font: `700 ${50 * u}px ${NUM}`, font2: `400 ${28 * u * fs}px ${CN}`, align: right ? 'right' : 'left', r: 9 * u });
     }
     // ---- 大数字（number cue：at = 落定时刻） ----

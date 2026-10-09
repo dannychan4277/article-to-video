@@ -136,6 +136,42 @@ def test_vox_clip_renders_stills_from_a_relative_image(tmp_path):
     assert result.warnings == []
 
 
+@pytest.mark.parametrize("aspect", ["16x9", "9x16"])
+def test_annotation_on_a_negative_bar_leaves_its_value_label_readable(tmp_path, aspect):
+    """負數柱（實質殖利率常常是負的）的標註不能壓到那根柱的數值標籤（例「-0.9%」）。
+    標註出現前後各一張靜態圖：數值標籤那一塊在標註出現後一個像素都不能變，標註本身要畫在別處。數字是自製的示意數字。"""
+    import numpy as np
+    from PIL import Image
+
+    from article_to_video.timeline import FORMATS
+
+    spec = {
+        "grammar": "t3_finance_chart", "duration": 2.5, **FORMATS[aspect].spec_base(),
+        "data": {"title": "實質殖利率：有幾年是負的", "unit": "示意數據，%", "source": "來源：測試用自製數字",
+                 "chart": "bar", "decimals": 1, "suffix": "%",
+                 "series": [{"label": "甲", "value": 1.2}, {"label": "乙", "value": -0.9},
+                            {"label": "丙", "value": 0.6}, {"label": "丁", "value": -1.4}],
+                 "highlight": {"index": 1, "text": "跌最深", "sub": "負的實質殖利率"}},
+        "cues": [{"at": 0, "kind": "title"}, {"at": 0.1, "kind": "bar"}, {"at": 1.5, "kind": "highlight"}],
+    }
+    before, after = (np.asarray(Image.open(p).convert("RGB")).astype(int)
+                     for p in render_stills(spec, tmp_path, [1.4, 2.45]).paths)
+    # 標註的那根柱：標註出現後只有它還是主色藍（#006BA2），其他柱淡掉
+    blue = (np.abs(after - np.array([0x00, 0x6B, 0xA2])).max(axis=-1) <= 12)
+    ys, xs = np.nonzero(blue)
+    x0, x1, bottom = xs.min(), xs.max(), ys.max()
+    # 數值標籤：標註出現前，柱底下方、這根柱那一欄裡的黑字
+    col = before[bottom + 2: bottom + 90, x0 - 40: x1 + 41]
+    ly, lx = np.nonzero(col.max(axis=-1) < 100)
+    assert len(ly) > 50, "找不到負數柱的數值標籤"
+    top, left = bottom + 2 + ly.min() - 4, x0 - 40 + lx.min() - 4
+    label = (slice(top, bottom + 2 + ly.max() + 5), slice(left, x0 - 40 + lx.max() + 5))
+    changed = int((np.abs(after[label] - before[label]).max(axis=-1) > 40).sum())
+    assert changed == 0, f"標註壓到數值標籤：標籤那一塊有 {changed} 個像素變了"
+    drawn = int(((np.abs(after - before).max(axis=-1) > 40) & (before.max(axis=-1) > 200)).sum())
+    assert drawn > 1000  # 標註真的有畫出來（畫在別處）
+
+
 def test_page_error_fails_loudly(tmp_path):
     out = tmp_path / "bad.mp4"
     spec = short_chart_spec("十年期殖利率", grammar="no_such_grammar")
