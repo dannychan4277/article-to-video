@@ -168,6 +168,8 @@ def test_preview_writes_one_card_per_shot_each_with_its_narration(previewed_proj
 
 def test_preview_renders_stills_only_not_the_video(previewed_project):
     root = previewed_project.dir
+    page = read_review(root)
+    assert page.attrs["data-stage"] == "preview" and "還沒出片" in page.stage_text
     assert not (root / "成片.mp4").exists()
     assert not (root / "字幕.srt").exists()
     clips = root / "build" / "16x9" / "clips"
@@ -240,7 +242,9 @@ def test_each_card_shows_where_the_shot_sits_in_the_video(previewed_project):
 
 def test_after_the_final_build_the_page_embeds_the_video(built_project):
     page = read_review(built_project.dir)
-    assert page.attrs.get("data-stage") == "final"
+    assert page.attrs.get("data-stage") == "review"
+    # build 做的是給作者審的影片，還沒放進影片資料夾：頁首不能說「已出片」
+    assert "已出片" not in page.stage_text and "還沒出片" in page.stage_text, page.stage_text
     assert len(page.videos) == 1
     assert local_file(built_project.dir, page.videos[0]).resolve() == built_project.video.resolve()
     assert [(c.number, c.id) for c in page.cards] == [(1, "SH01"), (2, "SH02")]
@@ -291,9 +295,9 @@ def test_rebuilt_page_marks_the_shots_that_changed_since_the_last_version(copy_o
     assert stills_after["SH01"] == stills_before["SH01"]  # 沒改的分鏡不重渲靜態圖
     assert stills_after["SH02"] != stills_before["SH02"]
 
-    run_cli("build", root)  # 沒再改：出片後還是第 2 版，標記留著
+    run_cli("build", root)  # 沒再改：建置之後還是第 2 版，標記留著
     page = read_review(root)
-    assert page.attrs["data-stage"] == "final"
+    assert page.attrs["data-stage"] == "review"
     assert page.attrs["data-version"] == "2"
     assert changed_ids(page) == ["SH02"]
 

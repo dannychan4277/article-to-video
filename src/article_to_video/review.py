@@ -360,9 +360,31 @@ def _storage_key(plan: BuildPlan) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def _published(plan: BuildPlan) -> dict | None:
+    """這個比例最近一次出片的紀錄（publish 寫的 output.json），而且出的就是現在這份成片；不然 None。"""
+    from article_to_video.videos import load_outputs
+
+    rec = load_outputs(plan.project.root).get(plan.format.name)
+    stamp = plan.paths.final_stamp
+    current = stamp.read_text(encoding="utf-8") if stamp.is_file() else None
+    return rec if rec and current and rec.get("videoKey") == current else None
+
+
+def _finder_path(video: str) -> str:
+    """成片所在資料夾，用作者在 Finder 看到的說法（~/Movies 叫「影片」）。"""
+    folder = Path(video).parent
+    try:
+        rel = folder.relative_to(Path.home() / "Movies")
+        parts = ["影片", *rel.parts]
+    except ValueError:
+        parts = [folder.parent.name, folder.name]
+    return " → ".join(p for p in parts if p)
+
+
 def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], video: Path | None,
                 narration: dict[str, list[NarrationPiece]], version: _Version, extras: ReviewExtras) -> PageModel:
     fps = plan.timeline.fps
+    published = _published(plan) if video else None
     cards = [
         CardModel(
             id=st.shot.id,
@@ -381,7 +403,7 @@ def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], vid
         title=video_title(plan.project.root),
         storage_key=_storage_key(plan),
         version=version.number,
-        stage="final" if video else "preview",
+        stage="published" if published else "review" if video else "preview",
         generated=datetime.now().strftime("%Y-%m-%d %H:%M"),
         duration=plan.timeline.duration,
         cards=cards,
@@ -389,6 +411,8 @@ def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], vid
         removed=version.removed,
         page_sections=list(extras.page),
         aspect=plan.format.name,
+        published_to=_finder_path(published["video"]) if published and published.get("video") else "",
+        published_version=published.get("reviewVersion") if published else None,
     )
 
 

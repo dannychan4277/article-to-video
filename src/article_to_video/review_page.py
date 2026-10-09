@@ -1,7 +1,8 @@
 """審片頁的 HTML（一個檔、樣式與程式內嵌、不連網，作者在 Finder 點兩下就能看）。
 
 頁面結構（測試與後面的票靠這些 class／id 找東西）：
-  <html data-stage="preview|final" data-version="N">
+  <html data-stage="preview|review|published" data-version="N">
+  .stage（頁首）：預覽／審片用的影片（還沒出片）／已出片（放在哪）
   article.card[data-shot-id][data-shot-number][data-changed]   每個分鏡一張
     .timecode（有成片時是 button.seek[data-start]）、img.still[data-t]（第一張＝完成狀態）、.narration
     .slot[data-slot="numbers"]   數字對帳（#5 填）      .slot[data-slot="checks"]  自動檢查（#11 填）
@@ -91,7 +92,7 @@ class PageModel:
     storage_key: str
     version: int
     stage: str
-    """"preview"（只有靜態圖）或 "final"（已出片）。"""
+    """"preview"（只有靜態圖）、"review"（審片用的影片做好了，還沒出片）、"published"（這一版已經出片）。"""
     generated: str
     duration: float
     cards: list[CardModel]
@@ -101,6 +102,9 @@ class PageModel:
     page_sections: list[CardSection] = field(default_factory=list)
     aspect: str = "16x9"
     """畫面比例（timeline.VideoFormat.name）：9x16 時靜態圖、成片照直式排。"""
+    published_to: str = ""
+    """已出片時放在哪（給作者看的 Finder 路徑，例「影片 → 解說影片 → 2026-10-09-片名」）。"""
+    published_version: int | None = None
 
 
 # ---------------------------------------------------------------- 能加什麼（照外掛實際做得到的事寫）
@@ -258,10 +262,20 @@ def _changes(m: PageModel) -> str:
     return f'<section class="panel notice" id="changes">{"".join(parts)}</section>'
 
 
+def _stage(m: PageModel) -> str:
+    """頁首的階段：照實說作者現在看的是什麼。build 做的影片是給他審的，publish 之後才算出片。"""
+    if m.stage == "published":
+        v = f"（第 {m.published_version} 版）" if m.published_version else ""
+        where = f"：在 Finder 的「{m.published_to}」" if m.published_to else ""
+        return f'<span class="stage published">已出片{v}{_e(where)}</span>'
+    if m.stage == "review":
+        return '<span class="stage review">審片用的影片：還沒出片，你看過、點頭之後才出片</span>'
+    return '<span class="stage">預覽：只有靜態圖，還沒做成影片、還沒出片</span>'
+
+
 def render_review_html(m: PageModel) -> str:
     has_video = m.video_src is not None
-    stage = ('<span class="stage final">已出片</span>' if m.stage == "final"
-             else '<span class="stage">預覽：只有靜態圖，還沒出片</span>')
+    stage = _stage(m)
     film = ""
     if has_video:
         film = (

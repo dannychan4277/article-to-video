@@ -136,11 +136,15 @@ def walk(tmp_path_factory, videos_dir) -> Walk:
     run("publish-no-review", "publish", str(p), "--version", "2")
     # 7. 作者看了第 2 版說可以 → 出片
     run("publish", "publish", str(p), "--version", "2", "--data-dir", str(data), env=opening)
+    w.pages["publish"] = (p / "審片頁.html").read_text(encoding="utf-8")
     run("projects", "projects", "--json")
     # 8. 出片之後又動了分鏡（沒給作者看）→ 不能直接再出片
     shots["shots"][0]["chart"]["data"]["highlight"]["text"] = "短天期高"
     (p / "shots.json").write_text(json.dumps(shots, ensure_ascii=False), encoding="utf-8")
     run("publish-unseen", "publish", str(p), "--version", "2", "--data-dir", str(data))
+    # 9. 改過的給作者看：審片頁回到預覽，頁首不再說已出片（影片資料夾裡的是上一版）
+    run("preview3", "preview", str(p), "--no-open", "--data-dir", str(data))
+    w.pages["preview3"] = (p / "審片頁.html").read_text(encoding="utf-8")
     w.opened = opened_log.read_text(encoding="utf-8").splitlines() if opened_log.is_file() else []
     return w
 
@@ -252,3 +256,18 @@ def test_the_review_page_is_titled_with_the_video_not_the_project_folder(walk):
     assert TITLE in page.title and "專案" not in page.title
     data = json.loads(html.split('<script id="review-data" type="application/json">')[1].split("</script>")[0])
     assert data["project"] == TITLE  # review.js 拿它寫「審片留言｜片名｜第 N 版」
+
+
+def test_the_review_page_says_published_only_after_publishing_and_where_it_went(walk):
+    """頁首照實說：預覽、審片用的影片（還沒出片）、已出片（放在哪）。出片之後又改過，就不再說已出片。"""
+    from test_review_page import parse_review
+
+    before = parse_review(walk.pages["preview"])
+    assert before.attrs["data-stage"] == "preview" and "已出片" not in before.stage_text
+    after = parse_review(walk.pages["publish"])
+    assert after.attrs["data-stage"] == "published"
+    assert "已出片" in after.stage_text and walk.folder.name in after.stage_text, after.stage_text
+    changed = parse_review(walk.pages["preview3"])
+    assert walk.steps["preview3"].code == 0, walk.steps["preview3"].err
+    assert changed.attrs["data-stage"] == "preview" and "已出片" not in changed.stage_text
+    assert "出片之後又改過" in walk.pages["preview3"]

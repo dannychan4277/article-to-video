@@ -141,7 +141,7 @@ def test_recorded_findings_show_on_the_review_page(project):
         ("R1-1", "必修", 2), ("R1-2", "該修", 1), ("R1-3", "可改", None)]  # 只寫時間的對到分鏡 1
 
     page = read_review(project)
-    assert page.attrs["data-stage"] == "final" and page.videos
+    assert page.attrs["data-stage"] == "review" and page.videos
     top = page.page_slots["review"]
     assert "第 1 輪" in top and "7 分" in top and "片尾卡停久了一點" in top and "必修" in top
     cards = {c.id: c for c in page.cards}

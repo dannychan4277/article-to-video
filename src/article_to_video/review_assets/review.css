@@ -93,7 +93,8 @@ a { color: inherit; }
 .meta { color: var(--muted); font-size: 15px; margin-top: 6px; }
 .stage { display: inline-block; font-size: 14px; font-weight: 600; padding: 2px 10px; border-radius: 999px;
   border: 1px solid var(--line-strong); color: var(--ink); background: var(--surface); margin-left: 6px; vertical-align: 2px; }
-.stage.final { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
+.stage.published { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
+.stage.review { border-color: var(--warn); color: var(--warn); background: var(--warn-soft); }
 
 /* 說明、通知 */
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 22px; margin: 0 0 18px; }

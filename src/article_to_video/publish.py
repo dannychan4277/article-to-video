@@ -148,7 +148,7 @@ def publish_project(
 
 
 def output_contributor(plan: BuildPlan) -> Any:
-    """審片頁頁首一區「已出片」：這個比例最近一次出片放在哪裡、是第幾版；出片之後又改過就提醒。"""
+    """審片頁頁首一區「已出片」：這個比例最近一次出片放在哪裡、是第幾版；出片之後又改過就改叫「上一次出片」並提醒。"""
     from article_to_video.review import CardSection, CheckItem, ReviewExtras  # 避免循環匯入
 
     rec = load_outputs(plan.project.root).get(plan.format.name)
@@ -164,10 +164,11 @@ def output_contributor(plan: BuildPlan) -> Any:
     current = stamp.read_text(encoding="utf-8") if stamp.is_file() else None
     from article_to_video.auto_checks import current_video
 
-    if current != rec.get("videoKey") or current_video(plan) is None:
-        items.append(CheckItem("出片之後又改過", detail="影片資料夾裡的還是舊的那一版；作者看過這一版、點頭之後再出片一次",
+    outdated = current != rec.get("videoKey") or current_video(plan) is None
+    if outdated:
+        items.append(CheckItem("出片之後又改過", detail="影片資料夾裡的還是上一次出的那一版；你看過這一版、點頭之後再出片一次",
                                status="warn"))
     where = video_folder(plan.project.root)
-    return ReviewExtras(page=[CardSection("output", "已出片", items,
+    return ReviewExtras(page=[CardSection("output", "上一次出片" if outdated else "已出片", items,
                                           note=f"在 Finder：影片 → {where.parent.name} → {where.name}"
                                                f"（{video_title(plan.project.root)}）")])

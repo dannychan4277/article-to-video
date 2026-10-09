@@ -220,7 +220,7 @@ def test_the_review_page_shows_the_checks_on_every_card_and_on_top(checked):
 
     root, _ = checked
     page = read_review(root)
-    assert page.attrs["data-stage"] == "final" and page.videos  # 成片還是最新的：照樣內嵌
+    assert page.attrs["data-stage"] == "review" and page.videos  # 成片還是最新的：照樣內嵌
     for card in page.cards:
         assert "qa" in card.slots.get("checks", ""), card.slots
         assert "字幕帶" in card.slots["checks"]
