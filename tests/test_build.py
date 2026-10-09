@@ -306,6 +306,28 @@ def test_final_video_ends_on_the_end_card(built_project, tmp_path):
     assert _bluish(after) == 0
 
 
+# ---------------------------------------------------------------- 配樂
+
+
+def audio_db(video, a: float, b: float) -> float:
+    """成片 a～b 秒的聲音電平（dBFS RMS，立體聲兩聲道一起算）。"""
+    import numpy as np
+
+    raw = subprocess.run([str(find_ffmpeg()), "-v", "error", "-i", str(video), "-vn", "-ac", "2", "-ar", "48000",
+                          "-f", "s16le", "-"], capture_output=True, check=True).stdout
+    x = np.frombuffer(raw, dtype="<i2").astype(np.float64).reshape(-1, 2)[round(a * 48000): round(b * 48000)] / 32768
+    return float(20 * np.log10(np.sqrt(np.mean(np.square(x))) + 1e-12))
+
+
+def test_music_plays_softly_under_the_narration_and_comes_up_on_the_end_card(built_project):
+    """假配音層是靜音，成片裡聽到的就只有配樂：旁白時段有配樂、但壓得很低；片尾卡時明顯大聲。"""
+    under = audio_db(built_project.video, 1.0, 3.0)
+    assert -70 < under < -30
+    outro = _timeline(built_project)["outro"]["startFrame"] / FPS  # 7.2 秒
+    end_card = audio_db(built_project.video, outro + 0.3, outro + 0.45)
+    assert end_card >= under + 6
+
+
 def test_continuation_group_shares_one_continuous_push(built_project):
     vdir = built_project.dir / "build" / "16x9"
     a = json.loads((vdir / "specs" / "SH01.json").read_text(encoding="utf-8"))["data"]

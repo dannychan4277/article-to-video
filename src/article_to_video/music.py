@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-__all__ = ["SR", "TRACKS", "Track", "ensure_track", "read_track", "render_track", "write_preview"]
+__all__ = ["SR", "TRACKS", "Track", "ensure_track", "read_track", "render_track", "soft_limit", "write_preview", "write_wav"]
 
 SR = 48000
 MUSIC_VERSION = "1"
@@ -227,19 +227,19 @@ class _Voice:
         y = np.stack(out, axis=1)
         y *= 10 ** (-20 / 20) / (np.sqrt(np.mean(y ** 2)) + 1e-12)
         for _ in range(2):
-            y = _soft_limit(y, 10 ** (-1.5 / 20))
+            y = soft_limit(y, 10 ** (-1.5 / 20), loop=True)
         return y
 
 
-def _soft_limit(y: np.ndarray, ceil: float) -> np.ndarray:
-    """只壓超過門限的瞬態（2ms 視窗的峰值包絡，循環邊界，可循環的樂句接起來也平順）。"""
+def soft_limit(y: np.ndarray, ceil: float, *, loop: bool = False) -> np.ndarray:
+    """只壓超過門限的瞬態（2ms 視窗的峰值包絡＋平滑）。loop=True：頭尾當成接在一起（可循環的樂句）。"""
     from numpy.lib.stride_tricks import sliding_window_view
 
-    w = 96
+    w, mode = 96, ("wrap" if loop else "edge")
     env = np.abs(y).max(axis=1)
-    env = sliding_window_view(np.pad(env, (w // 2, w - w // 2 - 1), mode="wrap"), w).max(axis=1)
+    env = sliding_window_view(np.pad(env, (w // 2, w - w // 2 - 1), mode=mode), w).max(axis=1)
     g = np.minimum(1.0, ceil / np.maximum(env, 1e-9))
-    g = np.convolve(np.pad(g, (w // 2, w - w // 2 - 1), mode="wrap"), np.ones(w) / w, mode="valid")
+    g = np.convolve(np.pad(g, (w // 2, w - w // 2 - 1), mode=mode), np.ones(w) / w, mode="valid")
     return y * g[:, None]
 
 
@@ -313,7 +313,8 @@ _ARRANGEMENTS: dict[str, Callable[[_Voice], float]] = {"calm": _calm, "pulse": _
 # ---------------------------------------------------------------- 輸出與快取
 
 
-def _write_wav(y: np.ndarray, out: Path) -> None:
+def write_wav(y: np.ndarray, out: Path) -> None:
+    """(樣本, 聲道) 的 float → 48 kHz 16-bit WAV（先寫暫存檔再換名）。"""
     pcm = np.clip(np.round(y * 32767), -32768, 32767).astype("<i2")
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.name + ".part")
@@ -338,7 +339,7 @@ def render_track(name: str, out: str | os.PathLike) -> Path:
     v = _Voice(track)
     wet = _ARRANGEMENTS[name](v)
     out = Path(out)
-    _write_wav(v.finish(wet), out)
+    write_wav(v.finish(wet), out)
     return out
 
 
@@ -368,7 +369,7 @@ def write_preview(name: str, out: str | os.PathLike, seconds: float = 20.0,
     y = np.tile(loop, (n // len(loop) + 1, 1))[:n].copy()
     y *= _fade(n, 0.05, min(1.5, seconds / 3))[:, None]
     out = Path(out)
-    _write_wav(y, out)
+    write_wav(y, out)
     return out
 
 

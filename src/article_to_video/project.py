@@ -11,7 +11,7 @@
       字幕.srt           字幕檔（檔名故意跟成片不同：同名 .srt 會被播放器自動疊上去，變成兩層字幕）
       build/             建置產物，可整個刪掉重來
         narration/       配音層快取（依「配音層｜聲音｜語速｜文字」）與 timing.json
-        16x9/            這個畫面比例的產物：specs/、clips/、logs/、fonts/、timeline.json、subs.*、narration.wav
+        16x9/            這個畫面比例的產物：specs/、clips/、logs/、fonts/、timeline.json、subs.*、narration.wav、soundtrack.wav
 
 設定檔都是 UTF-8 JSON，由 Claude 寫、這裡驗證。驗證錯誤一次列出全部問題，每條都指出哪個分鏡、哪個欄位。
 """
@@ -123,6 +123,11 @@ class VariantPaths:
     @property
     def narration_wav(self) -> Path:
         return self.root / "narration.wav"
+
+    @property
+    def soundtrack(self) -> Path:
+        """旁白＋配樂混好的立體聲音軌（設定不要配樂時沒有這個檔）。"""
+        return self.root / "soundtrack.wav"
 
     @property
     def concat_list(self) -> Path:

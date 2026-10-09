@@ -71,3 +71,15 @@ def test_removed_shot_leaves_no_stale_outputs(copy_of_built):
     assert leftovers == []
     timeline = json.loads((vdir / "timeline.json").read_text(encoding="utf-8"))
     assert [s["id"] for s in timeline["shots"]] == ["SH01"]
+
+
+def test_turning_music_off_reassembles_without_rendering_clips(copy_of_built):
+    """這支片不要配樂：片段全用快取，只重新組裝；成片裡（假配音層是靜音）就沒有聲音了。"""
+    from test_build import audio_db
+
+    snap = json.loads((copy_of_built / "settings.json").read_text(encoding="utf-8"))
+    (copy_of_built / "settings.json").write_text(json.dumps({**snap, "music": "none"}), encoding="utf-8")
+    res = build_project(copy_of_built, tts="fake")
+    assert res.rendered == []
+    assert res.assembled is True
+    assert audio_db(res.video, 1.0, 3.0) < -80

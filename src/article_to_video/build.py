@@ -3,7 +3,7 @@
   plan_build()   讀專案＋驗證 → 字幕字型涵蓋檢查 → 配音層 → 時間軸（錨點、分鏡起訖、接續分鏡）→ 每個片段的引擎 spec。
                  不渲任何東西，幾秒內完成。審片頁的靜態圖（render_stills(plan.clips[i].spec, …)）從這裡接。
   build_project() plan_build() → preflight 檢查（數字對帳在這裡擋正式出片）→ 片段（快取、並行）→ 旁白音軌 →
-                 字幕 → 接片＋燒字幕＋混音 → 成片.mp4、字幕.srt。
+                 配樂墊在旁白下（soundtrack.py）→ 字幕 → 接片＋燒字幕＋混音 → 成片.mp4、字幕.srt。
 
 產物位置見 project.py 開頭。
 """
@@ -22,11 +22,13 @@ from article_to_video.assemble import (
 )
 from article_to_video.clip_cache import RenderReport, render_planned_clips
 from article_to_video.ffmpeg import find_ffmpeg
+from article_to_video.music import TRACKS, ensure_track
 from article_to_video.narration import SegmentAudio, get_tts_engine, narrate, write_timing
 from article_to_video.project import Project, ProjectError, VariantPaths, load_project
 from article_to_video.subtitles import (
     SUBTITLE_FONT_FAMILY, missing_subtitle_glyphs, subtitle_lines, write_ass, write_srt,
 )
+from article_to_video.soundtrack import mix_soundtrack
 from article_to_video.timeline import FORMAT_16x9, ClipPlan, Timeline, VideoFormat, build_timeline, plan_clips
 from article_to_video.user_settings import snapshot_into_project
 
@@ -144,6 +146,7 @@ def build_project(
 
     tl = plan.timeline
     write_narration_track(tl.segments.values(), tl.duration, vp.narration_wav)
+    audio = _soundtrack(plan, data_dir, log)
     lines = subtitle_lines(tl.segments.values())
     write_srt(lines, vp.srt)
     write_ass(lines, vp.ass, fmt)
@@ -153,16 +156,16 @@ def build_project(
     key = final_key({
         "version": ASSEMBLY_VERSION,
         "clips": [report.hashes[c.id] for c in plan.clips],
-        "narration": file_digest(vp.narration_wav),
+        "audio": file_digest(audio),
         "ass": vp.ass.read_text(encoding="utf-8"),
         "fps": fmt.fps,
     })
     assembled = False
     if not (video.is_file() and vp.final_stamp.is_file() and vp.final_stamp.read_text(encoding="utf-8") == key):
-        log("組裝成片（接片、混旁白、燒字幕）…")
+        log("組裝成片（接片、混音、燒字幕）…")
         vp.final_stamp.unlink(missing_ok=True)
         assemble_video(
-            workdir=vp.root, clips=[report.clips[c.id] for c in plan.clips], narration=vp.narration_wav,
+            workdir=vp.root, clips=[report.clips[c.id] for c in plan.clips], narration=audio,
             ass=vp.ass, fonts_dir=vp.fonts, out=video, ffmpeg=ffmpeg, fps=fmt.fps,
             log_path=vp.logs / "assemble.log",
         )
@@ -173,3 +176,21 @@ def build_project(
     shutil.copyfile(vp.srt, srt)
     return BuildResult(plan=plan, video=video, srt=srt, rendered=report.rendered, cached=report.cached,
                        assembled=assembled)
+
+
+def _soundtrack(plan: BuildPlan, data_dir: str | os.PathLike | None, log: Log) -> Path:
+    """配樂墊在旁白下面，回傳成片要用的音軌。設定不要配樂（music: "none"）就直接用旁白音軌。"""
+    vp, tl, music = plan.paths, plan.timeline, plan.project.settings.music
+    if music == "none":
+        vp.soundtrack.unlink(missing_ok=True)
+        log("配樂：不要配樂")
+        return vp.narration_wav
+    speech = []
+    for seg in tl.segments.values():
+        words = seg.audio.words
+        speech.append((seg.start + (words[0].start if words else 0.0), seg.start + seg.audio.speech_end))
+    rep = mix_soundtrack(vp.narration_wav, ensure_track(music, data_dir), speech=speech,
+                         outro_start=tl.outro.start_frame / tl.fps, out=vp.soundtrack)
+    log(f"配樂：{TRACKS[music].label}（旁白 {rep.voice_db} dBFS；配樂說話時 {rep.music_under_voice_db}、"
+        f"片尾卡 {rep.music_end_card_db} dBFS）")
+    return vp.soundtrack
