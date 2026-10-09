@@ -10,10 +10,12 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import subprocess
 import unicodedata
 
+import numpy as np
 import pytest
 
 from article_to_video.ffmpeg import find_ffmpeg
@@ -139,19 +141,44 @@ def test_every_cue_appears_on_its_anchor_word(built_project):
             assert abs(frame - t * FPS) <= 1, f"{shot} {cue}：在第 {frame} 幀，應該在 {t * FPS:.1f}"
 
 
+def _pixels(px: bytes) -> np.ndarray:
+    return np.frombuffer(px, dtype=np.uint8).reshape(-1, 3).astype(int)
+
+
 def _bluish(px: bytes) -> int:
     """柱子（主色藍或淡化後的灰藍）像素數：B 明顯大於 R、而且不是白底。"""
-    return sum(1 for i in range(0, len(px), 3) if px[i + 2] - px[i] >= 12 and px[i] <= 215)
+    p = _pixels(px)
+    return int(((p[:, 2] - p[:, 0] >= 12) & (p[:, 0] <= 215)).sum())
 
 
-def test_second_bar_grows_on_its_anchor_frame_in_final_video(built_project):
-    # 第二根柱（十年期）錨在 s02「十年期」＋0.1 秒；它在畫面右半邊，那裡之前沒有任何藍色的東西
-    expected = word_time("s02", "十年期", offset=0.1) * FPS  # 112.5
-    first, last = 106, 119
-    counts = [_bluish(f) for f in frames_rgb(built_project.video, first, last, (1100, 300, 450, 440))]
-    appeared = next(first + i for i, n in enumerate(counts) if n > 500)
-    assert counts[0] == 0
-    assert abs(appeared - expected) <= 1, counts
+def _red(px: bytes) -> int:
+    """預設紅（頂端色條、標註圓點與它的脈衝圈）像素數。"""
+    p = _pixels(px)
+    return int(((p[:, 0] > 170) & (p[:, 1] < 90) & (p[:, 2] < 90)).sum())
+
+
+# 每個 cue 在成片裡「出現」看哪裡、看什麼（照 _expected_cues 的順序）：(裁切 x, y, w, h)、數像素的方法、超過多少算出現。
+# 位置是這支測試片固定的版面（兩根柱、標註在柱頂左角），慢推只會差幾個 px，區域留了邊。
+CUE_LOOKS = [
+    ((0, 0, 1920, 10), _red, 1000),         # SH01 title：版式先出，頂端紅色條
+    ((380, 440, 260, 320), _bluish, 500),   # SH01 第一根柱（兩年期）長出來
+    ((380, 410, 110, 110), _red, 20),       # SH01 標註：第一根柱頂左角的圓點＋脈衝圈
+    ((1100, 300, 450, 440), _bluish, 500),  # SH01 第二根柱（十年期）；右半邊之前沒有藍色的東西
+    ((1200, 445, 110, 110), _red, 20),      # SH02 標註：第二根柱頂左角的圓點＋脈衝圈
+]
+
+
+def test_every_cue_shows_up_in_the_final_video_on_its_anchor_frame(built_project):
+    """不只看 spec：在成片裡逐幀找每個 cue 第一次出現的那一幀，要落在錨點詞的時間（容許一幀）；之前那幾幀還沒有它。"""
+    expected = [(shot, kind, t) for shot, cues in _expected_cues().items() for kind, t in cues]
+    assert len(expected) == len(CUE_LOOKS)
+    for (shot, kind, t), (crop, count, threshold) in zip(expected, CUE_LOOKS):
+        f = t * FPS
+        first, last = max(0, math.floor(f) - 3), math.ceil(f) + 3
+        counts = [count(px) for px in frames_rgb(built_project.video, first, last, crop)]
+        appeared = next((first + i for i, n in enumerate(counts) if n > threshold), None)
+        assert appeared is not None and abs(appeared - f) <= 1, f"{shot} {kind} 應該在第 {f:.1f} 幀出現：{counts}（從第 {first} 幀起）"
+        assert first == 0 or counts[0] == 0, f"{shot} {kind} 太早出現：{counts}"
 
 
 # ---------------------------------------------------------------- 字幕
