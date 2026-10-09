@@ -233,11 +233,11 @@ def _truncation_error(path: Path, truncated: list) -> TruncatedPdfError:
     for t in examples:
         lines.append(f"  例如第 {t.page} 頁「……{t.visible_tail}」後面就斷了。")
     lines += [
-        "照這份做影片會漏內容、講錯話，請重存一份 PDF，存的時候要「縮放到符合頁面」：",
-        "  ・用 Chrome 存的：回到原本的文章網頁，按 ⌘P 打開列印視窗 →「目的地」選「另存為 PDF」→ 點「更多設定」→"
-        "「縮放」改成「自訂」，填 80（還是被切就再調小）→ 按「儲存」。",
-        "  ・用 Safari 存的：按 ⌘P →「縮放」改小（例如 80%）→ 左下角「PDF」選單 →「儲存為 PDF」。",
-        "  ・從 Word、Pages 印的：按 ⌘P → 在「紙張處理」裡勾「縮放以符合紙張大小」→ 左下角「PDF」選單 →「儲存為 PDF」。",
+        "照這份做影片會漏內容、講錯話。請重存一份 PDF，存的時候「縮放到符合頁面」（把縮放比例調小，讓每一行都印得進紙裡）：",
+        "  ・用 Chrome 存的：回到原本的文章網頁，按 ⌘P 打開列印視窗 →「目的地」選「另存為 PDF」→ 點「顯示更多設定」→"
+        "「縮放比例」改成「自訂」，填 80（還是被切就再調小）→ 按「儲存」。",
+        "  ・用 Safari 存的：按 ⌘P →「縮放比例」改小（例如 80%）→ 左下角「PDF」選單 →「儲存為PDF⋯」。",
+        "  ・從 Word、Pages 印的：按 ⌘P → 在「紙張處理」裡勾「縮放來符合紙張大小」→ 左下角「PDF」選單 →「儲存為PDF⋯」。",
         "文章如果在 Google 文件或 Word 裡，直接給我 .docx 檔最省事（「檔案 → 下載 → Microsoft Word (.docx)」）。",
     ]
     return TruncatedPdfError("\n".join(lines), pages)
