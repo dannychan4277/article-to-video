@@ -219,6 +219,8 @@ def render_review_stills(plan: BuildPlan, *, jobs: int | None = None, log: Log =
 
     todo: list[tuple[ClipPlan, str]] = []
     for cp in plan.clips:
+        if not per_clip[cp.id]:
+            continue  # 不屬於任何分鏡的片段（例如之後的片尾卡）不上審片頁
         key = hashlib.sha256(
             json.dumps([STILLS_VERSION, clip_hash(cp), per_clip[cp.id]]).encode()
         ).hexdigest()
