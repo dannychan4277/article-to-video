@@ -131,6 +131,22 @@ def test_all_problems_are_listed_at_once(tmp_path):
     assert len(err.value.problems) == 2
 
 
+def test_preflight_check_blocks_the_build_before_rendering(tmp_path):
+    """渲染前的檢查（數字對帳會接在這裡）丟 ProjectError 就不出片。它拿得到完整的建置計畫。"""
+    seen = {}
+
+    def blocker(plan):
+        seen["shots"] = [c.id for c in plan.clips]
+        raise ProjectError("分鏡 SH01 的標題有一個沒有出處的數字", title="數字對帳沒過")
+
+    root = make_project(tmp_path, lambda shots, narration: None)
+    with pytest.raises(ProjectError, match="數字對帳沒過"):
+        build_project(root, tts="fake", preflight=[blocker])
+    assert seen["shots"] == ["SH01", "SH02"]
+    assert not (root / "成片.mp4").exists()
+    assert not (root / "build" / "16x9" / "clips").exists()
+
+
 def test_cli_prints_error_in_chinese_without_traceback(tmp_path):
     root = make_project(tmp_path, word_not_found)
     proc = subprocess.run(
