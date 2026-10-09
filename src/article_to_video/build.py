@@ -35,7 +35,7 @@ from article_to_video.timeline import FORMAT_16x9, ClipPlan, Timeline, VideoForm
 from article_to_video.user_settings import snapshot_into_project
 from article_to_video.vox import VoxPlan, resolve_vox
 
-__all__ = ["BuildPlan", "BuildResult", "build_project", "plan_build"]
+__all__ = ["BlockedBuild", "BuildPlan", "BuildResult", "build_project", "plan_build"]
 
 Log = Callable[[str], None]
 
@@ -55,6 +55,16 @@ class BuildPlan:
     @property
     def paths(self) -> VariantPaths:
         return self.project.paths.variant(self.format.name)
+
+
+class BlockedBuild(ProjectError):
+    """渲染前檢查（例如數字對帳）擋下了正式出片。訊息照原本的檢查；plan＝已經算好的建置計畫
+    （指令列拿它更新審片頁，讓頁面也標出被擋的原因）。"""
+
+    def __init__(self, cause: ProjectError, plan: BuildPlan) -> None:
+        ValueError.__init__(self, str(cause))
+        self.problems = list(cause.problems)
+        self.plan = plan
 
 
 @dataclass(frozen=True)
@@ -139,12 +149,21 @@ def build_project(
     data_dir: str | os.PathLike | None = None,
     log: Log = _quiet,
 ) -> BuildResult:
-    """建置成片。preflight：渲染前的檢查，丟 ProjectError 就不出片（數字對帳那張票接在這裡）。"""
+    """建置成片。preflight：渲染前的檢查（數字對帳 numbers.check_numbers），丟 ProjectError 就不出片——
+    改丟 BlockedBuild（帶著算好的 plan，審片頁照樣能用它更新）。"""
     ffmpeg = find_ffmpeg()
     plan = plan_build(project_dir, tts=tts, fmt=fmt, ffmpeg=ffmpeg, data_dir=data_dir, log=log)
-    require_boxes_ready(plan, jobs=jobs, log=log)  # Vox 框都要 Claude 看過靜態圖、核對過（boxes.py）
-    for check in preflight:
-        check(plan)
+    # 正式出片前的檢查：Vox 框都要 Claude 看過靜態圖、核對過（boxes.py），再加呼叫端給的（數字對帳…）。
+    # 全部跑完再一起報，作者／Claude 一次看到所有要修的地方。
+    errors: list[ProjectError] = []
+    for check in (lambda p: require_boxes_ready(p, jobs=jobs, log=log), *preflight):
+        try:
+            check(plan)
+        except ProjectError as e:
+            errors.append(e)
+    if errors:
+        cause = errors[0] if len(errors) == 1 else ProjectError([str(e) for e in errors], title="正式出片前的檢查沒過")
+        raise BlockedBuild(cause, plan) from errors[0]
 
     vp = plan.paths
     n_jobs = jobs or min(3, max(1, (os.cpu_count() or 2) // 2))
