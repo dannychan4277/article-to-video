@@ -44,7 +44,7 @@ def test_test_video_is_about_ten_seconds_and_says_where_it_is(test_video):
     out, proc = test_video
     video = out / "成片.mp4"
     assert video.is_file() and (out / "字幕.srt").is_file()
-    assert 9.0 <= duration(video) <= 12.0
+    assert 9.5 <= duration(video) <= 11.5  # 假配音 10.3 秒；真的 edge-tts（曉臻 +5%）實測 10.7 秒
     assert str(video) in proc.stdout
 
 
