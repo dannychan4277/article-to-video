@@ -4,8 +4,8 @@
   preview_project()               預覽模式：plan_build() → 只渲靜態圖（不渲片段、不出成片）→ 審片頁。
   make_review(plan, video=成片)   build 之後（CLI build 在 build_project 之後呼叫）：同一頁再內嵌審片用的成片。
 
-分鏡靜態圖（_still_frames）：每個分鏡一張完成狀態（分鏡最後一幀），加上這個分鏡每個畫面事件出現前一幀
-（跟上一個事件隔 ≥ MOMENT_GAP 秒才算，最多 MAX_MOMENTS 張）。快取在 build/<比例>/stills/<片段>/，
+分鏡靜態圖（_still_frames）：每個分鏡一張完成狀態（分鏡最後一幀；Vox 接續分鏡取鏡頭移走之前），加上這個分鏡
+每個畫面事件出現前一幀（跟上一個事件隔 ≥ MOMENT_GAP 秒才算，最多 MAX_MOMENTS 張）。快取在 build/<比例>/stills/<片段>/，
 鍵＝片段雜湊（spec＋引擎檔＋圖片）＋要渲的時刻，內容沒變就不重渲；並行渲。
 
 版本（build/<比例>/review.json）：每次寫審片頁都比對每個分鏡的內容雜湊（片段雜湊＋在片段裡的位置與長度＋它唸的旁白）。
@@ -35,7 +35,7 @@ from urllib.parse import quote
 
 from article_to_video.build import BuildPlan, plan_build
 from article_to_video.clip_cache import clip_hash
-from article_to_video.clips import ClipRenderError, default_jobs, render_stills, run_parallel
+from article_to_video.clips import GRAMMAR_VOX, ClipRenderError, default_jobs, render_stills, run_parallel
 from article_to_video.macos import open_path
 from article_to_video.progress import Log, quiet
 from article_to_video.textio import read_json_or_none
@@ -67,6 +67,9 @@ MOMENT_GAP = 0.8
 """畫面事件跟上一個事件至少隔這麼多秒，才另外出一張「這個事件之前」的靜態圖。"""
 MAX_MOMENTS = 3
 """每個分鏡最多幾張過程靜態圖（不含完成狀態那張）。"""
+VOX_LEAVE = 1.0
+"""Vox 鏡頭最早在下一件素材出現前多久開始移過去（引擎 y2_vox：素材 at 前 0.95 秒、畫面外的框 at 前 0.8 秒）。
+分鏡靜態圖取在這之前，拍的是鏡頭還停在素材上的樣子。"""
 
 NO_OPEN_ENV = "ARTICLE_TO_VIDEO_NO_OPEN"
 """設成 1 就不自動打開審片頁（測試、CI 用）；指令列也可以加 --no-open。"""
@@ -163,25 +166,51 @@ class Still:
     """這個分鏡的完成狀態（分鏡最後一幀）。"""
 
 
+def _next_cue_frames(plan: BuildPlan) -> dict[str, int]:
+    """Vox 分鏡 → 同一個片段裡、它後面第一個畫面事件（下一件素材或框）的幀。片段在它之後就結束的不列。"""
+    clip_of = _clip_of(plan)
+    shots = plan.timeline.shots
+    out: dict[str, int] = {}
+    for i, st in enumerate(shots):
+        cp = clip_of[st.shot.id]
+        later = [c.frame for nxt in shots[i + 1:] if clip_of[nxt.shot.id] is cp for c in nxt.cues if not c.carried]
+        if later:
+            out[st.shot.id] = min(later)
+    return out
+
+
 def _still_frames(plan: BuildPlan) -> dict[str, list[tuple[int, bool]]]:
     """每個分鏡要渲的成片幀號（, 是否完成狀態）。
 
     - 完成狀態：分鏡最後一幀（下一個分鏡切進來之前，作者最後看到的畫面）。
-    - 過程：這個分鏡自己的每個畫面事件（cue）出現的前一幀＝上一句講完、畫面停在那裡的樣子；
-      跟上一個事件隔不到 MOMENT_GAP 秒的不算（上一個動畫還沒跑完，看了也沒意義）。
-      接續分鏡的第一個事件也算（前一幀＝沿用的圖）。最多 MAX_MOMENTS 張。
+      Vox 接續分鏡例外：同一張桌面上，鏡頭在下一件素材（或框）出現前 VOX_LEAVE 秒內就開始移過去、
+      到了才有素材滑進來，最後一幀拍到的是空桌面或動態模糊（試跑實測）。所以取鏡頭還停在這個分鏡最後一件素材上的
+      最後一刻：下一個畫面事件前 VOX_LEAVE 秒；但不早於自己最後一件素材出現的下一幀。
+    - 過程：這個分鏡自己的每個畫面事件（cue）出現的前一幀＝上一句講完、畫面停在那裡的樣子（Vox 一樣改成
+      事件前 VOX_LEAVE 秒，鏡頭還沒離開的時候）；跟上一個事件隔不到 MOMENT_GAP 秒的不算（上一個動畫還沒跑完，
+      看了也沒意義）。接續分鏡的第一個事件也算（前一幀＝沿用的圖）。最多 MAX_MOMENTS 張。
     """
     fps = plan.timeline.fps
     gap = round(MOMENT_GAP * fps)
+    clip_of = _clip_of(plan)
+    next_cue = _next_cue_frames(plan)
     out: dict[str, list[tuple[int, bool]]] = {}
     for st in plan.timeline.shots:
+        vox = clip_of[st.shot.id].grammar == GRAMMAR_VOX
+        lead = round(VOX_LEAVE * fps) if vox else 1
         final = st.end_frame - 1
         own = sorted({c.frame for c in st.cues if not c.carried})
+        if vox and st.shot.id in next_cue:
+            final = min(final, next_cue[st.shot.id] - lead)
+            if own:
+                final = max(final, min(own[-1] + 1, st.end_frame - 1))
+            final = max(final, st.start_frame)
         prev = st.start_frame if st.shot.continues else None
         moments: list[int] = []
         for f in own:
-            if prev is not None and f - prev >= gap and st.start_frame < f - 1 < final:
-                moments.append(f - 1)
+            m = f - lead
+            if prev is not None and (m if vox else f) - prev >= gap and st.start_frame < m < final:
+                moments.append(m)
             prev = f
         out[st.shot.id] = [(final, True)] + [(f, False) for f in moments[:MAX_MOMENTS]]
     return out
