@@ -500,8 +500,10 @@ def chart_texts(plan: BuildPlan, st: ShotTiming) -> list[ScreenText]:
 
 
 def default_sources() -> list[ScreenTextSource]:
-    """數字對帳預設看哪些字。Vox 索引卡（#8）做好後加在這裡。"""
-    return [chart_texts]
+    """數字對帳預設看哪些字：財經圖表、Vox 分鏡（標題卡、索引卡、圖說、原文剪報；vox.vox_texts）。"""
+    from article_to_video.vox import vox_texts  # 避免循環匯入
+
+    return [chart_texts, vox_texts]
 
 
 def _own_texts(plan: BuildPlan, sources: Sequence[ScreenTextSource]) -> dict[str, list[ScreenText]]:

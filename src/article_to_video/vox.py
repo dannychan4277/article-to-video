@@ -4,6 +4,9 @@
   {"at": …, "kind": "image", "image": "圖1", "caption"?: "…"}     文章原圖，下方黑底標籤「圖1」（有 caption 就「圖1｜caption」）
   {"at": …, "kind": "excerpt", "quote"?: "原文裡的幾個字", "paragraph"?: 段號, "occurrence"?: n, "caption"?: "…"}
                                                                   原文剪報：剪到引文所在的整句、殘句遮住（excerpt.py），標籤「原文段落」
+  {"at": 錨點, "kind": "box", "rect": [x, y, 寬, 高]}               框原圖（原圖的像素）；"find": "0.62" 框剪報裡的字（位置自動算）
+  {"at": …, "kind": "title" | "point", "text": "…"}                  黑底白字標題條／橫線索引卡（字要數字對帳）
+框畫在它前面最近的那張原圖或剪報上（同一張桌面，接續分鏡也算），中間不能插文字卡；框要錨在旁白唸到那個數字的詞上。
 
 at：數字＝從這個分鏡開始算的秒數（不能是負的），或錨點。
 
@@ -23,7 +26,7 @@ from typing import Any
 from article_to_video.excerpt import Excerpt, ExcerptError, make_excerpt
 from article_to_video.project import Anchor, Cue, Project, ProjectError, Shot, VoxConfig
 
-__all__ = ["ARTICLE_SOURCE", "EXCERPT_LABEL", "Target", "VoxBox", "VoxPlan", "resolve_vox", "vox_clip_spec"]
+__all__ = ["ARTICLE_SOURCE", "EXCERPT_LABEL", "Target", "VoxBox", "VoxPlan", "resolve_vox", "vox_clip_spec", "vox_texts"]
 
 Y2 = "y2_vox"
 DRIFT = 0.008
@@ -150,6 +153,7 @@ def resolve_vox(project: Project) -> tuple[Project, VoxPlan]:
             target = None
         cues: list[Cue] = []
         sources: list[str] = []
+        texts: list[tuple[str, str]] = []
         for cue in shot.vox.cues:
             if cue.kind == "box":
                 box = _resolve_box(cue, shot, target, sum(b.shot_id == shot.id for b in boxes) + 1, project, problems)
@@ -161,11 +165,20 @@ def resolve_vox(project: Project) -> tuple[Project, VoxPlan]:
                 rect01 = [round(x / tw, 6), round(y / th, 6), round(w / tw, 6), round(h / th, 6)]
                 cues.append(replace(cue, fields={"kind": "highlight", "data": {"rect": rect01}}))
                 continue
+            if cue.kind in ("title", "point"):
+                texts.append(("標題卡" if cue.kind == "title" else "索引卡", cue.fields["text"]))
+                cues.append(replace(cue, fields={"kind": cue.kind, "text": cue.fields["text"]}))
+                target = None
+                continue
             resolved = _resolve_material(cue, article, sources, problems)
             if resolved is not None:
                 engine, target = resolved
                 cues.append(replace(cue, fields=engine))
-        shots.append(replace(shot, vox=VoxConfig(cues=cues, sources=list(dict.fromkeys(sources)))))
+                if target and target.excerpt:
+                    texts.append(("原文剪報", target.excerpt.text))
+                if cue.fields.get("caption"):
+                    texts.append(("圖說", cue.fields["caption"].strip()))
+        shots.append(replace(shot, vox=VoxConfig(cues=cues, sources=list(dict.fromkeys(sources)), texts=texts)))
     if problems:
         raise ProjectError(problems, title="Vox 分鏡的素材有問題")
     if article.excerpt_dir.is_dir():
@@ -272,6 +285,16 @@ def _resolve_box(cue: Cue, shot: Shot, target: Target | None, index: int, projec
     ).encode()).hexdigest()
     return VoxBox(id=f"{shot.id}:{index}", shot_id=shot.id, shot_number=shot.number, index=index, where=cue.where,
                   target=target, rect=rect, find=find, word=anchor.word or "", sentence=sentence, hash=digest)
+
+
+def vox_texts(plan: Any, st: Any) -> list[Any]:
+    """數字對帳（numbers.py）的資料來源：Vox 分鏡上畫面的字——標題卡、索引卡、圖說、原文剪報。
+    「圖1」「原文段落」這種標籤是編號，不算；原圖裡的數字（圖片像素）是原文本身，也不算。"""
+    from article_to_video.numbers import ScreenText  # 避免循環匯入
+
+    if st.shot.vox is None:
+        return []
+    return [ScreenText(where, text) for where, text in st.shot.vox.texts]
 
 
 def vox_clip_spec(cues: list[dict[str, Any]], duration: float, fmt: Any) -> dict[str, Any]:

@@ -64,8 +64,9 @@ CHART_DATA_KEYS = frozenset({
     "highlight", "colors", "upDown", "xAxis", "xTicks", "axisNote", "push", "publicData",
 })
 CHART_CUE_KINDS = frozenset({"title", "bar", "line", "candle", "highlight", "number"})
-VOX_CUE_KINDS = frozenset({"image", "excerpt", "box"})
-"""Vox 分鏡的 cue：image＝文章原圖（圖N）、excerpt＝原文剪報、box＝框（螢光筆＋紅圈，框住旁白正在唸的數字）。"""
+VOX_CUE_KINDS = frozenset({"image", "excerpt", "box", "title", "point"})
+"""Vox 分鏡的 cue：image＝文章原圖（圖N）、excerpt＝原文剪報、box＝框（螢光筆＋紅圈，框住旁白正在唸的數字）、
+title＝黑底白字標題條、point＝橫線索引卡。"""
 SETTINGS_KEYS = frozenset({"voice", "rate", "tts", "gap", "lead", "tail",
                            "channel", "logo", "brand_color", "music", "aspect"})
 
@@ -279,6 +280,8 @@ class VoxConfig:
     """照出場順序。載入時 fields 是分鏡設定原樣；建置時（vox.resolve_vox）換成給引擎的欄位（圖片絕對路徑、標籤…）。"""
     sources: list[str] = field(default_factory=list)
     """這個分鏡畫面上素材的出處（建置時 resolve_vox 填，片尾卡彙整）。"""
+    texts: list[tuple[str, str]] = field(default_factory=list)
+    """這個分鏡上畫面的字（在哪裡, 字）：標題卡、索引卡、圖說、原文剪報（建置時 resolve_vox 填，數字對帳用）。"""
 
 
 @dataclass(frozen=True)
@@ -609,6 +612,8 @@ _VOX_FIELDS = {
     "image": ({"image"}, {"caption"}),
     "excerpt": (set(), {"paragraph", "quote", "occurrence", "caption"}),
     "box": (set(), {"rect", "find", "occurrence"}),
+    "title": ({"text"}, set()),
+    "point": ({"text"}, set()),
 }
 """每種 Vox cue 的（必填欄位, 選填欄位）；at、kind 另外處理。"""
 _FIGURE_RE = re.compile(r"^圖([1-9]\d*)$")
@@ -664,6 +669,9 @@ def _load_vox(raw: Any, label: str, segments: Mapping[str, str], problems: _Prob
             continue
         if kind == "image" and not (isinstance(fields["image"], str) and _FIGURE_RE.match(fields["image"])):
             problems.add(f"{where} 的 image 要寫文章原圖的編號，例 \"圖1\"（看 article/article.json 的 images），現在是 {fields['image']!r}")
+            continue
+        if kind in ("title", "point") and not (isinstance(fields["text"], str) and fields["text"].strip()):
+            problems.add(f"{where}（{'標題卡' if kind == 'title' else '索引卡'}）的 text 要是卡上的字")
             continue
         if kind == "excerpt" and not _check_excerpt(fields, where, problems):
             continue
@@ -795,10 +803,13 @@ def _check_vox_boxes(shots: list[Shot], problems: _Problems) -> None:
         if not shot.continues:
             target = None
         for cue in shot.vox.cues:
-            if cue.kind in ("image", "excerpt"):
+            if cue.kind in ("image", "excerpt", "title", "point"):
                 target = cue.kind
             elif cue.kind == "box":
-                if target is None:
+                if target in ("title", "point"):
+                    problems.add(f"{cue.where}（框）要緊跟在它要框的原圖或剪報後面，中間不能插文字卡"
+                                 "（鏡頭已經移到文字卡上，框會畫在看不到的圖上）")
+                elif target is None:
                     problems.add(f"{cue.where}（框）前面沒有圖或剪報：框要寫在它要框的原圖（image）或原文剪報（excerpt）後面")
                 elif "rect" in cue.fields and target != "image":
                     problems.add(f"{cue.where}（框）要框的是原文剪報：剪報用 find 寫要框的字（例 \"find\": \"0.62\"），不用 rect")

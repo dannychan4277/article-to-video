@@ -25,9 +25,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 from article_to_video.article import extract_article
 from article_to_video.boxes import box_statuses
-from article_to_video.build import build_project, plan_build
+from article_to_video.build import BlockedBuild, build_project, plan_build
 from article_to_video.clips import FONTS_DIR
 from article_to_video.ffmpeg import find_ffmpeg
+from article_to_video.numbers import check_numbers, reconcile
 from article_to_video.project import ProjectError
 from article_to_video.timeline import VideoFormat
 
@@ -360,6 +361,33 @@ def test_box_over_a_legend_swatch_gets_a_warning(tmp_path):
     warned = {s.box.id: s.warnings for s in box_statuses(plan)}
     assert any("圖例色塊" in w for w in warned["SH02:1"])
     assert warned["SH02:2"] == []  # 深藍色的數字
+
+
+# ---------------------------------------------------------------- 數字對帳：Vox 畫面上的字
+
+def test_numbers_on_vox_cards_and_clippings_are_reconciled(tmp_path):
+    """索引卡、標題卡、圖說、原文剪報上的數字都要對帳：剪報本來就是原文；索引卡寫了文章沒有的數字 → 擋正式出片。"""
+    shots = [{"id": "SH01", "vox": {"cues": [
+        {"at": 0, "kind": "title", "text": "差距 0.62 個百分點"},
+        {"at": 0.5, "kind": "image", "image": "圖1", "caption": "十年期 3.96%"},
+        {"at": 1.2, "kind": "excerpt", "quote": "差距只剩"},
+        {"at": 2.0, "kind": "point", "text": "一年後 3.1 個百分點"}]}}]
+    root = new_project(tmp_path, shots)
+    report = reconcile(plan_build(root, tts="fake"))
+    found = report.shots["SH01"]
+
+    def kind(where: str, number: str) -> str:
+        [n] = [n for n in found if n.where == where and n.shown.startswith(number)]
+        return n.kind
+
+    assert kind("標題卡", "0.62") == "article"
+    assert kind("圖說", "3.96") == "article"
+    assert kind("原文剪報", "0.62") == "article"  # 剪報就是原文
+    assert kind("索引卡", "3.1") == "none"
+    assert not any(n.shown == "1" for n in found)  # 標籤「圖1」是編號，不是主張
+    with pytest.raises(BlockedBuild) as e:
+        build_project(root, tts="fake", fmt=SMALL, preflight=[check_numbers])
+    assert "索引卡" in str(e.value) and "3.1" in str(e.value)
 
 
 # ---------------------------------------------------------------- 原文剪報
