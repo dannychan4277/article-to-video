@@ -4,6 +4,7 @@
   preview <專案資料夾> [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]   預覽：只出分鏡靜態圖＋審片頁（不渲整支片）
   build <專案資料夾> [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]     建置成片＋字幕檔，審片頁內嵌成片
   feedback <專案資料夾> [--file 檔]                   審片頁複製出來的留言（stdin）→ JSON（格式見 feedback.py）
+  extract <專案資料夾> <文章檔|->                   擷取文章到 <專案>/article/（- ＝從標準輸入讀貼上的文字）
   report-issue [專案資料夾] [--shot 分鏡]… [--note 文字] [--out-dir 資料夾]
                                                   回報問題：打包 zip（預設放桌面）
   reproduce-issue <zip> [--out 資料夾] [--shot 分鏡]…   （維護者用）從回報的 zip 重渲出錯的分鏡
@@ -71,6 +72,9 @@ def _parser() -> argparse.ArgumentParser:
     f = sub.add_parser("feedback", help="把審片頁「複製給 Claude」的文字（從 stdin 讀）解析成 JSON")
     f.add_argument("project", help="專案資料夾（用來把分鏡編號對到分鏡 id）")
     f.add_argument("--file", help="從這個檔讀，不從 stdin 讀")
+    e = sub.add_parser("extract", help="擷取文章全文與原圖到 <專案>/article/")
+    e.add_argument("project", help="專案資料夾（沒有會自動建立）")
+    e.add_argument("source", help="文章檔（.pdf .docx .txt .md .html 或 Google 文件的網頁 .zip）；- ＝從標準輸入讀貼上的文字")
     r = sub.add_parser("report-issue", help="回報問題：把錯誤紀錄、分鏡設定、出錯畫面、環境檢查打包成 zip（預設放桌面）")
     r.add_argument("project", nargs="?", help="出問題的專案資料夾（沒有專案就只打包環境檢查）")
     r.add_argument("--shot", action="append", default=[], help="出錯的分鏡：id（SH03）或編號（3），可重複；不給就從最後一次建置的錯誤找")
@@ -261,6 +265,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
         print(json.dumps(out, ensure_ascii=False, indent=1))
         return 0
+    if args.command == "extract":
+        from article_to_video.article import run_extract
+
+        return run_extract(args.project, args.source)
     if args.command == "report-issue":
         from article_to_video.issue_report import create_report
 
