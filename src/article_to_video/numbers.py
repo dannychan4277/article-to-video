@@ -854,7 +854,9 @@ def number_review(plan: BuildPlan) -> ReviewExtras:
         if not items:
             notes.append("沿用上一張的圖，數字記在上一張；這一張沒有新的數字。" if st.shot.continues
                          else "畫面上沒有數字。")
-        cards[sid] = [CardSection("numbers", "畫面上的數字與出處", items, note=" ".join(notes))]
+        # 每個數字都對得到出處：安靜的一行，點開看每個數字的出處；有找不到出處的才整區攤開
+        summary = "" if n_bad else (f"畫面上 {len(rep.shots[sid])} 個數字都對得到出處" if items else " ".join(notes))
+        cards[sid] = [CardSection("numbers", "畫面上的數字與出處", items, note=" ".join(notes), summary=summary)]
     bad = rep.unsourced
     if bad:
         page = [CardSection(
@@ -865,5 +867,5 @@ def number_review(plan: BuildPlan) -> ReviewExtras:
         )]
     else:
         total = sum(len(v) for v in rep.shots.values())
-        page = [CardSection("numbers", "數字對帳", [CheckItem(f"畫面上 {total} 個數字都有出處", status="ok")])]
+        page = [CardSection("numbers", "數字對帳", [], summary=f"數字對帳：畫面上 {total} 個數字都有出處")]
     return ReviewExtras(cards=cards, page=page)

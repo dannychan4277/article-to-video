@@ -38,7 +38,11 @@ class Card:
     stills: list[tuple[str, float]] = field(default_factory=list)
     """(圖檔 src, 片中秒數)；第一張是完成狀態。"""
     slots: dict[str, str] = field(default_factory=dict)
-    """data-slot → 裡面的文字（數字對帳、自動檢查）。"""
+    """data-slot → 裡面作者看得到的文字（數字對帳、自動檢查）；收起來給 Claude 的代號不算（在 codes）。"""
+    codes: str = ""
+    """收起來的「給 Claude 的代號」區（.codes）裡的文字。"""
+    folded: str = ""
+    """點開才看得到的細節（details.fold）裡的文字；這些字也算在 slots 裡。"""
 
 
 @dataclass
@@ -54,6 +58,8 @@ class ReviewPage:
     changes_text: str = ""
     """「這版改了哪些分鏡」那一區的文字。"""
     page_slots: dict[str, str] = field(default_factory=dict)
+    page_codes: str = ""
+    page_folded: str = ""
     attrs: dict[str, str] = field(default_factory=dict)
 
 
@@ -102,6 +108,10 @@ class _Parser(HTMLParser):
                 self.capture.append(("slot:" + a.get("data-slot", ""), len(self.stack)))
             if a.get("id") == "changes":
                 self.capture.append(("changes", len(self.stack)))
+            if "codes" in cls:
+                self.capture.append(("codes", len(self.stack)))
+            if "fold" in cls:
+                self.capture.append(("fold", len(self.stack)))
 
     def _in_card(self) -> bool:
         return any(tag == "article" and "card" in c for tag, c, _ in self.stack)
@@ -118,9 +128,20 @@ class _Parser(HTMLParser):
     def handle_data(self, data):
         if self.in_title:
             self.page.title += data
+        if any(target == "codes" for target, _ in self.capture):  # 收起來給 Claude 的代號：不算作者看得到的字
+            if self._in_card() and self.page.cards:
+                self.page.cards[-1].codes += data
+            else:
+                self.page.page_codes += data
+            return
         for target, _ in self.capture:
             card = self.page.cards[-1] if self.page.cards else None
-            if target == "menu":
+            if target == "fold":
+                if self._in_card() and card is not None:
+                    card.folded += data
+                else:
+                    self.page.page_folded += data
+            elif target == "menu":
                 self.page.menu_text += data
             elif target == "h1":
                 self.page.h1 += data

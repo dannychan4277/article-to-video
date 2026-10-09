@@ -59,6 +59,7 @@ from article_to_video.progress import Log, quiet
 from article_to_video.check_log import load_log, now, resolution
 from article_to_video.clip_cache import clip_hash, clip_is_current, clip_stamp
 from article_to_video.commands import cli_command
+from article_to_video.end_card import END_CARD_ID
 from article_to_video.clips import (
     GRAMMAR_CHART, GRAMMAR_END_CARD, GRAMMAR_VOX, QA_SCRIPT, absolutize_images, default_jobs, run_parallel,
 )
@@ -839,56 +840,72 @@ def require_checks_cleared(plan: BuildPlan) -> None:
     )
 
 
+_PLAIN = {
+    "page-error": "這段畫面做的時候出錯了",
+    "determinism": "同一個畫面每次做出來不太一樣，靜態圖可能跟影片對不上",
+    "motion": "畫面幾乎沒在動，看起來像停住了",
+    "jump": "畫面會突然閃一下",
+    "cut-text": "有字被畫面邊緣切掉一截",
+    "overlap": "有兩串字疊在一起",
+    "text-in-band": "有字掉到字幕的位置，會被字幕蓋住",
+    "blank": "畫面幾乎是空的",
+    "band": "畫面上的字或圖壓到字幕的位置，會被字幕蓋住",
+    "hold": "超過 5 秒沒有新的畫面，觀眾會覺得停住了",
+}
+"""審片頁上給作者看的白話（檢查名稱、像素位置這些給 Claude 的寫在代號那一區）。"""
+
+
+def _plain(f: Finding) -> str:
+    if f.check == "band" and f.clip_id == END_CARD_ID:
+        return "片尾卡的字壓到直式影片底部會被平台蓋住的地方"
+    return _PLAIN[f.check]
+
+
 def checks_contributor(plan: BuildPlan) -> ReviewExtras:
-    """審片頁：每張卡的「checks」欄列這個分鏡的 qa、字幕帶、停太久；頁首一區自動檢查的總結。只讀快取。"""
+    """審片頁：每張卡的「checks」欄列這個分鏡的問題（qa、字幕帶、停太久）；都沒問題就安靜的一行。
+    頁首一區自動檢查的總結。作者看到白話；代號、檢查名稱、技術說明收在「給 Claude 的代號」裡。只讀快取。"""
     from article_to_video.review import CardSection, CheckItem, ReviewExtras  # 避免循環匯入
 
     report = load_check_report(plan)
 
-    def item(f: Finding) -> CheckItem:
+    def item(f: Finding, where: str = "") -> CheckItem:
         when = "、".join(f"{timecode(a)}–{timecode(b)}" for a, b in f.times[:3])
+        code = f"{f.token}　{f.label}：{f.message}"
+        text = f"{where}　{_plain(f)}" if where else _plain(f)
         if f.resolution:
-            return CheckItem(f"{f.label}：{f.message}", detail=f"已接受：{f.resolution.get('note', '')}"
-                             + (f"（{when}）" if when else ""), status="info", label="已接受")
-        return CheckItem(f"{f.label}：{f.message}", detail=when, status="block" if f.blocking else "warn",
-                         label=f.severity)
+            return CheckItem(text, detail=f"看過、決定不改：{f.resolution.get('note', '')}" + (f"（{when}）" if when else ""),
+                             status="info", label="已接受", code=code)
+        return CheckItem(text, detail="" if where else when, status="block" if f.blocking else "warn",
+                         label=f.severity, code=code)
 
     cards: dict[str, list] = {}
     for st in plan.timeline.shots:
         sid = st.shot.id
         clips = [c for c in report.clips if sid in c.shot_ids]
         fs = report.for_shot(sid)
-        items: list = []
         if any(c.qa is None for c in clips):
-            items.append(CheckItem("還沒跑自動檢查", detail="做好審片用的影片之後 Claude 會跑；改過的分鏡要重跑", status="info"))
+            sec = CardSection("checks", "自動檢查", [CheckItem(
+                "還沒跑自動檢查", detail="做好審片用的影片之後 Claude 會跑；改過的分鏡要重跑", status="info")])
+        elif not fs:
+            sec = CardSection("checks", "自動檢查", [], summary="自動檢查沒發現問題")
         else:
-            qa_fs = [f for f in fs if f.source == "qa"]
-            items += [item(f) for f in qa_fs] or [CheckItem("qa：確定性、動態、跳變、框景都沒問題", status="ok")]
-            band_fs = [f for f in fs if f.source == "band"]
-            if any(c.band is not None for c in clips):
-                items += [item(f) for f in band_fs] or [CheckItem("字幕帶：沒有東西壓到字幕", status="ok")]
-            else:
-                items.append(CheckItem("字幕帶：Vox 剪報不查（牛皮紙紋理會誤報，字有沒有被字幕蓋到看 qa）", status="info"))
-        items += [item(f) for f in fs if f.source == "hold"]
-        cards[sid] = [CardSection("checks", "自動檢查", items)]
+            sec = CardSection("checks", "自動檢查", [item(f) for f in fs])
+        cards[sid] = [sec]
 
     bad, warn = report.blocking, [f for f in report.findings if not f.blocking]
     nums = _shot_numbers(plan)
+    note = "機器把每個片段重做一遍，看畫面有沒有卡住、閃一下、字被切掉或被字幕蓋住。"
     if report.unchecked and len(report.unchecked) == len(report.clips):
-        page_items = [CheckItem("還沒跑", detail="做好審片用的影片之後、給你看之前，Claude 會跑", status="info")]
-        note = ""
+        sec = CardSection("checks", "自動檢查", [CheckItem(
+            "還沒跑", detail="做好審片用的影片之後、給你看之前，Claude 會跑", status="info")], note=note)
     else:
-        page_items = [CheckItem(f"{_where(plan, f)}　{f.label}：{f.message}", status="block", label="必修")
-                      for f in bad]
-        page_items += [CheckItem(f"{_where(plan, f)}　{f.label}：{f.message}",
-                                 status="info" if f.resolution else "warn",
-                                 label="已接受" if f.resolution else f.severity) for f in warn]
-        if not page_items:
-            page_items = [CheckItem(f"{len(report.clips)} 個片段都沒問題", status="ok")]
+        items = [item(f, _where(plan, f)) for f in bad] + [item(f, _where(plan, f)) for f in warn]
         if report.unchecked:
             names = "、".join(f"分鏡 {nums[s]}" for c in report.clips if c.qa is None for s in c.shot_ids if s in nums)
-            page_items.append(CheckItem(f"還沒檢查：{names or '片尾卡'}", detail="改過之後還沒重跑", status="info"))
-        note = (f"有 {len(bad)} 項必修沒處理，正式出片會被擋下。" if bad else "")
-    page = [CardSection("checks", "自動檢查（qa、字幕帶）", page_items,
-                        note=note + "機器把每個片段重渲一遍，查畫面有沒有卡住、閃一下、字被切掉或被字幕蓋住。")]
-    return ReviewExtras(cards=cards, page=page)
+            items.append(CheckItem(f"還沒檢查：{names or '片尾卡'}", detail="改過之後還沒重跑", status="info"))
+        if items:
+            head = f"有 {len(bad)} 項必修還沒處理，處理完才能出片。" if bad else ""
+            sec = CardSection("checks", "自動檢查", items, note=head + note)
+        else:
+            sec = CardSection("checks", "自動檢查", [], summary=f"自動檢查：{len(report.clips)} 個片段都沒發現問題")
+    return ReviewExtras(cards=cards, page=[sec])

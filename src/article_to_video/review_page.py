@@ -49,6 +49,9 @@ class CheckItem:
     """ok／warn／block／info，決定前面那個小標籤的字和顏色。"""
     label: str | None = None
     """小標籤的字；不給就用 status 的預設（沒問題／要看一下／擋下出片／說明）。"""
+    code: str = ""
+    """給 Claude 的代號與技術說明（例「qa:SH03:jump@1a2b3c4d　跳變：…」）。不跟作者看的字放一起：
+    收在這一區最後、預設收起來的「給 Claude 的代號」裡。"""
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,9 @@ class CardSection:
     items: list[CheckItem] = field(default_factory=list)
     note: str = ""
     """標題下面的一句說明（選填）。"""
+    summary: str = ""
+    """有寫就整區縮成安靜的一行（例「自動檢查沒發現問題」）：沒有 items 就只有這一行；有 items 的話收在這一行底下，
+    點開才看得到。沒問題的檢查用它，作者不用一行一行讀。"""
 
 
 @dataclass(frozen=True)
@@ -172,6 +178,15 @@ _e = html.escape
 _SLOT_ORDER = {"numbers": 0, "checks": 1}
 
 
+def _codes(items: Sequence[CheckItem]) -> str:
+    """給 Claude 的代號：一區一個、預設收起來（作者不用看；Claude 讀頁面或 checks.json 都拿得到）。"""
+    codes = [it.code for it in items if it.code]
+    if not codes:
+        return ""
+    lis = "".join(f"<li><code>{_e(c)}</code></li>" for c in codes)
+    return f'<details class="codes"><summary>給 Claude 的代號</summary><ul>{lis}</ul></details>'
+
+
 def _section(sec: CardSection, heading: str = "h3") -> str:
     items = "".join(
         f'<li class="{_e(it.status)}"><span class="mark">{_e(it.label or STATUSES.get(it.status, it.status))}</span>'
@@ -181,8 +196,15 @@ def _section(sec: CardSection, heading: str = "h3") -> str:
         for it in sec.items
     )
     note = f'<p class="hint">{_e(sec.note)}</p>' if sec.note else ""
+    if sec.summary:  # 沒問題：安靜的一行，細節（有的話）點開才看
+        if not sec.items:
+            return (f'<section class="slot quiet" data-slot="{_e(sec.slot)}">'
+                    f'<p class="quiet-line">{_e(sec.summary)}</p></section>')
+        return (f'<section class="slot quiet" data-slot="{_e(sec.slot)}"><details class="fold">'
+                f'<summary class="quiet-line">{_e(sec.summary)}</summary>{note}<ul>{items}</ul></details>'
+                f'{_codes(sec.items)}</section>')
     return (f'<section class="slot" data-slot="{_e(sec.slot)}"><{heading}>{_e(sec.title)}</{heading}>{note}'
-            f'<ul>{items}</ul></section>')
+            f'<ul>{items}</ul>{_codes(sec.items)}</section>')
 
 
 def _slots(sections: Sequence[CardSection]) -> str:

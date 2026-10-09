@@ -221,7 +221,25 @@ def test_the_review_page_shows_the_checks_on_every_card_and_on_top(checked):
     root, _ = checked
     page = read_review(root)
     assert page.attrs["data-stage"] == "review" and page.videos  # 成片還是最新的：照樣內嵌
-    for card in page.cards:
-        assert "qa" in card.slots.get("checks", ""), card.slots
-        assert "字幕帶" in card.slots["checks"]
+    for card in page.cards:  # 全部沒問題：每張卡一行就好，不列 qa 的術語
+        assert card.slots.get("checks", "").strip() == "自動檢查沒發現問題", card.slots
     assert "自動檢查" in page.page_slots.get("checks", "")
+    assert "qa" not in page.page_slots["checks"]
+
+
+def test_problems_on_the_page_are_in_plain_words_and_the_codes_are_tucked_away(lab, tmp_path):
+    """作者看到的是白話（哪裡、怎麼了、什麼時候）；代號、檢查名稱、像素位置收在「給 Claude 的代號」裡。"""
+    from article_to_video.auto_checks import checks_contributor
+    from article_to_video.review import make_review
+    from test_review_page import parse_review
+
+    res = make_review(lab.build.plan, contributors=[checks_contributor])
+    page = parse_review(res.page.read_text(encoding="utf-8"))
+    sh04 = next(c for c in page.cards if c.id == "SH04")
+    seen = sh04.slots["checks"]
+    assert "字幕" in seen and "必修" in seen
+    for jargon in ("qa", "px", "y ≥", "band:", "框景"):
+        assert jargon not in seen, (jargon, seen)
+    assert "qa:SH04:text-in-band@" in sh04.codes and "band:SH04@" in sh04.codes  # Claude 要的代號還在
+    assert "band:SH04@" in page.page_codes and "band:SH04@" not in page.page_slots["checks"]
+    assert next(c for c in page.cards if c.id == "SH01").slots["checks"].strip() == "自動檢查沒發現問題"
