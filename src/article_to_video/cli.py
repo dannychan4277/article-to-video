@@ -19,6 +19,11 @@
                                                                      改使用者設定；加 --project 只改那支片的快照
   samples music --out 資料夾 [--seconds 20] [--data-dir D]           每首配樂一個試聽檔 music-<名字>.wav
   samples voice --out 資料夾 [--rate +5%] [--text …] [--tts edge|fake] 每個聲音一個試聽檔 voice-<代號>.wav（edge 要連網）
+  check-env [--json] [--data-dir D]                  檢查環境：逐項列出狀態與修法；有問題結束碼 1
+  install [--data-dir D]                             安裝 Homebrew（開終端機請作者輸入密碼）、ffmpeg-full、Chromium，
+                                                     已經有的略過；最後試 edge-tts 連線。沒全部裝好結束碼 1
+  test-video [--out 資料夾] [--tts edge|fake] [--no-open] [--data-dir D]
+                                                     用外掛自帶的範例做一支約 10 秒的測試片並打開（安裝最後一步）
 
 preview、build 做完會用 macOS 的 open 在預設瀏覽器打開審片頁；--no-open 或環境變數
 ARTICLE_TO_VIDEO_NO_OPEN=1（測試、CI）就不打開。preview、build 的輸出與錯誤記在
@@ -126,7 +131,8 @@ def _parser() -> argparse.ArgumentParser:
     show.add_argument("--project", help="看這支片的設定快照")
     st = ss.add_parser("set", help="改設定")
     for key, help_ in _SET_OPTIONS.items():
-        st.add_argument("--" + key.replace("_", "-"), dest=key, help=help_)
+        # argparse 會拿 help 做 % 格式化：「+5%、-10%」不跳脫的話 settings set --help 直接當掉
+        st.add_argument("--" + key.replace("_", "-"), dest=key, help=help_.replace("%", "%%"))
     st.add_argument("--data-dir", help=_DATA_DIR_HELP)
     st.add_argument("--project", help="只改這支片的設定快照（不動使用者設定）")
 
@@ -142,7 +148,74 @@ def _parser() -> argparse.ArgumentParser:
     pvv.add_argument("--text", default=VOICE_SAMPLE, help="試聽唸的句子")
     pvv.add_argument("--tts", choices=sorted(TTS_ENGINES), default="edge")
     pvv.add_argument("--data-dir", help=_DATA_DIR_HELP)
+
+    ce = sub.add_parser("check-env", help="檢查環境：逐項列出做片要用的工具狀態與修法（含 edge-tts 連線）")
+    ce.add_argument("--json", action="store_true", help="印 JSON（給程式讀）")
+    ce.add_argument("--data-dir", help=_DATA_DIR_HELP)
+
+    ins = sub.add_parser("install", help="安裝做片要用的工具（Homebrew、能燒字幕的 ffmpeg、Chromium），已經有的略過")
+    ins.add_argument("--data-dir", help=_DATA_DIR_HELP)
+
+    tv = sub.add_parser("test-video", help="做一支約 10 秒的測試片並打開（安裝最後一步，確認做片的環境沒問題）")
+    tv.add_argument("--out", help="測試片放哪個資料夾（預設 ~/Movies/解說影片/安裝測試片，Finder 裡的「影片」）")
+    tv.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設 edge，用設定好的聲音；要連網）")
+    tv.add_argument("--no-open", action="store_true", help="做完不要自動打開")
+    tv.add_argument("--data-dir", help=_DATA_DIR_HELP)
     return p
+
+
+def _test_video(args: argparse.Namespace) -> int:
+    from article_to_video.build import build_project
+    from article_to_video.issue_report import RunRecord
+    from article_to_video.review import auto_open_allowed
+    from article_to_video.sample_video import SampleVideoError, open_file, prepare_test_project
+
+    try:
+        out = prepare_test_project(args.out)
+    except (SampleVideoError, OSError) as e:
+        print(f"測試片做不出來：{e}", file=sys.stderr)
+        return 1
+    rec = RunRecord(out, "test-video", {"tts": args.tts})  # 出錯時「回報問題」帶這個資料夾就拿得到紀錄
+    log = rec.tee(lambda m: print(m, flush=True))
+    try:
+        from article_to_video.numbers import check_numbers
+
+        # 跟正式出片一樣先數字對帳（範例的數字都寫在範例的 article/text.txt 裡）
+        res = build_project(out, tts=args.tts, data_dir=args.data_dir, preflight=[check_numbers], log=log)
+    except KNOWN_ERRORS as e:
+        rec.finish(e)
+        print(f"測試片做不出來：{e}", file=sys.stderr)
+        print(f"（要回報問題時，出問題的專案資料夾是 {out}）", file=sys.stderr)
+        return 1
+    except BaseException as e:
+        rec.finish(e, unexpected=True)
+        raise
+    rec.finish()
+    print(f"測試片做好了：{res.video}（{res.duration:.1f} 秒）")
+    if not args.no_open and auto_open_allowed():
+        if not open_file(res.video):
+            print("沒能自動打開，請在 Finder 找到上面這個檔案，點兩下播放。")
+    return 0
+
+
+def _install(args: argparse.Namespace) -> int:
+    from article_to_video.installer import Installer
+
+    report = Installer(args.data_dir, log=lambda m: print(m, flush=True)).run()
+    return 0 if report.ok else 1
+
+
+def _check_env(args: argparse.Namespace) -> int:
+    from article_to_video.environment import collect_environment, environment_checks
+
+    report = collect_environment(environment_checks(args.data_dir))
+    if args.json:
+        print(json.dumps(report.to_json(), ensure_ascii=False, indent=1))
+    else:
+        print("環境檢查（✓ 正常、✗ 要處理、・ 只是資訊）：")
+        print(report.to_text(), end="")
+        print(report.summary())
+    return 0 if report.ok else 1
 
 
 def _show_review(page, *, no_open: bool) -> None:
@@ -412,4 +485,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         except KNOWN_ERRORS as e:
             print(f"試聽檔產生失敗：{e}", file=sys.stderr)
             return 1
+    if args.command == "check-env":
+        return _check_env(args)
+    if args.command == "install":
+        return _install(args)
+    if args.command == "test-video":
+        return _test_video(args)
     return 2

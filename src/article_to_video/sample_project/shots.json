@@ -1,0 +1,46 @@
+{
+ "shots": [
+  {
+   "id": "SH01",
+   "note": "安裝測試片：外掛自帶的範例（不是任何人的文章）。數字是 FRED DGS2（公有領域）2019–2024 年日資料的年平均，跟 engine/examples/t3_finance_chart.json 同一組（2026-10-08 下載核對）。",
+   "start": {"segment": "s01"},
+   "chart": {
+    "data": {
+     "title": "測試片：兩年期美債殖利率，六年走勢",
+     "unit": "美國兩年期公債殖利率，年平均，%",
+     "source": "來源：FRED（DGS2），年平均自算",
+     "chart": "bar",
+     "decimals": 2,
+     "series": [
+      {"label": "2019", "value": 1.97},
+      {"label": "2020", "value": 0.39},
+      {"label": "2021", "value": 0.27},
+      {"label": "2022", "value": 2.99},
+      {"label": "2023", "value": 4.58},
+      {"label": "2024", "value": 4.37}
+     ],
+     "highlight": {"index": 2, "text": "六年谷底"}
+    },
+    "cues": [
+     {"at": 0, "kind": "title"},
+     {"at": {"segment": "s01", "word": "裝好"}, "kind": "bar"},
+     {"at": {"segment": "s01", "word": "測試片", "edge": "end"}, "kind": "highlight"}
+    ]
+   }
+  },
+  {
+   "id": "SH02",
+   "note": "接續 SH01：同一張圖第一幀就畫好，只換標註（順便確認接續分鏡在這台 Mac 上沒問題）",
+   "start": {"segment": "s02"},
+   "continues": true,
+   "chart": {
+    "data": {
+     "highlight": {"index": 4, "text": "六年最高"}
+    },
+    "cues": [
+     {"at": {"segment": "s02", "word": "配音"}, "kind": "highlight"}
+    ]
+   }
+  }
+ ]
+}
