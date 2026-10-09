@@ -206,6 +206,20 @@ def test_portrait_end_card_stays_inside_the_platform_safe_area(portrait):
     assert _ink(middle) > 5000  # 卡上的字都在中間這塊
 
 
+def test_portrait_checks_look_at_the_portrait_subtitle_band_and_platform_ui(portrait, tmp_path):
+    """自動檢查（#11）照直式查：圖表的字幕帶＝平台底部介面＋兩行字幕框＋間隔；片尾卡沒有字幕，查平台底部介面區。"""
+    root = tmp_path / portrait["dir"].name
+    shutil.copytree(portrait["dir"], root)
+    proc = run_cli("checks", str(root), "--aspect", "9:16", "--tts", "fake")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    summary = json.loads((root / "build" / "9x16" / "checks.json").read_text(encoding="utf-8"))
+    sub_top = H - UI_BOTTOM - (2 * 64 + 2 * 12) - 24  # 兩行 64 號字幕的深底框＋框上下內距＋間隔
+    assert {c["clip"]: c["band"].get("top") for c in summary["clips"]} == {
+        "SH01": sub_top, "SH02": sub_top, "end.card": H - UI_BOTTOM}
+    assert all(c["band"]["checked"] and c["qa"]["checked"] for c in summary["clips"])
+    assert summary["blocking"] == [] and (root / "審片頁-9x16.html").is_file()
+
+
 def write_article_png(path: Path, w: int = 900, h: int = 600) -> Path:
     """自製「文章裡的圖」：淺色紙底，右邊一塊深色數字塊（x 0.55–0.85、y 0.40–0.52）。只用標準庫寫 PNG。"""
     import struct
