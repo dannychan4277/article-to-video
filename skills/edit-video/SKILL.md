@@ -115,7 +115,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video boxes "<專案
 ```
 
 ```
-uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video confirm-box "<專案>" SH05:1@xxxxxxxx --note "框在哪個數字上"
+uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video confirm-box "<專案>" SH05:1@xxxxxxxx --note "框在哪個數字上" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
 - 改得很多（大約三分之一以上的分鏡，或整段旁白重寫）：照 checks-and-review.md 再 build、checks、審一輪，再給他看。
@@ -152,7 +152,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video publish "<專�
   你覺得不用改的必修要問他，他說不改才記下（代號照訊息抄）：
 
 ```
-uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video resolve "<專案>" R1-2 --accept "作者說…" --by 作者
+uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video resolve "<專案>" R1-2 --accept "作者說…" --by 作者 --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
 出片完成後跟他說：成片（字幕已經燒在畫面上）可以直接上傳；字幕檔（.srt）上傳 YouTube 時可以一起給。

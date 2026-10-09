@@ -125,7 +125,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video boxes "<專案
 每個框 Read「畫面」那張圖（必要時「原圖」那張對座標），照 vox-rules.md 確認框在旁白唸的那個數字上，都對了才記下（代號照抄 boxes 印的）：
 
 ```
-uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video confirm-box "<專案>" SH05:1@xxxxxxxx --note "框在哪個數字上"
+uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video confirm-box "<專案>" SH05:1@xxxxxxxx --note "框在哪個數字上" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
 ## 8. 建置審片用的成片 → 自動檢查 → 獨立審片
@@ -165,7 +165,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-record 
 這時先做第 9 步（審片頁用靜態圖給他看），他決定了再回來 build：
 
 ```
-uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video resolve "<專案>" R1-2 --fixed "怎麼改的"
+uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video resolve "<專案>" R1-2 --fixed "怎麼改的" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
 改了旁白就回到第 4 步（配音，看秒數、調錨點），只改分鏡就回到第 6 步（預覽、看改到的靜態圖），再 build、checks；改得多再審一輪。
