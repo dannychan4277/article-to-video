@@ -10,13 +10,16 @@
       logo.png           片尾卡的 logo（設定快照的一部分，從使用者資料位置複製進來；沒設 logo 就沒有）
       article/           文章原檔、擷取文字與原圖（文章擷取那張票放）
       public_data/       公有數據快照（<系列代號>.json：數字＋擷取日期）；抓過之後重建不用網路，刪掉就重抓
+      box_checks.json    Claude 核對過的 Vox 框（依框的內容雜湊記，見 boxes.py）；不在 build/ 裡，刪 build/ 不會掉
       成片.mp4           燒好字幕的成片（16:9）
       審片頁.html        給作者看的審片頁（預覽與出片都會更新）
       字幕.srt           字幕檔（檔名故意跟成片不同：同名 .srt 會被播放器自動疊上去，變成兩層字幕）
       成片-9x16.mp4、字幕-9x16.srt、審片頁-9x16.html   直式（9:16）版，跟 16:9 的並存（--aspect 9:16 或預設比例設直式）
       build/             建置產物，可整個刪掉重來
         narration/       配音層快取（依「配音層｜聲音｜語速｜文字」）與 timing.json
-        16x9/、9x16/     各畫面比例的產物：specs/、clips/、logs/、fonts/、stills/、timeline.json、review.json、subs.*、narration.wav、soundtrack.wav
+        vox/             原文剪報圖（excerpt-<內容雜湊>.png，跟比例無關；excerpt.py）
+        16x9/、9x16/     各畫面比例的產物：specs/、clips/、logs/、fonts/、stills/、boxes/（Vox 框的靜態圖）、
+                         timeline.json、review.json、subs.*、narration.wav、soundtrack.wav
 
 設定檔都是 UTF-8 JSON，由 Claude 寫、這裡驗證。驗證錯誤一次列出全部問題，每條都指出哪個分鏡、哪個欄位。
 """
