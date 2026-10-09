@@ -98,3 +98,25 @@ def test_every_card_still_lies_inside_its_own_shot(chain):
     for st in plan.timeline.shots:
         for s in chain.review.stills[st.shot.id]:
             assert st.start_frame / fps - 1e-6 <= s.video_time < st.end_frame / fps, (st.shot.id, s.video_time)
+
+
+def edited_copy(chain: Chain, tmp_path: Path, shot_id: str, cue: int, **changes: object) -> Path:
+    root = tmp_path / "改過" / chain.dir.name
+    shutil.copytree(chain.dir, root)
+    doc = json.loads((root / "shots.json").read_text(encoding="utf-8"))
+    next(s for s in doc["shots"] if s["id"] == shot_id)["vox"]["cues"][cue].update(changes)
+    (root / "shots.json").write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    return root
+
+
+def test_changing_one_shot_of_a_continued_chain_marks_only_that_shot(chain, tmp_path):
+    """SH03 改框的字：同一個片段要重渲，但 SH01、SH02、SH04 的畫面和旁白都沒變。"""
+    again = preview(edited_copy(chain, tmp_path, "SH03", 1, find="差距"))
+    assert again.version == 2
+    assert again.changed == ["SH03"]
+
+
+def test_a_shot_whose_own_picture_changed_is_marked_too(chain, tmp_path):
+    """SH01 的原圖加上圖說：SH02 框的就是這張圖（標籤跟著變），也算改過；SH03、SH04 換了別的素材，不算。"""
+    again = preview(edited_copy(chain, tmp_path, "SH01", 0, caption="自製示意圖"))
+    assert again.changed == ["SH01", "SH02"]

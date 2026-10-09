@@ -19,8 +19,8 @@ from article_to_video.clips import ENGINE_DIR, ClipRenderError, render_clip, run
 from article_to_video.project import VariantPaths
 from article_to_video.timeline import ClipPlan
 
-__all__ = ["CACHE_VERSION", "RenderReport", "clip_hash", "clip_is_current", "clip_stamp", "engine_fingerprint",
-           "render_planned_clips"]
+__all__ = ["CACHE_VERSION", "RenderReport", "clip_hash", "clip_is_current", "clip_stamp", "content_fields",
+           "engine_fingerprint", "render_planned_clips"]
 
 CACHE_VERSION = "1"
 _OUR_SUFFIXES = {".json", ".mp4", ".sha256", ".log"}
@@ -53,16 +53,21 @@ def _file_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def content_fields(fields: dict) -> dict:
+    """一份 cue（或 data）的副本，image 的路徑換成圖片內容的雜湊：專案搬家不算改，圖換了才算。"""
+    out = copy.deepcopy(fields)
+    img = out.get("image")
+    if isinstance(img, str) and img and not img.startswith(("data:", "http:", "https:")):
+        p = Path(img)
+        out["image"] = "sha256:" + (_file_digest(p) if p.is_file() else f"missing:{img}")
+    return out
+
+
 def clip_hash(plan: ClipPlan) -> str:
     spec = copy.deepcopy(plan.spec)
-    holders = [cue for cue in spec.get("cues") or [] if isinstance(cue, dict)]
+    spec["cues"] = [content_fields(cue) if isinstance(cue, dict) else cue for cue in spec.get("cues") or []]
     if isinstance(spec.get("data"), dict):
-        holders.append(spec["data"])  # data.image：片尾卡的 logo
-    for holder in holders:
-        img = holder.get("image")
-        if isinstance(img, str) and img and not img.startswith(("data:", "http:", "https:")):
-            p = Path(img)
-            holder["image"] = "sha256:" + (_file_digest(p) if p.is_file() else f"missing:{img}")
+        spec["data"] = content_fields(spec["data"])  # data.image：片尾卡的 logo
     payload = json.dumps(spec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     h = hashlib.sha256()
     for part in (CACHE_VERSION, payload, engine_fingerprint(plan.grammar)):

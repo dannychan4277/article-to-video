@@ -8,7 +8,8 @@
 每個畫面事件出現前一幀（跟上一個事件隔 ≥ MOMENT_GAP 秒才算，最多 MAX_MOMENTS 張）。快取在 build/<比例>/stills/<片段>/，
 鍵＝片段雜湊（spec＋引擎檔＋圖片）＋要渲的時刻，內容沒變就不重渲；並行渲。
 
-版本（build/<比例>/review.json）：每次寫審片頁都比對每個分鏡的內容雜湊（片段雜湊＋在片段裡的位置與長度＋它唸的旁白）。
+版本（build/<比例>/review.json）：每次寫審片頁都比對每個分鏡的內容雜湊（它自己畫面上的東西＋長度＋它唸的旁白，
+見 _shot_hashes；照分鏡算，不照片段算）。
 跟上次一樣就沿用版本號與「這版改過」的標記；不一樣就加一版，標出改過／新加的分鏡、列出拿掉的分鏡。
 瀏覽器裡的留言照版本存：新的一版開頭會問要不要放回上一版還沒複製出去的留言（見 review_assets/review.js）。
 
@@ -34,7 +35,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from article_to_video.build import BuildPlan, plan_build
-from article_to_video.clip_cache import clip_hash
+from article_to_video.clip_cache import clip_hash, content_fields, engine_fingerprint
 from article_to_video.clips import GRAMMAR_VOX, ClipRenderError, default_jobs, render_stills, run_parallel
 from article_to_video.macos import open_path
 from article_to_video.progress import Log, quiet
@@ -320,17 +321,50 @@ class _Version:
     removed: list[tuple[str, int]]
 
 
+_VOX_MATERIAL = ("image", "excerpt", "title", "point")
+"""Vox 桌面上的素材（cue 的 kind）；框（box）畫在它前面最近的那件原圖或剪報上。"""
+
+
+def _chart_picture(cp: ClipPlan) -> list:
+    """財經圖表分鏡（一個分鏡一個片段）畫面上的東西：整份 spec（接續分鏡沿用的 data、cue 都在裡面）＋引擎檔。
+    慢推（push、pushFrom）不算：同一串前面的分鏡變長，後面的推近量跟著變，但作者看不出差別。"""
+    data = {k: v for k, v in (cp.spec.get("data") or {}).items() if k not in ("push", "pushFrom")}
+    spec = {**{k: v for k, v in cp.spec.items() if k not in ("duration", "data", "cues")},
+            "data": content_fields(data), "cues": [content_fields(c) for c in cp.spec.get("cues") or []]}
+    return [engine_fingerprint(cp.grammar), spec]
+
+
+def _vox_picture(plan: BuildPlan, index: int, cp: ClipPlan) -> list:
+    """Vox 分鏡（一串接續分鏡共用一個片段）畫面上的東西：只算這個分鏡自己的素材與框（給引擎的欄位、圖片內容、
+    在這個分鏡裡的時間），加上它開場時桌上那件素材——如果它沒有一開場就換上自己的素材（例：只有框的接續分鏡，
+    框的是上一個分鏡貼的圖，連同那張圖上已經畫好的框）。同一串其他分鏡改了，這個分鏡的畫面沒變就不算改過。"""
+    shots = plan.timeline.shots
+    st = shots[index]
+    fps = plan.timeline.fps
+    own = [[c.kind, content_fields(c.fields), c.frame - st.start_frame] for c in st.cues]
+    opens_with_own = bool(st.cues) and st.cues[0].kind in _VOX_MATERIAL and \
+        st.cues[0].frame - st.start_frame <= round(VOX_LEAVE * fps)
+    context: list = []
+    if not opens_with_own:
+        earlier = [c for prev in shots[:index] if prev.shot.id in cp.shot_ids for c in prev.cues]
+        last = max((i for i, c in enumerate(earlier) if c.kind in _VOX_MATERIAL), default=None)
+        if last is not None:
+            context = [content_fields(c.fields) for c in earlier[last:]]  # 那件素材＋之後畫在它上面的框
+    base = {k: v for k, v in cp.spec.items() if k not in ("duration", "cues")}
+    return [engine_fingerprint(cp.grammar), base, own, context]
+
+
 def _shot_hashes(plan: BuildPlan, narration: dict[str, list[NarrationPiece]]) -> dict[str, str]:
-    """每個分鏡的內容雜湊＝它的片段雜湊（spec＋引擎檔＋圖片）＋在片段裡的位置與長度＋它唸的旁白。
+    """每個分鏡的內容雜湊＝它自己畫面上的東西（_chart_picture／_vox_picture）＋長度＋它唸的旁白。
+    照分鏡算、不照片段算：一串接續的 Vox 分鏡共用一個片段，只改其中一個，只有它（和畫面真的跟著變的）算改過。
     在成片裡的絕對時間不算：前面的分鏡變長，後面的分鏡往後挪，但畫面沒變就不算改過。"""
     clip_of = _clip_of(plan)
-    clip_hashes = {cp.id: clip_hash(cp) for cp in plan.clips}
     out: dict[str, str] = {}
-    for st in plan.timeline.shots:
+    for i, st in enumerate(plan.timeline.shots):
         cp = clip_of[st.shot.id]
-        payload = [clip_hashes[cp.id], st.start_frame - cp.start_frame, st.frames,
-                   [[p.segment, p.text] for p in narration[st.shot.id]]]
-        out[st.shot.id] = hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
+        picture = _vox_picture(plan, i, cp) if cp.grammar == GRAMMAR_VOX else _chart_picture(cp)
+        payload = [picture, st.frames, [[p.segment, p.text] for p in narration[st.shot.id]]]
+        out[st.shot.id] = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     return out
 
 
