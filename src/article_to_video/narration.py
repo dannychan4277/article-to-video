@@ -22,7 +22,7 @@ import unicodedata
 import wave
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -323,12 +323,19 @@ def narrate(
         meta.write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
         return SegmentAudio(seg, text, wav, duration, tuple(syn.words)), False
 
+    # 一字不差的兩段旁白共用同一個快取鍵：只配一次（並行配同一個鍵會搶同一個暫存檔），其他段沿用那份音檔
+    first: dict[str, str] = {}
+    for seg, ck in keys.items():
+        first.setdefault(ck, seg)
     results: dict[str, SegmentAudio] = {}
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
-        for seg, (audio, cached) in zip(segments, pool.map(one, list(segments))):
-            results[seg] = audio
-            if on_segment:
-                on_segment(seg, cached)
+        done = dict(zip(first.values(), pool.map(one, list(first.values()))))
+    for seg in segments:
+        lead = first[keys[seg]]
+        audio, cached = done[lead]
+        results[seg] = audio if seg == lead else replace(audio, key=seg)
+        if on_segment:
+            on_segment(seg, cached or seg != lead)
 
     _prune(cache, engine.name, set(keys.values()))
     return results

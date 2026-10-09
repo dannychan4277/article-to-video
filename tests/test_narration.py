@@ -60,6 +60,17 @@ def test_same_voice_rate_and_text_is_not_synthesized_twice(tmp_path):
     assert len(tts.calls) == 3 + 2 + 2
 
 
+def test_segments_with_the_same_text_are_voiced_once(tmp_path):
+    """兩段旁白一字不差（例如重複的一句結語）：只配一次、兩段都拿到同一份音檔（以前會並行寫同一個暫存檔而失敗）。"""
+    tts = CountingTTS()
+    segs = {f"s{i:02d}": "這句會重複。" for i in range(1, 7)} | {"s07": "只有一次。"}
+    out = narrate(segs, engine=tts, voice="zh-TW-HsiaoChenNeural", rate="+5%", cache_dir=tmp_path, jobs=4)
+    assert sorted(c[0] for c in tts.calls) == ["只有一次。", "這句會重複。"]
+    assert list(out) == list(segs)
+    assert len({out[k].audio for k in segs if k != "s07"}) == 1
+    assert all(out[k].audio.is_file() and out[k].text == segs[k] for k in segs)
+
+
 def test_renaming_a_segment_key_reuses_the_cache(tmp_path):
     tts = CountingTTS()
     narrate({"s01": "同一句話。"}, engine=tts, voice="zh-TW-HsiaoChenNeural", rate="+5%", cache_dir=tmp_path)
