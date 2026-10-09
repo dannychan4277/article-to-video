@@ -8,7 +8,7 @@
     textarea.comment[data-shot-id]
   .page-slots .slot[data-slot=…]   整片層級的檢查結果（例：獨立審片）
   textarea#overall.overall、#menu（能加什麼）、#copy-btn／#copy-status／#copy-out（複製給 Claude）
-  <script id="review-data" type="application/json">  給 review.js 的資料（專案名、版本、分鏡編號與 id）
+  <script id="review-data" type="application/json">  給 review.js 的資料（片名、版本、分鏡編號與 id）
 
 後面的票往卡片加東西：做一個 CardSection（slot、標題、幾個 CheckItem），經 review.make_review(contributors=…) 傳進來，
 這裡負責排版與跳脫（不吃 HTML，只吃文字）。
@@ -86,7 +86,8 @@ class CardModel:
 
 @dataclass(frozen=True)
 class PageModel:
-    project: str
+    title: str
+    """片名（「日期-片名」資料夾去掉日期；專案資料夾自己一律叫「專案」）：頁面標題、頁首、複製給 Claude 的標頭都用它。"""
     storage_key: str
     version: int
     stage: str
@@ -274,7 +275,7 @@ def render_review_html(m: PageModel) -> str:
                       + "".join(f'<div class="panel">{_section(s, "h2")}</div>' for s in m.page_sections)
                       + "</div>")
     data = {
-        "project": m.project,
+        "project": m.title,
         "storageKey": m.storage_key,
         "version": m.version,
         "stage": m.stage,
@@ -294,7 +295,7 @@ def render_review_html(m: PageModel) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>審片頁｜{_e(m.project)}（第 {m.version} 版）</title>
+<title>審片頁｜{_e(m.title)}（第 {m.version} 版）</title>
 <style>
 {_asset("review.css")}
 </style>
@@ -302,7 +303,7 @@ def render_review_html(m: PageModel) -> str:
 <body>
 <header class="top"><div class="wrap">
 <p class="eyebrow">審片頁 · 第 {m.version} 版 {stage}</p>
-<h1>{_e(m.project)}</h1>
+<h1>{_e(m.title)}</h1>
 <p class="meta">{len(m.cards)} 個分鏡 · 全長 {timecode(m.duration)} · {_e(m.generated)} 產生</p>
 </div></header>
 <main class="wrap">

@@ -44,6 +44,9 @@ class Card:
 @dataclass
 class ReviewPage:
     title: str = ""
+    h1: str = ""
+    stage_text: str = ""
+    """頁首那行「預覽／審片用的影片／已出片」的字。"""
     cards: list[Card] = field(default_factory=list)
     videos: list[str] = field(default_factory=list)
     overall_boxes: int = 0
@@ -72,6 +75,10 @@ class _Parser(HTMLParser):
             self.page.attrs = a
         if tag == "title":
             self.in_title = True
+        if tag == "h1":
+            self.capture.append(("h1", len(self.stack) + 1))
+        if "stage" in cls:
+            self.capture.append(("stage", len(self.stack) + 1))
         if "card" in cls and tag == "article":
             self.page.cards.append(Card(id=a["data-shot-id"], number=int(a["data-shot-number"]),
                                         changed=a.get("data-changed") == "true"))
@@ -115,6 +122,10 @@ class _Parser(HTMLParser):
             card = self.page.cards[-1] if self.page.cards else None
             if target == "menu":
                 self.page.menu_text += data
+            elif target == "h1":
+                self.page.h1 += data
+            elif target == "stage":
+                self.page.stage_text += data
             elif target == "changes":
                 self.page.changes_text += data
             elif target.startswith("slot:"):
@@ -127,10 +138,14 @@ class _Parser(HTMLParser):
                 setattr(card, target, getattr(card, target) + data)
 
 
-def read_review(project_dir: Path) -> ReviewPage:
+def parse_review(html: str) -> ReviewPage:
     p = _Parser()
-    p.feed((project_dir / REVIEW_PAGE).read_text(encoding="utf-8"))
+    p.feed(html)
     return p.page
+
+
+def read_review(project_dir: Path) -> ReviewPage:
+    return parse_review((project_dir / REVIEW_PAGE).read_text(encoding="utf-8"))
 
 
 def local_file(project_dir: Path, src: str) -> Path:

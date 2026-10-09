@@ -41,6 +41,7 @@ from article_to_video.progress import Log, quiet
 from article_to_video.textio import read_json_or_none
 from article_to_video.review_page import CardModel, CardSection, CheckItem, PageModel, StillModel, render_review_html
 from article_to_video.timeline import ClipPlan, Timeline, VideoFormat
+from article_to_video.videos import video_title
 
 __all__ = [
     "NO_OPEN_ENV",
@@ -377,7 +378,7 @@ def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], vid
         for st in plan.timeline.shots
     ]
     return PageModel(
-        project=plan.project.root.name,
+        title=video_title(plan.project.root),
         storage_key=_storage_key(plan),
         version=version.number,
         stage="final" if video else "preview",

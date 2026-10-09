@@ -70,6 +70,8 @@ class Walk:
     steps: dict[str, Step] = field(default_factory=dict)
     mtimes: dict[str, dict[str, float]] = field(default_factory=dict)
     opened: list[str] = field(default_factory=list)
+    pages: dict[str, str] = field(default_factory=dict)
+    """那一步做完時的審片頁（HTML）。"""
 
 
 def _files(d: Path) -> dict[str, float]:
@@ -113,6 +115,7 @@ def walk(tmp_path_factory, videos_dir) -> Walk:
     # 4. Claude 照秒數寫分鏡 → 預覽：分鏡靜態圖＋數字對帳（配音用第 3 步的），先不給作者看
     (p / "shots.json").write_text(json.dumps(SHOTS, ensure_ascii=False), encoding="utf-8")
     run("preview", "preview", str(p), "--no-open", "--data-dir", str(data))
+    w.pages["preview"] = (p / "審片頁.html").read_text(encoding="utf-8")
     # 4. 檢查都做完了，打開審片頁給作者看
     run("open-review", "open-review", str(p), "--data-dir", str(data), env=opening)
     w.mtimes["before"] = {**{f"stills/{k}": v for k, v in _files(p / "build" / "16x9" / "stills").items()},
@@ -237,3 +240,15 @@ def test_old_projects_list_shows_it_was_published(walk):
     me = next(p for p in listed if p["project"] == str(walk.project))
     assert me["stage"] == "已出片" and me["outputs"]["16x9"]["reviewVersion"] == 2
     assert listed[0]["project"] == str(walk.project)
+
+
+def test_the_review_page_is_titled_with_the_video_not_the_project_folder(walk):
+    """專案資料夾一律叫「專案」，片名在上一層「日期-片名」：審片頁的標題、頁首、複製給 Claude 的標頭都寫片名。"""
+    from test_review_page import parse_review
+
+    html = walk.pages["preview"]
+    page = parse_review(html)
+    assert page.h1.strip() == TITLE
+    assert TITLE in page.title and "專案" not in page.title
+    data = json.loads(html.split('<script id="review-data" type="application/json">')[1].split("</script>")[0])
+    assert data["project"] == TITLE  # review.js 拿它寫「審片留言｜片名｜第 N 版」
