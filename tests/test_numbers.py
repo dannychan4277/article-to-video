@@ -74,13 +74,17 @@ def test_numbers_match_after_normalizing_how_they_are_written(tmp_path):
     def edit(shots: dict) -> None:
         sh01 = shots["shots"][0]["chart"]
         sh01["data"]["highlight"]["text"] = "1.2 萬檔、4.5% 與 4.585"
+        sh01["data"]["title"] = "短天期反而比較高：規模 3.2（兆美元）"
         sh01["cues"].append({"at": 1, "kind": "number", "data": {"value": 12345, "decimals": 0}})
+        # 引擎（JS toFixed）把剛好在中間的 0.125 進位成 0.13；Python 的 format 會變 0.12
+        sh01["cues"].append({"at": 1.2, "kind": "number", "data": {"value": 0.125, "decimals": 2}})
 
     root = make_project(tmp_path, edit)
     (root / "article" / "text.txt").unlink()
     paragraphs = [
         {"n": 1, "text": "從二〇二三年說起：兩年期殖利率平均是百分之四點五八，十年期是３．９６％。", "page": 1},
-        {"n": 2, "text": "這一年新發行 12345 檔，共約一萬兩千檔還在市場上，平均票面利率 4.50%。", "page": 2},
+        {"n": 2, "text": "這一年新發行 12345 檔，共約一萬兩千檔還在市場上，平均票面利率 4.50%，規模約 3.2 兆美元，利差 0.13。",
+         "page": 2},
     ]
     (root / "article" / "article.json").write_text(
         json.dumps({"version": 1, "text": "text.txt", "paragraphs": paragraphs, "images": []}, ensure_ascii=False),
@@ -97,10 +101,24 @@ def test_numbers_match_after_normalizing_how_they_are_written(tmp_path):
         ("標註", "1.2 萬"): "article",    # 一萬兩千
         ("標註", "4.5%"): "article",      # 4.50%
         ("標註", "4.585"): "none",        # 比文章的 4.58 多一位：不是文章寫的數字
+        ("標題", "3.2"): "article",       # 文章寫 3.2 兆：單位寫在別處（括號、圖的單位行）也算
         ("大數字", "12,345"): "article",  # 12345
+        ("大數字", "0.13"): "article",    # 畫面上的樣子跟引擎一樣
     }
     assert {k: n.kind for k, n in got.items()} == expected
     assert "原文第 2 段（第 2 頁）" in got[("大數字", "12,345")].detail
+
+
+def test_later_screen_texts_like_vox_index_cards_are_reconciled_too(tmp_path):
+    """Vox 分鏡（#8）的索引卡字：寫一個 ScreenTextSource 加進 default_sources() 就會一起對帳。"""
+    from article_to_video.numbers import ScreenText, default_sources
+
+    def index_cards(plan, st) -> list:
+        return [ScreenText("索引卡", "兩年期 4.58%，比去年多 3.1 個百分點")] if st.shot.id == "SH01" else []
+
+    rep = reconcile(plan_build(make_project(tmp_path), tts="fake"), sources=[*default_sources(), index_cards])
+    assert {(n.shown, n.kind) for n in rep.shots["SH01"] if n.where == "索引卡"} == {
+        ("兩", "article"), ("4.58%", "article"), ("3.1 個百分點", "none")}
 
 
 # ---------------------------------------------------------------- 主切點：正式出片被擋、審片頁標出來
@@ -112,29 +130,41 @@ def cli(command: str, root: Path) -> subprocess.CompletedProcess:
                           capture_output=True, text=True, encoding="utf-8", env=env)
 
 
+def edit_json(path: Path, fn: Callable[[dict], None]) -> None:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    fn(data)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
 def unsourced_highlight(shots: dict) -> None:
     """SH02 的標註寫了文章裡沒有的數字：0.7（文章是 4.58 和 3.96，差 0.62）。"""
     shots["shots"][1]["chart"]["data"]["highlight"]["text"] = "長天期低 0.7"
 
 
-def test_unsourced_number_blocks_the_final_build_but_not_the_preview(tmp_path):
-    root = make_project(tmp_path, unsourced_highlight)
+def test_unsourced_number_blocks_the_final_build_but_not_the_preview(built_project, tmp_path):
+    """出過片的專案，改出一個無出處的數字：正式出片被擋（不渲染、成片不動），審片頁改回預覽的樣子並標出那個數字。"""
+    root = tmp_path / "2026-10-09-殖利率曲線"
+    shutil.copytree(built_project.dir, root)
+    assert read_review(root).attrs["data-stage"] == "final"
+    video_mtime = (root / "成片.mp4").stat().st_mtime_ns
+    clip_mtime = (root / "build" / "16x9" / "clips" / "SH02.mp4").stat().st_mtime_ns
+    edit_json(root / "shots.json", unsourced_highlight)
+
+    build = cli("build", root)
+    assert build.returncode == 1
+    assert "分鏡 SH02（審片頁的分鏡 2）" in build.stderr and "0.7" in build.stderr and "Traceback" not in build.stderr
+    assert (root / "成片.mp4").stat().st_mtime_ns == video_mtime  # 沒有重組成片
+    assert (root / "build" / "16x9" / "clips" / "SH02.mp4").stat().st_mtime_ns == clip_mtime  # 渲染前就擋下
+    page = read_review(root)  # 審片頁跟著這一版：不再內嵌上一版的成片、無出處的數字標在卡上
+    assert page.attrs["data-stage"] == "preview" and not page.videos
+    assert "0.7" in page.cards[1].slots["numbers"] and "擋下出片" in page.cards[1].slots["numbers"]
+    assert "分鏡 2：0.7" in page.page_slots["numbers"]  # 頁首也列出來：哪個分鏡的哪個數字擋住出片
 
     preview = cli("preview", root)
     assert preview.returncode == 0, preview.stderr  # 預覽照樣出
     assert "數字對帳" in preview.stdout and "分鏡 SH02" in preview.stdout and "0.7" in preview.stdout  # 給 Claude 看
     card = read_review(root).cards[1]
     assert "0.7" in card.slots["numbers"] and "無出處" in card.slots["numbers"]
-
-    build = cli("build", root)
-    assert build.returncode == 1
-    assert "分鏡 2" in build.stderr and "0.7" in build.stderr and "Traceback" not in build.stderr
-    assert not (root / "成片.mp4").exists()
-    assert not list((root / "build" / "16x9").glob("clips/*.mp4"))  # 渲染前就擋下
-    page = read_review(root)  # 擋下之後審片頁也是這一版的樣子：沒有成片、無出處的數字標在卡上
-    assert page.attrs["data-stage"] == "preview" and not page.videos
-    assert "0.7" in page.cards[1].slots["numbers"] and "擋下出片" in page.cards[1].slots["numbers"]
-    assert "分鏡 2：0.7" in page.page_slots["numbers"]  # 頁首也列出來：哪個分鏡的哪個數字擋住出片
 
 
 def test_with_every_number_sourced_the_build_passes_and_each_card_shows_the_sources(built_project):

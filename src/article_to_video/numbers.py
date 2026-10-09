@@ -1,24 +1,36 @@
 """數字對帳：列出每個分鏡上畫面的數字，對回出處；對不到的擋下正式出片。
 
-上畫面的字（screen_texts，每個分鏡一份）：
-  財經圖表：標題、副標（單位那行；自訂的縱軸說明也算）、角標、數值（柱上／線頭的數字，照 decimals、prefix、
-  suffix 格式化成畫面上的樣子；柱上文字覆寫生效時看覆寫的字）、類目名（x 軸標籤，全部都算）、標註（text、sub）、
-  大數字（number cue 的值與說明）。接續分鏡只算它自己新出現的字（沿用的圖記在上一個分鏡）。
-  不算：來源行（那是出處本身）、預設的縱軸說明「縱軸未從 0 開始」、刻度值（引擎依數據範圍自己排的尺，不是主張）。
-  Vox 索引卡（#8）：寫一個 ScreenTextSource 加進 default_sources()。
+  reconcile(plan) → NumberReport        每個分鏡的數字與出處（不渲染、不連網，plan_build 之後幾毫秒）
+  check_numbers(plan)                   build 的 preflight：有無出處就丟 ProjectError（繁中，點名分鏡 id、審片頁編號、數字）
+  number_review(plan)                   審片頁的 Contributor：每張卡的「numbers」欄＋頁首摘要
+  summary_line(plan)                    指令列預覽印的一行摘要（給 Claude 看）
+
+上畫面的字（ScreenTextSource，每個分鏡一份；預設 default_sources()）：
+  財經圖表（chart_texts）：標題、副標（單位那行；自訂的縱軸說明也算）、角標、數值（柱上／線頭的數字，照 decimals、
+  prefix、suffix 格式化成畫面上的樣子；柱上文字覆寫生效時看覆寫的字；折線、K 線每個點都算）、類目名（x 軸標籤，
+  全部都算，不管引擎有沒有抽稀）、標註（text、sub）、大數字（number cue 的值與說明）。
+  接續分鏡只算它自己新出現的字（沿用的圖記在上一個分鏡）。
+  不算：來源行（data.source，那是出處本身）、預設的縱軸說明「縱軸未從 0 開始」、刻度值（引擎依數據範圍排的尺，
+  不是主張；數據本身已經對過帳）、片尾卡（不是分鏡：頻道名、彙整的來源行、固定的免責聲明，都是出處或固定字）。
+  Vox 索引卡（#8）：寫一個 ScreenTextSource（BuildPlan, ShotTiming → [ScreenText]）加進 default_sources()。
 
 出處分類（每個數字照順序找，找到就停）：
   public   白名單公有數據：這個分鏡的公有數據圖畫的值、期間標籤、系列名稱（附系列、期間、擷取日期）。
-  derived  推算：分鏡設定的 derived 宣告了算式，算式的每個輸入都找得到出處，而且算出來四捨五入到畫面的位數＝畫面上的數字。
-  article  原文出現：文章裡有一個數字，四捨五入到畫面的位數＝畫面上的數字。
+  derived  推算：分鏡設定的 derived 宣告了算式，算式的每個輸入都找得到出處（原文或這張圖的公有數據；10、100、1000…
+           換算單位的常數免），而且算出來四捨五入到畫面的位數＝畫面上的數字。
+  article  原文出現：文章裡有一個數字，四捨五入到畫面寫的位數＝畫面上的數字（畫面寫得比文章精確就對不上）。
   none     無出處：以上都不是。有任何一個 → check_numbers 擋下正式出片（預覽照樣出，審片頁標出來）。
 
-比對前的正規化（find_numbers，文章和畫面用同一套）：全形轉半形、千分位、小數（4.50＝4.5）、百分比（4.58%＝
-百分之四點五八＝4.58，百分號不影響比對）、中文數字（四點五八、兩年期、一萬兩千、二〇二三）、萬／億／兆（1.2 萬＝12,000）。
-正負號不看（「下跌 0.62」對得上畫面的 −0.62）。
+分鏡設定的推算宣告（shots.json 每個分鏡可選的 derived；parse_derived 驗證，錯誤繁中點名「分鏡 SH02 的 derived[0]」）：
+    "derived": [{"value": "0.62", "formula": "4.58 - 3.96", "note": "兩年期減十年期"}]
+  value＝畫面上那個數字（字串或數字）；formula＝四則運算＋括號（- − * × x / ÷，數字可帶千分位與 %）；note 選填。
 
-文章文字只從 read_article() 讀（#6 文章擷取的產出：<專案>/article/article.json 的段落，沒有就讀 article/text.txt，
-段與段之間空一行）。
+比對前的正規化（find_numbers，文章和畫面用同一套）：全形轉半形、千分位、小數（4.50＝4.5）、百分比（4.58%＝
+百分之四點五八＝4.58，百分號不影響比對）、中文數字（四點五八、兩年期、一萬兩千、二〇二三）、萬／億／兆（1.2 萬＝12,000；
+文章寫「3.2 兆」時，畫面只寫 3.2 也對得上）。正負號不看（「下跌 0.62」對得上畫面的 −0.62）。
+
+文章文字只從 read_article() 讀：文章擷取（article.py）寫的 <專案>/article/article.json 段落（有頁碼），
+沒有就讀 article/text.txt（段與段之間空一行）。
 """
 
 from __future__ import annotations
@@ -28,6 +40,7 @@ import re
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
 from fractions import Fraction
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -43,17 +56,21 @@ if TYPE_CHECKING:
 
 __all__ = [
     "Article",
+    "Derivation",
     "FoundNumber",
     "NumberReport",
     "NumberSource",
     "ScreenText",
+    "ScreenTextSource",
+    "chart_texts",
     "check_numbers",
     "default_sources",
     "find_numbers",
     "number_review",
-    "summary_line",
+    "parse_derived",
     "read_article",
     "reconcile",
+    "summary_line",
 ]
 
 
@@ -73,10 +90,16 @@ class FoundNumber:
     """寫到哪一位（4.58 → 0.01；1.2 萬 → 1000）：比對時，對方四捨五入到這一位要等於它。"""
     start: int
     end: int
+    bare: Fraction | None = None
+    """後面接萬／億／兆（或百、千）時，乘上去之前的數（「3.2 兆」→ 3.2）：圖的單位行寫「兆美元」、柱上只寫 3.2 也對得上。"""
 
     def matches(self, other: Fraction) -> bool:
         """other 四捨五入到這個數字寫的位數，是不是就是它（四捨五入的進位方式不拘）。"""
         return abs(abs(other) - self.value) * 2 <= self.quantum
+
+    def matches_any(self, other: FoundNumber) -> bool:
+        """對方（文章裡的數字）不管帶不帶萬億單位，四捨五入到這個數字寫的位數就是它。"""
+        return self.matches(other.value) or (other.bare is not None and self.matches(other.bare))
 
 
 _MINUS = {"−": "-", "‒": "-", "–": "-", "－": "-"}
@@ -146,7 +169,8 @@ def find_numbers(text: str) -> list[FoundNumber]:
         for c in m.group("mult") or "":
             mult *= _MULT[c]
         end = m.end()
-        found.append(FoundNumber(text[m.start():end].strip(), value * mult, quantum * mult, m.start(), end))
+        found.append(FoundNumber(text[m.start():end].strip(), value * mult, quantum * mult, m.start(), end,
+                                 bare=value if mult != 1 else None))
         for i in range(m.start(), end):
             taken[i] = True
     for m in _CHINESE_RE.finditer(norm):
@@ -162,7 +186,8 @@ def find_numbers(text: str) -> list[FoundNumber]:
             quantum = Fraction(1, 10 ** len(frac))
         else:
             value, quantum = Fraction(value), Fraction(unit)
-        found.append(FoundNumber(text[m.start():m.end()], value, quantum, m.start(), m.end()))
+        found.append(FoundNumber(text[m.start():m.end()], value, quantum, m.start(), m.end(),
+                                 bare=value / unit if unit != 1 else None))
     return sorted(found, key=lambda f: f.start)
 
 
@@ -405,9 +430,9 @@ ScreenTextSource = Callable[["BuildPlan", ShotTiming], list[ScreenText]]
 
 
 def _fmt(v: float, decimals: int) -> str:
-    """跟引擎 TY.fmt 一樣：固定小數位、千分位、負號用 −。"""
-    s = f"{abs(v):,.{decimals}f}"
-    return ("−" if v < 0 else "") + s
+    """跟引擎 TY.fmt 一樣：絕對值 toFixed（照浮點數的精確值四捨五入，剛好在中間就進位）、千分位、負號用 −。"""
+    q = Decimal(abs(v)).quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_UP)
+    return ("−" if v < 0 else "") + format(q, f",.{decimals}f")
 
 
 DEFAULT_AXIS_NOTES = {"縱軸未從 0 開始", "纵轴未从 0 开始"}
@@ -560,7 +585,7 @@ class _Sources:
     def in_article(self, num: FoundNumber) -> str | None:
         """文章裡有沒有一個數字，四捨五入到 num 寫的位數就是 num；有就回「原文第 N 段：…前後文…」。"""
         for p, f in self.entries:
-            if num.matches(f.value):
+            if num.matches_any(f):
                 return f"{self.article.where(p)}：{_snippet(p.text, f.start, f.end)}"
         return None
 
@@ -644,8 +669,8 @@ def reconcile(plan: BuildPlan, *, sources: Sequence[ScreenTextSource] | None = N
                 shown = _shown_number(t, num)
                 kind, detail = "none", ""
                 used.update(k for k, d in enumerate(decls) if num.matches(d.value.value))
-                if t.public is not None or (hit := src.in_public(num, shot.id)) is not None:
-                    kind, detail = "public", src.in_public(num, shot.id, t.public) or ""
+                if (pub := src.in_public(num, shot.id, t.public)) is not None:
+                    kind, detail = "public", pub
                 elif (ok := src.derived(num, shown, shot.id, decls))[0] is not None:
                     kind, detail = "derived", ok[0]
                 elif (found := src.in_article(num)) is not None:
@@ -690,7 +715,7 @@ def summary_line(plan: BuildPlan) -> str:
     line = f"數字對帳：畫面上 {len(items)} 個數字" + (f"（{counts}）" if counts else "")
     bad = rep.unsourced
     if bad:
-        line += "；找不到出處、正式出片會被擋下：" + "；".join(f"{n.shot_label} 的{n.place}：{n.shown}" for n in bad)
+        line += "；找不到出處、正式出片會被擋下：" + "；".join(f"{n.shot_label}的{n.place}：{n.shown}" for n in bad)
     return line
 
 
@@ -704,7 +729,7 @@ def check_numbers(plan: BuildPlan) -> None:
     if rep.article.path is None:
         hint = "專案裡還沒有文章文字（article/text.txt）：先用 extract 擷取文章，數字才對得到原文。\n" + hint
     raise ProjectError(
-        [f"{n.shot_label} 的{n.place}：{n.shown} 找不到出處" for n in bad],
+        [f"{n.shot_label}的{n.place}：{n.shown} 找不到出處" for n in bad],
         title=f"數字對帳沒過，不能出片：畫面上有 {len(bad)} 個數字找不到出處",
         hint=hint,
     )
@@ -763,7 +788,8 @@ def number_review(plan: BuildPlan) -> ReviewExtras:
         page = [CardSection(
             "numbers", f"數字對帳：{len(bad)} 個數字找不到出處，不能出片",
             [CheckItem(f"分鏡 {n.shot_number}：{n.shown}", detail=n.place, status="block", label=n.label) for n in bad],
-            note="預覽可以先看，正式出片會被擋下。" + FIX_HINT.removesuffix("預覽照樣可以出，審片頁上會標出這些數字。"),
+            note="這些數字在你的文章裡找不到，也不是公有數據或寫明算式的推算。預覽可以先看，正式出片會被擋下。"
+                 "要怎麼改寫在那張卡上（例如改成文章裡的數字）；如果是算出來的，告訴 Claude 怎麼算的就好。",
         )]
     else:
         total = sum(len(v) for v in rep.shots.values())

@@ -422,10 +422,11 @@ def preview_project(
     tts: str | None = None,
     contributors: Sequence[Contributor] = (),
     jobs: int | None = None,
+    data_dir: str | os.PathLike | None = None,
     log: Log = _quiet,
 ) -> ReviewResult:
-    """預覽模式：配音＋時間軸＋分鏡靜態圖＋審片頁，不渲片段、不出成片。"""
-    plan = plan_build(project_dir, tts=tts, log=log)
+    """預覽模式：配音＋時間軸＋分鏡靜態圖＋審片頁，不渲片段、不出成片。data_dir：使用者資料位置（設定快照用）。"""
+    plan = plan_build(project_dir, tts=tts, data_dir=data_dir, log=log)
     return make_review(plan, contributors=contributors, jobs=jobs, log=log)
 
 
