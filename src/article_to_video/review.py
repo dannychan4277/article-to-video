@@ -1,11 +1,22 @@
-"""審片頁：每個分鏡的關鍵靜態圖＋一頁本機 HTML，給作者看、留言、複製給 Claude。
+"""審片頁：每個分鏡的分鏡靜態圖＋一頁本機 HTML，給作者看、留言、複製給 Claude。
 
-兩種時機都會寫同一頁（專案資料夾裡的「審片頁.html」）：
-  preview_project()       預覽模式：plan_build() → 只渲靜態圖（不渲片段、不出成片）→ 審片頁。幾秒內完成。
-  make_review(plan, video=成片)   出片之後：同一頁再內嵌成片。
+兩種時機都會寫同一頁（專案資料夾裡的「審片頁.html」，9:16 是「審片頁-9x16.html」）：
+  preview_project()               預覽模式：plan_build() → 只渲靜態圖（不渲片段、不出成片）→ 審片頁。
+  make_review(plan, video=成片)   出片之後（CLI build 在 build_project 之後呼叫）：同一頁再內嵌成片。
 
-靜態圖：每個分鏡一張「完成狀態」（分鏡最後一幀）。快取在 build/<比例>/stills/<片段>/，
-鍵＝片段雜湊（spec＋引擎檔）＋要渲的時刻，內容沒變就不重渲。
+分鏡靜態圖（_still_frames）：每個分鏡一張完成狀態（分鏡最後一幀），加上這個分鏡每個畫面事件出現前一幀
+（跟上一個事件隔 ≥ MOMENT_GAP 秒才算，最多 MAX_MOMENTS 張）。快取在 build/<比例>/stills/<片段>/，
+鍵＝片段雜湊（spec＋引擎檔＋圖片）＋要渲的時刻，內容沒變就不重渲；並行渲。
+
+版本（build/<比例>/review.json）：每次寫審片頁都比對每個分鏡的內容雜湊（片段雜湊＋在片段裡的位置與長度＋它唸的旁白）。
+跟上次一樣就沿用版本號與「這版改過」的標記；不一樣就加一版，標出改過／新加的分鏡、列出拿掉的分鏡。
+瀏覽器裡的留言照版本存：新的一版開頭會問要不要放回上一版還沒複製出去的留言（見 review_assets/review.js）。
+
+其他檢查（數字對帳 #5、自動檢查 #11）的結果：寫一個 Contributor（BuildPlan → ReviewExtras），
+加進 default_contributors()；它回傳的 CardSection 會排在對應分鏡卡的 numbers／checks 欄位。
+
+指令列做完會用 open_in_browser()（macOS open）打開；auto_open_allowed() 看 --no-open 以外的開關。
+「複製給 Claude」的文字格式見 feedback.py。
 """
 
 from __future__ import annotations
@@ -44,6 +55,7 @@ __all__ = [
     "make_review",
     "open_in_browser",
     "preview_project",
+    "render_review_stills",
     "shot_narration",
 ]
 
@@ -179,6 +191,13 @@ def _still_name(t: float) -> str:
     return f"t{t:06.2f}.png"  # 跟 render_stills 的檔名規則一樣
 
 
+def _stamp_key(path: Path) -> str | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("key")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def render_review_stills(plan: BuildPlan, *, jobs: int | None = None, log: Log = _quiet) -> dict[str, list[Still]]:
     """渲（或從快取拿）每個分鏡的靜態圖。回傳分鏡 id → 靜態圖（完成狀態排第一張，其餘照時間）。"""
     fps = plan.timeline.fps
@@ -203,9 +222,9 @@ def render_review_stills(plan: BuildPlan, *, jobs: int | None = None, log: Log =
         key = hashlib.sha256(
             json.dumps([STILLS_VERSION, clip_hash(cp), per_clip[cp.id]]).encode()
         ).hexdigest()
-        stamp = root / cp.id / "stamp.json"
-        have = all((root / cp.id / _still_name(t)).is_file() for t in per_clip[cp.id])
-        if have and stamp.is_file() and json.loads(stamp.read_text(encoding="utf-8")).get("key") == key:
+        if _stamp_key(root / cp.id / "stamp.json") == key and all(
+            (root / cp.id / _still_name(t)).is_file() for t in per_clip[cp.id]
+        ):
             continue
         todo.append((cp, key))
 

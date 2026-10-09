@@ -264,6 +264,7 @@ def test_rebuilt_page_marks_the_shots_that_changed_since_the_last_version(copy_o
     first = read_review(root)
     assert first.attrs["data-version"] == "1"
     assert changed_ids(first) == []
+    stills_before = {c.id: local_file(root, c.stills[0][0]).stat().st_mtime_ns for c in first.cards}
 
     edit_json(root / "shots.json", lambda d: d["shots"][1]["chart"]["data"]["highlight"].update(text="長天期偏低"))
     run_cli("preview", root)
@@ -271,6 +272,9 @@ def test_rebuilt_page_marks_the_shots_that_changed_since_the_last_version(copy_o
     assert page.attrs["data-version"] == "2"
     assert changed_ids(page) == ["SH02"]
     assert "分鏡 2" in page.changes_text
+    stills_after = {c.id: local_file(root, c.stills[0][0]).stat().st_mtime_ns for c in page.cards}
+    assert stills_after["SH01"] == stills_before["SH01"]  # 沒改的分鏡不重渲靜態圖
+    assert stills_after["SH02"] != stills_before["SH02"]
 
     run_cli("build", root)  # 沒再改：出片後還是第 2 版，標記留著
     page = read_review(root)
