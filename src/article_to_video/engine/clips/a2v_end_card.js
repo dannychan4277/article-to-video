@@ -4,6 +4,8 @@
 // 版式跟財經圖表（t3_finance_chart）同一套：白底、頂端品牌色細線＋左上小旗（第一幀就在，從圖表切過來不跳）、
 // 黑字、灰色說明、同一組字型（缺字由 render.py --strict-glyphs 擋）。名字→來源→聲明依序淡入上移，0.8 秒內到位，之後靜止。
 // 來源太多放不下時先縮字（最小 0.7 倍），再放不下就只列前幾項加「等共 N 項」。直式（H > W）小字放大兩成、底部多留。
+// safe {top, bottom, right}（直式成片的平台介面區）：色條、小旗、名字、來源、聲明全部排在讓開之後的框裡；
+// 有給 safe 時上下用橫式的間距（平台介面已經讓掉了，不用再「直式底部多留」）。沒給 safe ＝ 原本的排法。
 CLIPS.a2v_end_card = (() => {
 const RED = '#E3120B', INK = '#0C0C0C', SUB = '#4F5B61', RULE = 'rgba(12,12,12,0.16)';
 const CN = '"PuHui-Medium"', CNB = '"PuHui-Bold"';
@@ -11,9 +13,11 @@ let L;
 const wrapAt = (c, text, maxW, size, weight, fam) => TY.wrap(c, text, maxW, `${weight} ${size}px ${fam}`);
 return {
   fonts: ['PuHui-Medium', 'PuHui-Bold'],
+  safe: true,
   init(ctx) {
     const { W, H, u, data: d, portrait } = ctx, c = document.createElement('canvas').getContext('2d');
-    const fs = portrait ? 1.2 : 1, m = (portrait ? 70 : 90) * u, maxW = W - 2 * m;
+    const sT = ctx.safe.top, sB = ctx.safe.bottom;
+    const fs = portrait ? 1.2 : 1, m = (portrait ? 70 : 90) * u, mL = Math.max(m, ctx.safe.left), maxW = W - mL - Math.max(m, ctx.safe.right);
     const img = d.image ? ctx.IMG[d.image] : null;
     const logoH = img ? 132 * u * fs : 0, logoW = img ? Math.min(logoH * img.width / img.height, 320 * u * fs) : 0;
     const logoGap = img ? 36 * u : 0;
@@ -22,9 +26,9 @@ return {
     const headH = Math.max(logoH, nameH);
     // 聲明：底部，一行一則
     const noteSz = 30 * u * fs, notes = (d.notes || []).flatMap(n => wrapAt(c, n, maxW, noteSz, 500, CN));
-    const notesTop = H - (portrait ? 260 : 96) * u - notes.length * noteSz * 1.5;
+    const notesTop = H - sB - (portrait && !sB ? 260 : 96) * u - notes.length * noteSz * 1.5;
     // 來源：名字下面一條細線、「資料來源」小標，再一項一行（長的折兩行）
-    const y0 = (portrait ? 220 : 150) * u, labelSz = 28 * u * fs;
+    const y0 = sT + (portrait && !sT ? 220 : 150) * u, labelSz = 28 * u * fs;
     const srcTop = headH + 48 * u + 2 * u + 40 * u + labelSz * 1.4;          // 相對內容區頂端
     const srcAvail = notesTop - 70 * u - y0 - srcTop;
     const sources = (d.sources || []).filter(s => String(s).trim());
@@ -44,13 +48,13 @@ return {
     const srcH = sources.length ? srcLines.reduce((a, ls) => a + ls.length, 0) * srcSz * 1.4 : 0;
     const total = sources.length ? srcTop + srcH : headH;
     const top = y0 + Math.max(0, (notesTop - 70 * u - y0 - total) / 2);      // 內容整塊在可用高度裡置中
-    L = { m, maxW, img, logoH, logoW, logoGap, name, nameH, headH, top, notes, noteSz, notesTop, labelSz, srcSz, srcLines,
+    L = { m: mL, sT, maxW, img, logoH, logoW, logoGap, name, nameH, headH, top, notes, noteSz, notesTop, labelSz, srcSz, srcLines,
           hasSources: sources.length > 0 };
   },
   draw(c, t, ctx) {
     const { W, H, u, data: d } = ctx, brand = d.brand || RED;
     c.fillStyle = '#FFFFFF'; c.fillRect(0, 0, W, H);
-    c.fillStyle = brand; c.fillRect(0, 0, W, 8 * u); CH.tag(c, L.m, 52 * u, 96 * u, 22 * u, brand);   // 跟圖表同一條線、同一面小旗
+    c.fillStyle = brand; c.fillRect(0, L.sT, W, 8 * u); CH.tag(c, L.m, L.sT + 52 * u, 96 * u, 22 * u, brand);   // 跟圖表同一條線、同一面小旗
     const rise = (a, b) => { const p = MO.quintOut(MO.seg(t, a, b)); return [p, (1 - p) * 18 * u]; };
     c.textAlign = 'left'; c.textBaseline = 'alphabetic';
     // 名字（＋logo）

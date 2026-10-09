@@ -157,6 +157,15 @@ def _last_run(paths: ProjectPaths) -> dict[str, Any]:
     return info if isinstance(info, dict) else {}
 
 
+def _last_run_format(last: dict[str, Any] | None) -> Any:
+    """最後一次 preview／build 用的畫面比例（指令列 --aspect 有給才記）；沒記就 None＝照設定快照的預設比例。
+    出直式時回報的問題常常只有直式才看得到，所以打包與重現都照那次的比例渲。"""
+    from article_to_video.timeline import FORMATS
+
+    aspect = ((last or {}).get("options") or {}).get("aspect")
+    return FORMATS.get(aspect) if isinstance(aspect, str) else None
+
+
 def _shots_named_in(text: str, ids: Sequence[str]) -> list[str]:
     """錯誤訊息裡點名的分鏡（訊息一律寫成「分鏡 <id>」），照分鏡順序。"""
     named = set(re.findall(r"分鏡 ([A-Za-z0-9_-]+)", text))
@@ -564,7 +573,7 @@ def _render_report_stills(
         manifest["stillsError"] = "配音還沒做完（或旁白改過後還沒重建），算不出分鏡的時間，所以沒有靜態圖"
         return {}
     try:
-        plan = plan_build(paths.root, tts=engine)
+        plan = plan_build(paths.root, tts=engine, fmt=_last_run_format(_last_run(paths)))
     except Exception as e:  # noqa: BLE001 — 什麼錯都記下來，打包照樣完成
         manifest["stillsError"] = f"算分鏡時間時出錯：{e}"
         return {}
@@ -677,7 +686,7 @@ def reproduce_report(
         engine = "fake"
         notes.append("這包沒有完整的配音時間點，改用假配音層：分鏡時間可能跟作者那台不一樣")
     try:
-        plan = plan_build(project_dir, tts=engine, log=log)
+        plan = plan_build(project_dir, tts=engine, fmt=_last_run_format(manifest.get("lastRun")), log=log)
     except Exception as e:  # noqa: BLE001 — 這就是重現出來的錯
         errors.append(str(e))
         return ReproduceResult(out, project_dir, errors=errors, notes=notes, **base)

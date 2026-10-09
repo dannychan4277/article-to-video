@@ -13,9 +13,10 @@
       成片.mp4           燒好字幕的成片（16:9）
       審片頁.html        給作者看的審片頁（預覽與出片都會更新）
       字幕.srt           字幕檔（檔名故意跟成片不同：同名 .srt 會被播放器自動疊上去，變成兩層字幕）
+      成片-9x16.mp4、字幕-9x16.srt、審片頁-9x16.html   直式（9:16）版，跟 16:9 的並存（--aspect 9:16 或預設比例設直式）
       build/             建置產物，可整個刪掉重來
         narration/       配音層快取（依「配音層｜聲音｜語速｜文字」）與 timing.json
-        16x9/            這個畫面比例的產物：specs/、clips/、logs/、fonts/、stills/、timeline.json、review.json、subs.*、narration.wav、soundtrack.wav
+        16x9/、9x16/     各畫面比例的產物：specs/、clips/、logs/、fonts/、stills/、timeline.json、review.json、subs.*、narration.wav、soundtrack.wav
 
 設定檔都是 UTF-8 JSON，由 Claude 寫、這裡驗證。驗證錯誤一次列出全部問題，每條都指出哪個分鏡、哪個欄位。
 """
@@ -69,7 +70,7 @@ SETTINGS_KEYS = frozenset({"voice", "rate", "tts", "gap", "lead", "tail",
 
 _KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 _RATE_RE = re.compile(r"^[+-]\d{1,3}%$")
-_SHOT_KEYS = frozenset({"id", "note", "start", "continues", "chart", "vox"})
+_SHOT_KEYS = frozenset({"id", "note", "start", "continues", "chart", "vox", "derived"})
 _ANCHOR_KEYS = frozenset({"segment", "word", "edge", "offset", "occurrence"})
 _EDGES = {"start": "start", "end": "end", "開頭": "start", "唸完": "end"}
 
@@ -93,7 +94,7 @@ class ProjectError(ValueError):
 
 @dataclass(frozen=True)
 class VariantPaths:
-    """某個畫面比例（16x9；直式那張票加 9x16）的建置產物。"""
+    """某個畫面比例（16x9、9x16；見 timeline.FORMATS）的建置產物。"""
 
     root: Path
 
@@ -273,6 +274,8 @@ class Shot:
     vox: Any = None
     """Vox 分鏡的設定（Vox 那張票接手；這版建置會擋下來）。"""
     note: str = ""
+    derived: tuple = ()
+    """推算宣告（numbers.Derivation）：畫面上哪個數字是用什麼算式算出來的（數字對帳用，見 numbers.py）。"""
 
     @property
     def label(self) -> str:
@@ -496,8 +499,15 @@ def _load_shots(raw: Any, segments: Mapping[str, str], problems: _Problems) -> l
         if not isinstance(note, str):
             problems.add(f"{label} 的 note 要是文字")
             note = ""
+        derived: tuple = ()
+        if "derived" in item:
+            from article_to_video.numbers import parse_derived  # 避免循環匯入
+
+            derived, found = parse_derived(item["derived"], label)
+            for msg in found:
+                problems.add(msg)
         shots.append(Shot(number=n, id=sid, start=start, continues=continues, chart=chart,
-                          vox=item.get("vox"), note=note))
+                          vox=item.get("vox"), note=note, derived=derived))
     return shots
 
 

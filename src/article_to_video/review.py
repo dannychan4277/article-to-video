@@ -39,7 +39,7 @@ from article_to_video.build import BuildPlan, plan_build
 from article_to_video.clip_cache import clip_hash
 from article_to_video.clips import ClipRenderError, render_stills
 from article_to_video.review_page import CardModel, CardSection, CheckItem, PageModel, StillModel, render_review_html
-from article_to_video.timeline import ClipPlan, Timeline
+from article_to_video.timeline import ClipPlan, Timeline, VideoFormat
 
 __all__ = [
     "NO_OPEN_ENV",
@@ -85,8 +85,10 @@ Contributor = Callable[[BuildPlan], ReviewExtras]
 
 
 def default_contributors() -> list[Contributor]:
-    """指令列（preview、build）預設用的資料來源。數字對帳（#5）、自動檢查（#11）做好後加在這裡（函式內 import，免得循環匯入）。"""
-    return []
+    """指令列（preview、build）預設用的資料來源：數字對帳（#5）；自動檢查（#11）做好後加在這裡（函式內 import，免得循環匯入）。"""
+    from article_to_video.numbers import number_review
+
+    return [number_review]
 
 
 def _quiet(_: str) -> None:
@@ -287,6 +289,8 @@ class ReviewResult:
     removed: list[str]
     """上一版有、這版拿掉的分鏡 id。"""
     stills: dict[str, list[Still]] = field(default_factory=dict)
+    plan: BuildPlan | None = None
+    """寫這一頁用的建置計畫（指令列拿它印數字對帳的摘要）。"""
 
 
 # ---------------------------------------------------------------- 版本：這版改了哪些分鏡
@@ -381,6 +385,7 @@ def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], vid
         video_src=_rel(page, video) if video else None,
         removed=version.removed,
         page_sections=list(extras.page),
+        aspect=plan.format.name,
     )
 
 
@@ -409,7 +414,7 @@ def make_review(
         log(f"審片頁第 {version.number} 版：改了 {len(version.changed)} 個分鏡"
             + (f"、拿掉 {len(version.removed)} 個" if version.removed else ""))
     return ReviewResult(page=page, version=version.number, changed=list(version.changed),
-                        removed=[r[0] for r in version.removed], stills=stills)
+                        removed=[r[0] for r in version.removed], stills=stills, plan=plan)
 
 
 def preview_project(
@@ -419,10 +424,12 @@ def preview_project(
     contributors: Sequence[Contributor] = (),
     jobs: int | None = None,
     data_dir: str | os.PathLike | None = None,
+    fmt: VideoFormat | None = None,
     log: Log = _quiet,
 ) -> ReviewResult:
-    """預覽模式：配音＋時間軸＋分鏡靜態圖＋審片頁，不渲片段、不出成片。data_dir：使用者資料位置（設定快照用）。"""
-    plan = plan_build(project_dir, tts=tts, data_dir=data_dir, log=log)
+    """預覽模式：配音＋時間軸＋分鏡靜態圖＋審片頁，不渲片段、不出成片。data_dir：使用者資料位置（設定快照用）。
+    fmt：畫面比例（不給就照設定快照的預設比例，見 plan_build）。"""
+    plan = plan_build(project_dir, tts=tts, fmt=fmt, data_dir=data_dir, log=log)
     return make_review(plan, contributors=contributors, jobs=jobs, log=log)
 
 

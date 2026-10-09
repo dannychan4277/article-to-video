@@ -99,5 +99,7 @@ def plan_end_card(project: Project, timeline: Timeline, fmt: VideoFormat, plans:
         "data": data,
         "cues": [],
     }
+    if fmt.card_safe():  # 直式：名字、來源、聲明都排在平台介面區以內（片尾卡沒有字幕，不用讓字幕帶）
+        spec["safe"] = fmt.card_safe()
     return ClipPlan(id=END_CARD_ID, shot_ids=[], start_frame=o.start_frame, end_frame=o.start_frame + o.frames,
                     spec=spec, images=images)
