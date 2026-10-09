@@ -8,6 +8,9 @@
                                                                      改使用者設定；加 --project 只改那支片的快照
   preview music --out 資料夾 [--seconds 20] [--data-dir D]           每首配樂一個試聽檔 music-<名字>.wav
   preview voice --out 資料夾 [--rate +5%] [--text …] [--tts edge|fake] 每個聲音一個試聽檔 voice-<代號>.wav（edge 要連網）
+  report-issue [專案資料夾] [--shot 分鏡]… [--note 文字] [--out-dir 資料夾]
+                                                  回報問題：打包 zip（預設放桌面）
+  reproduce-issue <zip> [--out 資料夾] [--shot 分鏡]…   （維護者用）從回報的 zip 重渲出錯的分鏡
 
 --data-dir：使用者資料位置，主 skill 傳 ${CLAUDE_PLUGIN_DATA}；沒給就看環境變數，再沒有就用
 ~/Library/Application Support/article-to-video（見 user_settings.py）。
@@ -74,6 +77,16 @@ def _parser() -> argparse.ArgumentParser:
     pvv.add_argument("--text", default=VOICE_SAMPLE, help="試聽唸的句子")
     pvv.add_argument("--tts", choices=sorted(TTS_ENGINES), default="edge")
     pvv.add_argument("--data-dir")
+
+    r = sub.add_parser("report-issue", help="回報問題：把錯誤紀錄、分鏡設定、出錯畫面、環境檢查打包成 zip（預設放桌面）")
+    r.add_argument("project", nargs="?", help="出問題的專案資料夾（沒有專案就只打包環境檢查）")
+    r.add_argument("--shot", action="append", default=[], help="出錯的分鏡：id（SH03）或編號（3），可重複；不給就從最後一次建置的錯誤找")
+    r.add_argument("--note", default="", help="問題描述（作者怎麼說的）")
+    r.add_argument("--out-dir", help="zip 放哪裡（預設桌面）")
+    x = sub.add_parser("reproduce-issue", help="（維護者用）解開回報的 zip，重渲出錯的分鏡")
+    x.add_argument("zip", help="作者傳來的回報 zip")
+    x.add_argument("--out", help="解開到哪裡（預設 zip 旁邊、同名資料夾）")
+    x.add_argument("--shot", action="append", default=[], help="只重渲這些分鏡（預設是回報裡出錯的分鏡）")
     return p
 
 
@@ -170,13 +183,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "build":
         from article_to_video.build import build_project
+        from article_to_video.issue_report import RunRecord
 
+        rec = RunRecord(args.project, "build", {"tts": args.tts, "jobs": args.jobs})  # 回報問題時打包
         try:
             res = build_project(args.project, tts=args.tts, jobs=args.jobs, data_dir=args.data_dir,
-                                log=lambda m: print(m, flush=True))
+                                log=rec.tee(lambda m: print(m, flush=True)))
         except KNOWN_ERRORS as e:
+            rec.finish(e)
             print(f"建置失敗：{e}", file=sys.stderr)
             return 1
+        except BaseException as e:
+            rec.finish(e, unexpected=True)
+            raise
+        rec.finish()
         print(f"完成：{res.video}（{res.duration:.2f} 秒）")
         print(f"字幕檔：{res.srt}")
         return 0
@@ -192,4 +212,43 @@ def main(argv: Sequence[str] | None = None) -> int:
         except KNOWN_ERRORS as e:
             print(f"試聽檔產生失敗：{e}", file=sys.stderr)
             return 1
+    if args.command == "report-issue":
+        from article_to_video.issue_report import create_report
+
+        try:
+            rep = create_report(args.project, shots=args.shot, note=args.note, out_dir=args.out_dir,
+                                log=lambda m: print(m, flush=True))
+        except OSError as e:
+            print(f"打包失敗：{e}", file=sys.stderr)
+            return 1
+        for w in rep.warnings:
+            print(f"注意：{w}")
+        print(f"已打包：{rep.zip_path}（{rep.size_mb:.1f} MB）")
+        print(f"裡面有：{'、'.join(rep.contents)}")
+        print("沒放：文章全文、成片、配音檔；路徑裡的使用者名稱已遮掉")
+        print("請把這個檔案用 LINE 傳給 Danny。")
+        return 0
+    if args.command == "reproduce-issue":
+        from article_to_video.issue_report import ReportError, reproduce_report
+
+        try:
+            res = reproduce_report(args.zip, out_dir=args.out, shots=args.shot, log=lambda m: print(m, flush=True))
+        except ReportError as e:
+            print(f"沒辦法重現：{e}", file=sys.stderr)
+            return 1
+        print(f"解開在：{res.out_dir}")
+        if res.report_note:
+            print(f"作者說：{res.report_note}")
+        if res.author_environment:
+            print("作者那台的環境：\n" + res.author_environment)
+        for n in res.notes:
+            print(f"注意：{n}")
+        for cid, mp4 in res.clips.items():
+            print(f"片段 {cid}：{mp4}")
+        for sid, ps in res.stills.items():
+            print(f"分鏡 {sid} 靜態圖：{ps[0].parent}（{len(ps)} 張）")
+        if res.errors:
+            print("重現出錯誤：\n" + "\n\n".join(res.errors), file=sys.stderr)
+            return 1
+        return 0
     return 2
