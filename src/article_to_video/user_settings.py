@@ -35,6 +35,7 @@ __all__ = [
     "ASPECTS",
     "DATA_ENV",
     "SNAPSHOT_KEYS",
+    "USER_ONLY_KEYS",
     "SettingsError",
     "UserSettings",
     "contrast_on_white",
@@ -49,6 +50,10 @@ __all__ = [
 DATA_ENV = "ARTICLE_TO_VIDEO_DATA"
 FALLBACK_DATA_DIR = Path("Library") / "Application Support" / "article-to-video"
 SNAPSHOT_KEYS = ("channel", "logo", "brand_color", "voice", "rate", "music", "aspect")
+USER_ONLY_KEYS = ("independent_review",)
+"""只在使用者設定、不進每支片設定快照的鍵（做片流程的開關，不影響成片長什麼樣子）。"""
+_ON_WORDS = {"開", "开", "打開", "要", "on", "true", "yes", "1"}
+_OFF_WORDS = {"關", "关", "關掉", "不要", "off", "false", "no", "0"}
 ASPECTS = {"16x9": "橫式 16:9", "9x16": "直式 9:16"}
 _ASPECT_ALIASES = {"16x9": "16x9", "16:9": "16x9", "橫式": "16x9", "横式": "16x9",
                    "9x16": "9x16", "9:16": "9x16", "直式": "9x16"}
@@ -84,6 +89,8 @@ class UserSettings:
     """配樂（music.TRACKS 的名字）或 "none"。"""
     aspect: str = Settings.aspect
     """預設比例："16x9" 或 "9x16"。"""
+    independent_review: bool = True
+    """出片後要不要派一個只看成片的 agent 獨立審片一輪（independent_review.py）。全部影片共用，不進設定快照。"""
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -186,7 +193,16 @@ def normalize_value(key: str, value: Any) -> Any:
         if v is None:
             raise SettingsError(f"預設比例「{value}」看不懂，只能是 16:9（橫式）或 9:16（直式）")
         return v
-    raise SettingsError(f"不認得的設定「{key}」（認得的：{'、'.join(SNAPSHOT_KEYS)}）")
+    if key == "independent_review":
+        if isinstance(value, bool):
+            return value
+        v = value.strip().lower() if isinstance(value, str) else value
+        if v in _ON_WORDS:
+            return True
+        if v in _OFF_WORDS:
+            return False
+        raise SettingsError(f"獨立審片「{value}」看不懂，寫「開」或「關」")
+    raise SettingsError(f"不認得的設定「{key}」（認得的：{'、'.join(SNAPSHOT_KEYS + USER_ONLY_KEYS)}）")
 
 
 def _image_suffix(path: Path) -> str:

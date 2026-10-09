@@ -89,9 +89,10 @@ def default_contributors(data_dir: str | os.PathLike | None = None) -> list[Cont
     自動檢查與獨立審片（#11；data_dir＝使用者資料位置，看獨立審片有沒有關掉）。函式內 import，免得循環匯入。"""
     from article_to_video.auto_checks import checks_contributor
     from article_to_video.boxes import boxes_contributor
+    from article_to_video.independent_review import review_contributor
     from article_to_video.numbers import number_review
 
-    return [number_review, boxes_contributor, checks_contributor]
+    return [number_review, boxes_contributor, checks_contributor, review_contributor(data_dir)]
 
 
 def _quiet(_: str) -> None:

@@ -63,6 +63,7 @@ _SET_OPTIONS = {  # 選項 → 設定鍵
     "rate": "語速，例 +5%、-10%",
     "music": "配樂：calm（沉穩鋼琴）、pulse（新聞脈動）、minimal（極簡電子）、none",
     "aspect": "預設比例：16:9（橫式）或 9:16（直式）",
+    "independent_review": "出片後派 agent 獨立審片一輪：開（預設）或 關（全部影片共用，不能加 --project）",
 }
 _DATA_DIR_HELP = "使用者資料位置（主 skill 傳 ${CLAUDE_PLUGIN_DATA}）"
 VOICE_SAMPLE = "大家好，歡迎來到我的頻道。今天用三分鐘，帶你看懂殖利率曲線在說什麼。"
@@ -110,6 +111,24 @@ def _parser() -> argparse.ArgumentParser:
     ck.add_argument("--jobs", type=int, help="最多同時跑幾個片段的 qa（預設 4）")
     ck.add_argument("--data-dir", help=_DATA_DIR_HELP)
     ck.add_argument("--json", action="store_true", help="最後印 checks.json 的內容（給程式讀）")
+    rp = sub.add_parser("review-prep", help="獨立審片：從成片準備審片素材（總覽圖、畫面事件圖、字幕檔），印出派 agent 的 prompt")
+    rp.add_argument("project", help="專案資料夾")
+    rp.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
+    rp.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
+    rp.add_argument("--data-dir", help=_DATA_DIR_HELP)
+    rf = sub.add_parser("review-frames", help="（審片 agent 用）從成片抽全解析度幀：--at 秒（可重複），或 --from --to --step")
+    rf.add_argument("project", help="專案資料夾")
+    rf.add_argument("--aspect", type=_aspect, help="哪個比例的成片（預設：最近準備審片素材的那個）")
+    rf.add_argument("--at", action="append", default=[], help="秒數或時間碼（例 12.4、0:12.4），可重複")
+    rf.add_argument("--from", dest="start", help="一段連續幀的起點（秒或時間碼）")
+    rf.add_argument("--to", dest="end", help="一段連續幀的終點")
+    rf.add_argument("--step", type=float, default=0.25, help="連續幀的間隔秒數（預設 0.25）")
+    rr = sub.add_parser("review-record", help="記下獨立審片 agent 的回答（review.json），寫進審片頁")
+    rr.add_argument("project", help="專案資料夾")
+    rr.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
+    rr.add_argument("--file", help="回答檔（預設：審片素材資料夾裡的 review.json；- ＝從標準輸入讀）")
+    rr.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
+    rr.add_argument("--data-dir", help=_DATA_DIR_HELP)
     rs = sub.add_parser("resolve", help="記下必修／該修的處理：--fixed 改好了（獨立審片的問題）、--accept 看過、接受不改")
     rs.add_argument("project", help="專案資料夾")
     rs.add_argument("tokens", nargs="*", help="代號，例 R1-2（獨立審片）、qa:SH03:jump@1a2b3c4d（自動檢查），可以一次給好幾個")
@@ -351,6 +370,81 @@ def _checks(args: argparse.Namespace) -> int:
     return 0
 
 
+def _review(args: argparse.Namespace) -> int:
+    """review-prep、review-frames、review-record。"""
+    from pathlib import Path
+
+    from article_to_video import independent_review as ir
+    from article_to_video.build import plan_build
+    from article_to_video.issue_report import RunRecord
+
+    if args.command == "review-frames":
+        try:
+            kit = ir.find_kit(args.project, args.aspect.name if args.aspect else None)
+            times = [ir.parse_time_arg(t) for t in args.at]
+            if args.start is not None or args.end is not None:
+                if args.start is None or args.end is None or args.step <= 0:
+                    raise ProjectError("連續幀要同時給 --from 和 --to（--step 要大於 0）", title="抽不了幀")
+                a, b = ir.parse_time_arg(args.start), ir.parse_time_arg(args.end)
+                n = int(round((b - a) / args.step))
+                times += [round(a + k * args.step, 3) for k in range(n + 1)]
+            if not times:
+                raise ProjectError("要給 --at 秒數，或 --from／--to", title="抽不了幀")
+            paths, sheet = ir.extract_review_frames(kit, times)
+        except ProjectError as e:
+            print(f"抽幀失敗：{e}", file=sys.stderr)
+            return 1
+        print("\n".join(str(p) for p in paths))
+        if sheet:
+            print(f"拼在一起：{sheet}")
+        return 0
+
+    rec = RunRecord(args.project, args.command, {"tts": args.tts, "aspect": args.aspect.name if args.aspect else None})
+    log = rec.tee(lambda m: print(m, flush=True))
+    try:
+        plan = plan_build(args.project, tts=args.tts, fmt=args.aspect, data_dir=args.data_dir, log=log)
+        if args.command == "review-prep":
+            if not ir.review_enabled(args.data_dir):
+                log("注意：使用者設定把獨立審片關掉了（settings set --independent-review 開 可以打開）；照樣準備素材。")
+            kit = ir.prepare_review_kit(plan, log=log)
+            log(f"派審片 agent 時把這個檔的內容當 prompt：{kit.prompt}")
+            log("agent 寫完 review.json 之後跑：python -m article_to_video review-record "
+                f"\"{plan.project.root}\"" + ("" if plan.format.name == "16x9" else f" --aspect {plan.format.name}"))
+        else:
+            kit = ir.find_kit(args.project, plan.format.name)
+            src = args.file or str(kit.answer)
+            try:
+                text = sys.stdin.read() if src == "-" else Path(src).read_text(encoding="utf-8")
+            except OSError:
+                raise ProjectError(f"讀不到 {src}", title="沒有審片結果",
+                                   hint="審片 agent 要把結果寫到審片素材資料夾的 review.json。") from None
+            try:
+                answer = json.loads(text)
+            except json.JSONDecodeError as e:
+                raise ProjectError(f"{src} 第 {e.lineno} 行附近不是合法的 JSON", title="審片結果格式不對") from None
+            rnd = ir.record_review(plan, answer, kit)
+            counts = "、".join(f"{s} {sum(1 for it in rnd['items'] if it['severity'] == s)}" for s in ir.SEVERITIES)
+            log(f"已記下獨立審片第 {rnd['round']} 輪：{counts}")
+            for it in rnd["items"]:
+                log(f"  {it['id']} {it['severity']} {ir.item_where(it)}：{it['title']}")
+            for p in rnd["previous"]:
+                log(f"  上一輪 {p['id']}：{p['status']}")
+            must = ir.unresolved_must(plan)
+            if must:
+                log(f"還有 {len(must)} 項必修沒處理，正式出片會被擋下：改好之後 resolve <代號> --fixed \"怎麼改的\"；"
+                    "作者決定不改的 resolve <代號> --accept \"理由\" --by 作者")
+            _refresh_review(plan, args.data_dir, log)
+    except KNOWN_ERRORS as e:
+        rec.finish(e)
+        print(f"{'審片素材做不出來' if args.command == 'review-prep' else '審片結果沒記下來'}：{e}", file=sys.stderr)
+        return 1
+    except BaseException as e:
+        rec.finish(e, unexpected=True)
+        raise
+    rec.finish()
+    return 0
+
+
 def _describe(values: dict) -> str:
     from article_to_video.music import TRACKS
     from article_to_video.user_settings import ASPECTS
@@ -365,6 +459,9 @@ def _describe(values: dict) -> str:
         f"配樂：{'不要配樂' if music == 'none' else f'{TRACKS[music].label}（{music}）' if music in TRACKS else music}",
         f"預設比例：{ASPECTS.get(values.get('aspect'), values.get('aspect'))}",
     ]
+    if "independent_review" in values:  # 只有使用者設定有（不進設定快照）
+        on = values["independent_review"]
+        lines.append(f"獨立審片：{'開（出片後派一個只看成片的 agent 審一輪）' if on else '關'}")
     return "\n".join("  " + ln for ln in lines)
 
 
@@ -382,6 +479,9 @@ def _settings(args: argparse.Namespace) -> int:
             print("沒有要改的設定（例：settings set --voice 曉雨）", file=sys.stderr)
             return 1
         if args.project:
+            if "independent_review" in changes:
+                print("獨立審片的開關是全部影片共用的，不用加 --project", file=sys.stderr)
+                return 1
             snap = update_project_settings(args.project, changes)
             print(f"已更新這支片的設定快照：{Path(args.project) / SETTINGS_FILE}")
             print(_describe({k: snap.get(k) for k in SNAPSHOT_KEYS}))
@@ -469,6 +569,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _boxes(args)
     if args.command == "checks":
         return _checks(args)
+    if args.command in ("review-prep", "review-frames", "review-record"):
+        return _review(args)
     if args.command == "resolve":
         from article_to_video.check_log import record_resolutions
 

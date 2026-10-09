@@ -701,12 +701,15 @@ def format_report(plan: BuildPlan, report: CheckReport) -> str:
 # ---------------------------------------------------------------- 擋出片
 
 
-RESOLVE_HINT = (
-    "要改：改分鏡設定再出片（改過的片段會自動重查，獨立審片的問題改好後標 --fixed）。\n"
-    "不改：看過畫面、確定要保留，記下理由——作者決定不改的加 --by 作者：\n"
-    "  python -m article_to_video resolve \"{root}\" {tokens} --accept \"理由\"\n"
-    "  python -m article_to_video resolve \"{root}\" R1-2 --fixed \"怎麼改的\"   （獨立審片的問題改好了）"
-)
+def _resolve_hint(root: Path, tokens: Sequence[str]) -> str:
+    review = [t for t in tokens if not t.startswith(("qa:", "band:", "hold:"))]
+    lines = ["要改：改分鏡設定再出片（自動檢查的問題，改過的片段會自動重查）。"]
+    if review:
+        lines.append("  獨立審片的問題改好之後記下來："
+                     f"python -m article_to_video resolve \"{root}\" {' '.join(review)} --fixed \"怎麼改的\"")
+    lines.append("不改：看過畫面、確定要保留，記下理由（作者決定不改的加 --by 作者）：")
+    lines.append(f"  python -m article_to_video resolve \"{root}\" {' '.join(tokens)} --accept \"理由\"")
+    return "\n".join(lines)
 
 
 def blocking_problems(plan: BuildPlan) -> list[tuple[str, str]]:
@@ -727,7 +730,7 @@ def require_checks_cleared(plan: BuildPlan) -> None:
     raise ProjectError(
         [line for _, line in bad],
         title=f"還有 {len(bad)} 項必修沒處理，先不出片",
-        hint=RESOLVE_HINT.format(root=plan.project.root, tokens=" ".join(t for t, _ in bad)),
+        hint=_resolve_hint(plan.project.root, [t for t, _ in bad]),
     )
 
 
