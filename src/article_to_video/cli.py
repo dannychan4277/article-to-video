@@ -165,7 +165,10 @@ def _test_video(args: argparse.Namespace) -> int:
     rec = RunRecord(out, "test-video", {"tts": args.tts})  # 出錯時「回報問題」帶這個資料夾就拿得到紀錄
     log = rec.tee(lambda m: print(m, flush=True))
     try:
-        res = build_project(out, tts=args.tts, data_dir=args.data_dir, log=log)
+        from article_to_video.numbers import check_numbers
+
+        # 跟正式出片一樣先數字對帳（範例的數字都寫在範例的 article/text.txt 裡）
+        res = build_project(out, tts=args.tts, data_dir=args.data_dir, preflight=[check_numbers], log=log)
     except KNOWN_ERRORS as e:
         rec.finish(e)
         print(f"測試片做不出來：{e}", file=sys.stderr)

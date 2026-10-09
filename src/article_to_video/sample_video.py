@@ -1,7 +1,8 @@
 """安裝測試片：安裝最後一步，用外掛自帶的範例專案渲一支約 10 秒的片並打開，確認整條管線（配音、圖表、配樂、
 字幕、片尾卡）在這台 Mac 上跑得通。
 
-範例專案在 sample_project/：兩句自己寫的旁白、一張 FRED DGS2（公有領域）年平均的柱狀圖，不是任何人的文章。
+範例專案在 sample_project/：兩句自己寫的旁白、一張 FRED DGS2（公有領域）年平均的柱狀圖（一個分鏡＋一個接續分鏡），
+加一段自己寫的「文章」（article/text.txt）讓數字對帳對得上——測試片跟正式出片走同一道數字對帳。不是任何人的文章。
 每次做都把範例的旁白稿、分鏡設定、設定快照蓋回去（快照只留 tail），所以會套用「現在」的使用者設定
 （頻道名、聲音、配樂、品牌色）；build/ 留著，沒改的片段直接用快取。
 
@@ -43,6 +44,8 @@ def prepare_test_project(out_dir: str | os.PathLike | None = None) -> Path:
     for f in SAMPLE_PROJECT.iterdir():
         if f.is_file():
             shutil.copyfile(f, out / f.name)
+        elif f.is_dir():  # article/：範例的「文章」，數字對帳拿它當原文
+            shutil.copytree(f, out / f.name, dirs_exist_ok=True)
     (out / MARKER).write_text(MARKER_TEXT, encoding="utf-8")
     return out
 
