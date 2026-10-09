@@ -56,6 +56,7 @@ __all__ = [
     "open_in_browser",
     "preview_project",
     "render_review_stills",
+    "seen_version",
     "shot_narration",
 ]
 
@@ -85,14 +86,16 @@ Contributor = Callable[[BuildPlan], ReviewExtras]
 
 
 def default_contributors(data_dir: str | os.PathLike | None = None) -> list[Contributor]:
-    """指令列（preview、build、checks、review-record）預設用的資料來源：數字對帳（#5）、Vox 框核對（#8）、
-    自動檢查與獨立審片（#11；data_dir＝使用者資料位置，看獨立審片有沒有關掉）。函式內 import，免得循環匯入。"""
+    """指令列（preview、build、checks、review-record、publish）預設用的資料來源：數字對帳（#5）、Vox 框核對（#8）、
+    自動檢查與獨立審片（#11；data_dir＝使用者資料位置，看獨立審片有沒有關掉）、出片到哪裡（#13）。
+    函式內 import，免得循環匯入。"""
     from article_to_video.auto_checks import checks_contributor
     from article_to_video.boxes import boxes_contributor
     from article_to_video.independent_review import review_contributor
     from article_to_video.numbers import number_review
+    from article_to_video.publish import output_contributor
 
-    return [number_review, boxes_contributor, checks_contributor, review_contributor(data_dir)]
+    return [number_review, boxes_contributor, checks_contributor, review_contributor(data_dir), output_contributor]
 
 
 def _quiet(_: str) -> None:
@@ -349,6 +352,21 @@ def _update_version(state_path: Path, plan: BuildPlan, hashes: dict[str, str]) -
         "removed": [list(r) for r in version.removed],
     }, ensure_ascii=False, indent=1), encoding="utf-8")
     return version
+
+
+def seen_version(plan: BuildPlan) -> tuple[int | None, bool]:
+    """上次寫的審片頁是第幾版，以及現在的分鏡與旁白還是不是那一版（出片前確認作者看過的就是要出的）。
+    還沒寫過審片頁＝(None, False)。不寫任何檔案。"""
+    try:
+        prev = json.loads(plan.paths.review_state.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, False
+    if not isinstance(prev, dict) or not isinstance(prev.get("version"), int) or not isinstance(prev.get("shots"), list):
+        return None, False
+    hashes = _shot_hashes(plan, shot_narration(plan.timeline))
+    same = [(s.get("id"), s.get("hash")) for s in prev["shots"] if isinstance(s, dict)] == [
+        (st.shot.id, hashes[st.shot.id]) for st in plan.timeline.shots]
+    return prev["version"], same
 
 
 def _rel(page: Path, target: Path) -> str:

@@ -91,6 +91,21 @@ TEST_CHANNEL = "測試頻道"
 
 
 @pytest.fixture(autouse=True, scope="session")
+def videos_dir(tmp_path_factory):
+    """影片資料夾（新專案、出片的位置）一律放 tmp，絕不寫進真正的 ~/Movies/解說影片；子行程也吃得到。"""
+    d = tmp_path_factory.mktemp("影片") / "解說影片"
+    saved = os.environ.get("ARTICLE_TO_VIDEO_VIDEOS")
+    os.environ["ARTICLE_TO_VIDEO_VIDEOS"] = str(d)
+    try:
+        yield d
+    finally:
+        if saved is None:
+            os.environ.pop("ARTICLE_TO_VIDEO_VIDEOS", None)
+        else:
+            os.environ["ARTICLE_TO_VIDEO_VIDEOS"] = saved
+
+
+@pytest.fixture(autouse=True, scope="session")
 def user_data_dir(tmp_path_factory):
     """使用者設定一律放 tmp，絕不讀寫真正的 ~/Library/Application Support/article-to-video。
 

@@ -67,7 +67,72 @@ def test_cli_turns_pasted_text_into_json_with_shot_ids(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout)
-    assert out["shots"] == [{"number": 2, "id": "B2", "text": "換成折線圖"}]
+    assert [{k: c[k] for k in ("number", "id", "text")} for c in out["shots"]] == [{"number": 2, "id": "B2", "text": "換成折線圖"}]
     assert out["overall"] == "可以"
     assert out["version"] == 1
     assert out["problems"] == []
+
+
+# ---------------------------------------------------------------- 留言對到分鏡與旁白段（#13）
+
+NARRATION = {"s01": "第一段。", "s02": "第二段，曲線倒掛。", "s03": "第三段，原文寫得很清楚。", "s04": "第四段。"}
+
+
+def chart(title: str) -> dict:
+    return {"data": {"title": title, "series": [{"label": "甲", "value": 1}]}, "cues": [{"at": 0, "kind": "title"}]}
+
+
+SHOTS = [
+    {"id": "SH01", "start": {"segment": "s01"}, "chart": chart("短天期比較高")},
+    {"id": "SH02", "start": {"segment": "s02", "word": "曲線"}, "continues": True,
+     "chart": {"data": {"highlight": {"index": 0, "text": "倒掛"}}, "cues": []}},
+    {"id": "SH03", "start": {"segment": "s03"},
+     "vox": {"cues": [{"at": 0, "kind": "image", "image": "圖1"}, {"at": 1, "kind": "box", "rect": [1, 2, 3, 4]}]}},
+    {"id": "SH04", "start": {"segment": "s03", "word": "原文"}, "continues": True,
+     "vox": {"cues": [{"at": 0, "kind": "excerpt", "quote": "很清楚"}]}},
+]
+
+
+def make_project(tmp_path):
+    root = tmp_path / "專案"
+    root.mkdir()
+    (root / "narration.json").write_text(json.dumps({"segments": NARRATION}, ensure_ascii=False), encoding="utf-8")
+    (root / "shots.json").write_text(json.dumps({"shots": SHOTS}, ensure_ascii=False), encoding="utf-8")
+    return root
+
+
+def test_each_comment_says_which_narration_segments_its_shot_plays_over(tmp_path, capsys, monkeypatch):
+    """分鏡從某段開頭切入就從那段算起；下一個分鏡從段中間切入，那段兩個分鏡都有份。改旁白時照這個找旁白段。"""
+    import io
+
+    from article_to_video import cli
+
+    root = make_project(tmp_path)
+    pasted = ("審片留言｜專案｜第 3 版\n分鏡 1（SH01）：標題改短\n分鏡 2（SH02）：旁白改成「曲線又倒掛了」\n"
+              "分鏡 4（SH04）：剪報換一句\n")
+    monkeypatch.setattr("sys.stdin", io.StringIO(pasted))
+    assert cli.main(["feedback", str(root)]) == 0
+    out = json.loads(capsys.readouterr().out)
+    got = {c["id"]: (c["number"], c["kind"], c["segments"]) for c in out["shots"]}
+    assert got == {
+        "SH01": (1, "財經圖表", ["s01", "s02"]),
+        "SH02": (2, "財經圖表（接續）", ["s02"]),
+        "SH04": (4, "Vox（接續）", ["s03", "s04"]),
+    }
+    sh02 = next(c for c in out["shots"] if c["id"] == "SH02")
+    assert sh02["narration"] == {"s02": NARRATION["s02"]}  # 改旁白要改的就是這段
+
+
+def test_outline_lists_every_shot_with_its_segments_for_editing_by_number(tmp_path, capsys):
+    """打開舊專案「第 3 張圖改成…」：outline 列出每個分鏡的編號、id、種類、畫什麼、唸哪幾段。"""
+    from article_to_video import cli
+
+    root = make_project(tmp_path)
+    assert cli.main(["outline", str(root)]) == 0
+    out = capsys.readouterr().out
+    lines = [ln for ln in out.splitlines() if ln.startswith("分鏡 ")]
+    assert len(lines) == 4
+    assert lines[0].startswith("分鏡 1（SH01）財經圖表") and "短天期比較高" in lines[0]
+    assert lines[2].startswith("分鏡 3（SH03）Vox") and "圖1" in lines[2] and "框" in lines[2]
+    assert "旁白段 s03、s04" in lines[3]
+    assert NARRATION["s03"] in out  # 唸的旁白也列出來

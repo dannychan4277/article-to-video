@@ -17,6 +17,11 @@
 - 留言裡的空白行會拿掉。
 - 解析時寬鬆：半形冒號、編號前後有沒有空白、沒有 id、沒有標頭行都可以（作者可能手打）。
   不認得的行：在第一則留言之前的忽略；之後的當成上一則的續行。
+
+留言對到要改的地方（project_outline，#13）：每個分鏡是財經圖表還是 Vox、是不是接續分鏡、畫面上主要的字，
+以及它唸到哪幾個旁白段——只看 shots.json 的切入點與 narration.json 的段落順序，不用配音：
+分鏡從某段開頭切入就從那段算起，到下一個分鏡切入為止；下一個分鏡從段中間（有寫 word）切入時，那段兩個分鏡都有份。
+作者說「旁白改成…」就改這些旁白段；`outline <專案>` 把整份列出來（打開舊專案、照分鏡編號改的時候用）。
 """
 
 from __future__ import annotations
@@ -27,10 +32,12 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from article_to_video.project import ProjectError, ProjectPaths
 
-__all__ = ["HEADER_PREFIX", "ReviewFeedback", "ShotComment", "parse_feedback", "project_shot_ids"]
+__all__ = ["HEADER_PREFIX", "ReviewFeedback", "ShotComment", "ShotOutline", "format_outline", "parse_feedback",
+           "project_outline", "project_shot_ids"]
 
 HEADER_PREFIX = "審片留言"
 
@@ -101,6 +108,115 @@ def project_shot_ids(project_dir: str | os.PathLike) -> list[str]:
         raise ProjectError(f'{path.name} 要長這樣：{{"shots": [ … ]}}')
     return [s.get("id") if isinstance(s, dict) and isinstance(s.get("id"), str) else f"#{i}"
             for i, s in enumerate(shots, 1)]
+
+
+@dataclass(frozen=True)
+class ShotOutline:
+    number: int
+    id: str
+    kind: str
+    """財經圖表／Vox，接續分鏡加「（接續）」。"""
+    start: str
+    """從哪裡切入（給人看的一句）。"""
+    segments: list[str]
+    """這個分鏡唸到的旁白段（照播放順序）。"""
+    shows: str
+    """畫面上主要的東西：圖表標題或標註；Vox 的圖N、剪報、框、卡片。"""
+
+
+def _read_loose(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _shows(shot: dict) -> str:
+    chart, vox = shot.get("chart"), shot.get("vox")
+    if isinstance(chart, dict):
+        data = chart.get("data") if isinstance(chart.get("data"), dict) else {}
+        parts = []
+        if data.get("title"):
+            parts.append(f"標題「{data['title']}」")
+        if isinstance(data.get("publicData"), dict):
+            parts.append(f"公有數據 {data['publicData'].get('series', '')}")
+        hl = data.get("highlight")
+        if isinstance(hl, dict) and hl.get("text"):
+            parts.append(f"標註「{hl['text']}」")
+        return "，".join(parts)
+    if isinstance(vox, dict) and isinstance(vox.get("cues"), list):
+        parts = []
+        for c in vox["cues"]:
+            if not isinstance(c, dict):
+                continue
+            k = c.get("kind")
+            if k == "image":
+                parts.append(str(c.get("image", "原圖")))
+            elif k == "excerpt":
+                parts.append(f"剪報「{c.get('quote', '')}」" if c.get("quote") else f"剪報（第 {c.get('paragraph', '?')} 段）")
+            elif k == "box":
+                parts.append(f"框「{c['find']}」" if c.get("find") else "框")
+            elif k == "title":
+                parts.append(f"標題卡「{c.get('text', '')}」")
+            elif k == "point":
+                parts.append(f"索引卡「{c.get('text', '')}」")
+        return "、".join(parts)
+    return ""
+
+
+def project_outline(project_dir: str | os.PathLike) -> tuple[list[ShotOutline], dict[str, str]]:
+    """每個分鏡的大綱與它唸到的旁白段，加上全部旁白段的文字。只讀 JSON、寬鬆（設定改到一半也能用）。"""
+    paths = ProjectPaths(Path(project_dir).absolute())
+    ids = project_shot_ids(project_dir)
+    raw = _read_loose(paths.shots)
+    shots = [s if isinstance(s, dict) else {} for s in raw["shots"]]
+    nraw = _read_loose(paths.narration)
+    segs = nraw.get("segments") if isinstance(nraw, dict) else None
+    narration = {k: v for k, v in segs.items() if isinstance(v, str)} if isinstance(segs, dict) else {}
+    order = list(narration)
+
+    def start_of(i: int) -> tuple[int | None, bool]:
+        """(旁白段的位置, 是不是從段中間切入)。第一個分鏡沒寫切入點＝從第一段開頭。"""
+        st = shots[i].get("start")
+        if not isinstance(st, dict):
+            return (0 if i == 0 and order else None), False
+        seg = st.get("segment")
+        if seg not in narration:
+            return None, False
+        return order.index(seg), bool(st.get("word"))
+
+    starts = [start_of(i) for i in range(len(shots))]
+    out: list[ShotOutline] = []
+    for i, shot in enumerate(shots):
+        first, mid = starts[i]
+        covered: list[str] = []
+        if first is not None:
+            last = len(order) - 1
+            nxt = next((starts[j] for j in range(i + 1, len(shots)) if starts[j][0] is not None), None)
+            if nxt is not None:
+                last = nxt[0] if nxt[1] else nxt[0] - 1
+            covered = order[first:max(first, last) + 1]
+        st = shot.get("start") if isinstance(shot.get("start"), dict) else {}
+        if first is None:
+            where = "切入點還沒寫好"
+        elif st.get("word"):
+            where = f"從旁白段 {order[first]} 的「{st['word']}」切入"
+        else:
+            where = f"從旁白段 {order[first]} 開頭切入"
+        kind = "Vox" if isinstance(shot.get("vox"), dict) else "財經圖表"
+        if shot.get("continues"):
+            kind += "（接續）"
+        out.append(ShotOutline(i + 1, ids[i], kind, where, covered, _shows(shot)))
+    return out, narration
+
+
+def format_outline(outline: Sequence[ShotOutline], narration: dict[str, str]) -> str:
+    lines = [f"共 {len(outline)} 個分鏡（編號＝審片頁卡片上的編號），旁白 {len(narration)} 段"]
+    for o in outline:
+        segs = "、".join(o.segments) or "（對不到旁白段）"
+        lines.append(f"分鏡 {o.number}（{o.id}）{o.kind}｜{o.start}｜旁白段 {segs}" + (f"｜{o.shows}" if o.shows else ""))
+        lines += [f"    {k}：{narration[k]}" for k in o.segments]
+    return "\n".join(lines)
 
 
 def parse_feedback(text: str) -> ReviewFeedback:

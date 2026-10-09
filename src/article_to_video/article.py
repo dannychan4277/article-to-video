@@ -164,7 +164,13 @@ def run_extract(project_dir: str, source: str) -> int:
         print(f"擷取失敗：檔案讀寫出錯（{e.strerror or e}：{e.filename or ''}）。請確認專案資料夾可以寫入、磁碟還有空間。",
               file=sys.stderr)
         return 1
-    print(f"已擷取到 {art.paths.root}")
+    print_extract_summary(art)
+    return 0
+
+
+def print_extract_summary(art: ExtractedArticle, where: Path | None = None) -> None:
+    """擷取成功後印的摘要（段數、字數、每張原圖）。where：article/ 搬過家時給新的位置。"""
+    print(f"已擷取到 {where or art.paths.root}")
     chars = sum(len(p.text) for p in art.paragraphs)
     print(f"全文：{len(art.paragraphs)} 段、{chars} 字 → {art.paths.text.name}")
     print(f"原圖：{len(art.images)} 張" + ("" if art.images else "（這份文章沒有抽到圖）"))
@@ -176,7 +182,6 @@ def run_extract(project_dir: str, source: str) -> int:
     skipped = art.manifest.get("skipped_images") or []
     if skipped:
         print(f"（略過 {len(skipped)} 張：{'、'.join(sorted({s['reason'] for s in skipped}))}）")
-    return 0
 
 
 _CONVERT_HINTS = {

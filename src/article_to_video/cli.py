@@ -1,10 +1,17 @@
 """指令列：`uv run --project <外掛根目錄> python -m article_to_video <子指令> …`
 
 子指令：
+  new <文章檔|-> [--title 片名] [--root 影片資料夾]  開新專案：~/Movies/解說影片/<日期>-<片名>/專案/，擷取文章（含截字檢查）
+  projects [關鍵字] [--root 影片資料夾] [--json]       列出做過的影片（最近動過的在前面）
   preview <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]
                                                   預覽：只出分鏡靜態圖＋審片頁（不渲整支片）
   build <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]
                                                   建置成片＋字幕檔，審片頁內嵌成片
+  open-review <專案資料夾> [--aspect …] [--tts …] [--data-dir D]
+                                                  更新審片頁（最新的檢查結果、還是最新的成片就內嵌）並在瀏覽器打開給作者看
+  publish <專案資料夾> --version N [--aspect …] [--tts …] [--jobs N] [--no-open] [--data-dir D] [--out 資料夾]
+                                                  出片：作者點頭（第 N 版）之後，建置成片、自動檢查，把成片和字幕檔放進
+                                                  「影片／解說影片／日期-標題」（見 publish.py、videos.py）
   boxes <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--data-dir D]
                                                   列出 Vox 框、渲每個框的靜態圖（照這個比例）、印核對代號
   confirm-box <專案資料夾> <核對代號>… [--note 文字]   記下 Claude 看過靜態圖、確認過的框（見 boxes.py）
@@ -19,7 +26,10 @@
                                                   記下審片 agent 的回答（預設讀素材資料夾的 review.json），更新審片頁
   resolve <專案資料夾> <代號>… (--fixed 說明 | --accept 理由) [--by 作者|Claude]
                                                   記下必修的處理：改好了（獨立審片）或接受不改；記了就不再擋出片
-  feedback <專案資料夾> [--file 檔]                   審片頁複製出來的留言（stdin）→ JSON（格式見 feedback.py）
+  lint <專案資料夾>                                 旁白規則檢查（narration.json；規則見 lint.py）；有要改的結束碼 1
+  feedback <專案資料夾> [--file 檔]                   審片頁複製出來的留言（stdin）→ JSON（格式見 feedback.py）：
+                                                  每則對到分鏡 id、種類、畫面上的字、唸到的旁白段與文字
+  outline <專案資料夾>                              每個分鏡的編號、種類、畫什麼、唸哪幾個旁白段（照編號改舊片時用）
   extract <專案資料夾> <文章檔|->                   擷取文章到 <專案>/article/（- ＝從標準輸入讀貼上的文字）
   report-issue [專案資料夾] [--shot 分鏡]… [--note 文字] [--out-dir 資料夾]
                                                   回報問題：打包 zip（預設放桌面）
@@ -110,6 +120,20 @@ def _parser() -> argparse.ArgumentParser:
     v.add_argument("--no-open", action="store_true", help="做完不要自動在瀏覽器打開審片頁")
     v.add_argument("--data-dir", help=_DATA_DIR_HELP)
     v.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
+    pb = sub.add_parser("publish", help="出片：作者點頭之後，建置成片、跑自動檢查，把成片和字幕檔放進「影片／解說影片／日期-標題」")
+    pb.add_argument("project", help="專案資料夾")
+    pb.add_argument("--version", type=int, required=True, help="作者點頭的是審片頁第幾版（頁首寫的）")
+    pb.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
+    pb.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
+    pb.add_argument("--jobs", type=int, help="最多同時渲幾個片段（預設 3）")
+    pb.add_argument("--no-open", action="store_true", help="做完不要在 Finder 裡指出成片")
+    pb.add_argument("--data-dir", help=_DATA_DIR_HELP)
+    pb.add_argument("--out", help="成片放哪個資料夾（預設：這支片的「日期-標題」資料夾）")
+    orv = sub.add_parser("open-review", help="更新審片頁（帶上最新的檢查結果）並在瀏覽器打開給作者看")
+    orv.add_argument("project", help="專案資料夾")
+    orv.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
+    orv.add_argument("--tts", choices=sorted(TTS_ENGINES), help="配音層（預設看 settings.json，沒寫就是 edge）")
+    orv.add_argument("--data-dir", help=_DATA_DIR_HELP)
     bx = sub.add_parser("boxes", help="列出 Vox 框、渲每個框的靜態圖、看哪些還沒核對")
     bx.add_argument("project", help="專案資料夾")
     bx.add_argument("--aspect", type=_aspect, help=_ASPECT_HELP)
@@ -152,6 +176,18 @@ def _parser() -> argparse.ArgumentParser:
     cb.add_argument("project", help="專案資料夾")
     cb.add_argument("tokens", nargs="*", help="核對代號，例 SH02:1@1a2b3c4d（可以一次給好幾個）")
     cb.add_argument("--note", default="", help="備註（例：框在「十年期」那一列的 3.96 上）")
+    nw = sub.add_parser("new", help="開新專案：在「影片／解說影片」建「日期-標題/專案」資料夾，擷取文章（含截字檢查）")
+    nw.add_argument("source", help="文章檔（.pdf .docx .txt .md .html 或 Google 文件的網頁 .zip）；- ＝從標準輸入讀貼上的文字")
+    nw.add_argument("--title", help="片名（資料夾與成片的檔名；不給就用文章第一段）")
+    nw.add_argument("--root", help="影片資料夾（預設 ~/Movies/解說影片）")
+    pj = sub.add_parser("projects", help="列出做過的影片（最近動過的在前面），找舊專案用")
+    pj.add_argument("query", nargs="?", default="", help="只列標題含這幾個字的")
+    pj.add_argument("--root", help="影片資料夾（預設 ~/Movies/解說影片）")
+    pj.add_argument("--json", action="store_true", help="印 JSON（給程式讀）")
+    ln = sub.add_parser("lint", help="旁白規則檢查：narration.json 每個旁白段的字數、斷句、數字寫法、套話、開場")
+    ln.add_argument("project", help="專案資料夾（裡面有 narration.json）")
+    ol = sub.add_parser("outline", help="列出每個分鏡：編號、種類、畫什麼、唸哪幾個旁白段（照分鏡編號改的時候用）")
+    ol.add_argument("project", help="專案資料夾")
     f = sub.add_parser("feedback", help="把審片頁「複製給 Claude」的文字（從 stdin 讀）解析成 JSON")
     f.add_argument("project", help="專案資料夾（用來把分鏡編號對到分鏡 id）")
     f.add_argument("--file", help="從這個檔讀，不從 stdin 讀")
@@ -263,14 +299,105 @@ def _check_env(args: argparse.Namespace) -> int:
     return 0 if report.ok else 1
 
 
-def _show_review(page, *, no_open: bool) -> None:
+def _show_review(page, *, no_open: bool, version: int | None = None) -> None:
     from article_to_video.review import auto_open_allowed, open_in_browser
 
-    print(f"審片頁：{page}")
+    print(f"審片頁：{page}" + (f"（第 {version} 版）" if version else ""))
     if no_open or not auto_open_allowed():
         return
     if not open_in_browser(page):
         print("沒能自動打開審片頁，請在 Finder 找到上面這個檔案，點兩下打開。")
+
+
+def _list_stills(review) -> str:
+    """給 Claude 逐張看的分鏡靜態圖（完成狀態那張）：第 1 版列全部，之後只列這版改過的分鏡。"""
+    shots = review.plan.timeline.shots if review.plan is not None else []
+    if review.version == 1:
+        pick, head = shots, f"第 1 版：{len(shots)} 個分鏡的靜態圖（完成狀態）"
+    else:
+        changed = set(review.changed)
+        pick = [st for st in shots if st.shot.id in changed]
+        head = f"第 {review.version} 版：改了 {len(pick)} 個分鏡" + ("，靜態圖（完成狀態）" if pick else "")
+    lines = [head]
+    for st in pick:
+        finals = [x.path for x in review.stills.get(st.shot.id, []) if x.final]
+        if finals:
+            lines.append(f"  分鏡 {st.shot.number}（{st.shot.id}）：{finals[0]}")
+    if review.removed:
+        lines.append("  拿掉了：" + "、".join(review.removed))
+    return "\n".join(lines)
+
+
+def _publish(args: argparse.Namespace) -> int:
+    from article_to_video.build import BlockedBuild
+    from article_to_video.issue_report import RunRecord
+    from article_to_video.publish import publish_project
+    from article_to_video.review import auto_open_allowed, default_contributors, make_review
+
+    rec = RunRecord(args.project, "publish", {"tts": args.tts, "jobs": args.jobs, "version": args.version,
+                                              "aspect": args.aspect.name if args.aspect else None})
+    log = rec.tee(lambda m: print(m, flush=True))
+    try:
+        res = publish_project(args.project, version=args.version, tts=args.tts, jobs=args.jobs, fmt=args.aspect,
+                              data_dir=args.data_dir, out_dir=args.out, log=log)
+        review = make_review(res.plan, video=res.project_video, contributors=default_contributors(args.data_dir),
+                             jobs=args.jobs, log=log)
+    except BlockedBuild as e:
+        rec.finish(e)
+        print(f"還不能出片：{e}", file=sys.stderr)
+        try:
+            from article_to_video.auto_checks import current_video
+
+            review = make_review(e.plan, video=current_video(e.plan), contributors=default_contributors(args.data_dir),
+                                 jobs=args.jobs, log=log)
+            print(f"審片頁已更新（擋下的原因標在卡片上）：{review.page}", file=sys.stderr)
+        except KNOWN_ERRORS as e2:
+            print(f"審片頁也沒更新：{e2}", file=sys.stderr)
+        return 1
+    except KNOWN_ERRORS as e:
+        rec.finish(e)
+        print(f"出片失敗：{e}" if not str(e).startswith("還不能出片") else str(e), file=sys.stderr)
+        return 1
+    except BaseException as e:
+        rec.finish(e, unexpected=True)
+        raise
+    rec.finish()
+    minutes, secs = divmod(res.duration, 60)
+    print(f"出片完成（審片頁第 {res.version} 版，{int(minutes)} 分 {secs:.0f} 秒）：")
+    print(f"  成片：{res.video}")
+    print(f"  字幕檔：{res.srt}")
+    print(f"審片頁：{review.page}")
+    if not args.no_open and auto_open_allowed():
+        if not open_file_reveal(res.video):
+            print("沒能在 Finder 打開，請到「影片」→「解說影片」找這個資料夾。")
+    return 0
+
+
+def open_file_reveal(path) -> bool:
+    """在 Finder 裡選取這個檔（open -R）。"""
+    import subprocess
+
+    try:
+        proc = subprocess.run(["open", "-R", str(path)], capture_output=True, text=True, encoding="utf-8", timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def _open_review(args: argparse.Namespace) -> int:
+    from article_to_video.build import plan_build
+
+    try:
+        plan = plan_build(args.project, tts=args.tts, fmt=args.aspect, data_dir=args.data_dir)
+        from article_to_video.auto_checks import current_video
+        from article_to_video.review import default_contributors, make_review
+
+        review = make_review(plan, video=current_video(plan), contributors=default_contributors(args.data_dir))
+    except KNOWN_ERRORS as e:
+        print(f"審片頁打不開：{e}", file=sys.stderr)
+        return 1
+    _show_review(review.page, no_open=False, version=review.version)
+    return 0
 
 
 def _samples(args: argparse.Namespace) -> int:
@@ -354,7 +481,10 @@ def _after_build_hint(plan, data_dir) -> str:
     if review_enabled(data_dir) and not reviewed_current_video(plan):
         steps.append(f"獨立審片（這版成片還沒審）：python -m article_to_video review-prep \"{root}\"{aspect}"
                      " → 用印出來的 prompt 派一個 agent → review-record")
-    return ("下一步：\n" + "\n".join(f"  {s}" for s in steps)) if steps else "自動檢查、獨立審片都跑過這版了。"
+    if steps:
+        return "下一步：\n" + "\n".join(f"  {s}" for s in steps)
+    return ("自動檢查、獨立審片都跑過這版了。下一步：處理完必修，python -m article_to_video open-review "
+            f"\"{root}\"{aspect} 打開審片頁給作者看；作者點頭之後 publish --version <他看的那一版> 才是出片。")
 
 
 def _refresh_review(plan, data_dir, log) -> None:
@@ -575,6 +705,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                                          jobs=args.jobs, data_dir=args.data_dir, fmt=args.aspect, log=log)
                 if review.plan is not None:
                     log(summary_line(review.plan))
+                    log(_list_stills(review))
         except BlockedBuild as e:
             # 擋下正式出片：審片頁照這一版重寫（沒有成片、被擋的數字標在卡上），作者打開看到的就是現況
             rec.finish(e)
@@ -597,8 +728,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             rec.finish(e, unexpected=True)
             raise
         rec.finish()
-        _show_review(review.page, no_open=args.no_open)
+        _show_review(review.page, no_open=args.no_open, version=review.version)
         return 0
+    if args.command == "publish":
+        return _publish(args)
+    if args.command == "open-review":
+        return _open_review(args)
     if args.command in ("boxes", "confirm-box"):
         return _boxes(args)
     if args.command == "checks":
@@ -619,22 +754,66 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("\n".join(f"  {t}　{w}" for t, w in zip(args.tokens, what)))
         print("審片頁下次 build／checks 時更新；正式出片不會再被這幾項擋下。")
         return 0
-    if args.command == "feedback":
-        from pathlib import Path
+    if args.command == "new":
+        from article_to_video.videos import new_project
 
-        from article_to_video.feedback import parse_feedback, project_shot_ids
+        return new_project(args.source, title=args.title, root=args.root)
+    if args.command == "projects":
+        from article_to_video.videos import format_projects, list_projects, videos_root
+
+        infos = list_projects(args.root, args.query)
+        if args.json:
+            print(json.dumps([i.to_json() for i in infos], ensure_ascii=False, indent=1))
+        else:
+            print(format_projects(infos, videos_root(args.root)))
+        return 0
+    if args.command == "outline":
+        from article_to_video.feedback import format_outline, project_outline
 
         try:
-            ids = project_shot_ids(args.project)
+            outline, narration = project_outline(args.project)
         except ProjectError as e:
             print(f"讀不到分鏡設定：{e}", file=sys.stderr)
             return 1
+        print(format_outline(outline, narration))
+        return 0
+    if args.command == "lint":
+        from article_to_video.lint import format_lint, lint_project
+
+        try:
+            report = lint_project(args.project)
+        except ProjectError as e:
+            print(f"旁白檢查失敗：{e}", file=sys.stderr)
+            return 1
+        print(format_lint(report))
+        return 0 if report.ok else 1
+    if args.command == "feedback":
+        from pathlib import Path
+
+        from article_to_video.feedback import parse_feedback, project_outline
+
+        try:
+            outline, narration = project_outline(args.project)
+        except ProjectError as e:
+            print(f"讀不到分鏡設定：{e}", file=sys.stderr)
+            return 1
+        ids = [o.id for o in outline]
+        by_id = {o.id: o for o in outline}
         text = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
         fb = parse_feedback(text)
+
+        def comment(c, sid):
+            item = {"number": c.number, "id": sid, "text": c.text}
+            o = by_id.get(sid)
+            if o is not None:  # 要改的地方：畫面是哪種、唸到哪幾段旁白（改旁白就改這幾段）
+                item.update(kind=o.kind, shows=o.shows, segments=o.segments,
+                            narration={k: narration[k] for k in o.segments})
+            return item
+
         out = {
             "project": fb.project,
             "version": fb.version,
-            "shots": [{"number": c.number, "id": sid, "text": c.text} for c, sid in zip(fb.shots, fb.resolve(ids))],
+            "shots": [comment(c, sid) for c, sid in zip(fb.shots, fb.resolve(ids))],
             "overall": fb.overall,
             "problems": fb.check(ids),
         }

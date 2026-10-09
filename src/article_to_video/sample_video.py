@@ -30,7 +30,9 @@ class SampleVideoError(RuntimeError):
 
 
 def default_test_video_dir() -> Path:
-    return Path.home() / "Movies" / "解說影片" / "安裝測試片"
+    from article_to_video.videos import videos_root  # 跟正式的片放在同一個「解說影片」資料夾
+
+    return videos_root() / "安裝測試片"
 
 
 def prepare_test_project(out_dir: str | os.PathLike | None = None) -> Path:
