@@ -6,6 +6,13 @@
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 from playwright.sync_api import Page, sync_playwright
 
@@ -138,3 +145,45 @@ def test_page_loads_nothing_from_the_network(browser, page_url):
     page.evaluate("Promise.all(Array.from(document.images).map(i => { i.loading = 'eager'; return i.decode().catch(() => {}); }))")
     assert urls and all(u.startswith("file://") for u in urls), [u for u in urls if not u.startswith("file://")]
     page.close()
+
+
+
+def _preview(root: Path) -> None:
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    proc = subprocess.run([sys.executable, "-m", "article_to_video", "preview", str(root), "--tts", "fake"],
+                          capture_output=True, text=True, encoding="utf-8", env=env)
+    assert proc.returncode == 0, proc.stderr
+
+
+def _change_a_shot(root: Path) -> None:
+    shots = json.loads((root / "shots.json").read_text(encoding="utf-8"))
+    shots["shots"][1]["chart"]["data"]["highlight"]["text"] = "長天期偏低"
+    (root / "shots.json").write_text(json.dumps(shots, ensure_ascii=False), encoding="utf-8")
+
+
+@pytest.mark.parametrize("copied_before_rebuild", [False, True])
+def test_comments_not_yet_sent_are_offered_back_after_a_rebuild(browser, previewed_project, tmp_path, copied_before_rebuild):
+    root = tmp_path / "2026-10-09-殖利率曲線"
+    shutil.copytree(previewed_project.dir, root)
+    _preview(root)  # 在這個資料夾重寫一次（瀏覽器存留言的鍵跟著專案資料夾的路徑）
+    url = (root / "審片頁.html").as_uri()
+    page = open_page(browser, url)
+    comment_box(page, "SH01").fill("這句旁白太長")
+    if copied_before_rebuild:
+        copy_button(page).click()
+        page.wait_for_function("document.getElementById('copy-status').dataset.tone === 'ok'")
+
+    _change_a_shot(root)
+    _preview(root)  # 第 2 版
+    page.reload()
+    assert page.locator("html").get_attribute("data-version") == "2"
+    carry = page.locator("#carry")
+    if copied_before_rebuild:  # 已經交給 Claude 了：新的一版從空白開始
+        assert not carry.is_visible()
+        assert comment_box(page, "SH01").input_value() == ""
+    else:
+        assert carry.is_visible()
+        assert "第 1 版" in carry.inner_text()
+        page.get_by_role("button", name="放回來").click()
+        assert comment_box(page, "SH01").input_value() == "這句旁白太長"
+    page.context.close()

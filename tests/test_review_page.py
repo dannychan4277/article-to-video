@@ -295,3 +295,66 @@ def test_page_says_which_shots_were_removed(copy_of_built):
     page = read_review(root)
     assert [c.id for c in page.cards] == ["SH01"]
     assert "拿掉了" in page.changes_text and "分鏡 2" in page.changes_text
+
+
+
+# ---------------------------------------------------------------- 自動打開
+
+
+def test_cli_opens_the_review_page_in_the_browser_unless_told_not_to(previewed_project, tmp_path):
+    root = tmp_path / "2026-10-09-殖利率曲線"
+    shutil.copytree(previewed_project.dir, root)
+    bindir, record = tmp_path / "bin", tmp_path / "opened.txt"
+    bindir.mkdir()
+    fake_open = bindir / "open"  # 假的 macOS open：只記下被要求打開什麼
+    fake_open.write_text(
+        f"#!{sys.executable}\nimport sys\n"
+        f"with open({str(record)!r}, 'a', encoding='utf-8') as f:\n    f.write('\\n'.join(sys.argv[1:]) + '\\n')\n",
+        encoding="utf-8",
+    )
+    fake_open.chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if k not in ("ARTICLE_TO_VIDEO_NO_OPEN", "CI")}
+    env.update(PATH=f"{bindir}{os.pathsep}{env['PATH']}", PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+
+    def preview(*extra: str, **more_env: str) -> None:
+        proc = subprocess.run([sys.executable, "-m", "article_to_video", "preview", str(root), "--tts", "fake", *extra],
+                              capture_output=True, text=True, encoding="utf-8", env={**env, **more_env})
+        assert proc.returncode == 0, proc.stderr
+
+    preview()
+    assert record.read_text(encoding="utf-8").splitlines() == [str(root / REVIEW_PAGE)]
+    record.unlink()
+    preview("--no-open")
+    preview(ARTICLE_TO_VIDEO_NO_OPEN="1")
+    assert not record.exists()
+
+
+
+# ---------------------------------------------------------------- 後面的票往卡片加東西（數字對帳 #5、自動檢查 #11）
+
+
+def test_later_checks_can_add_results_to_a_card_and_to_the_page(previewed_project, tmp_path):
+    from article_to_video.build import plan_build
+    from article_to_video.review import CardSection, CheckItem, ReviewExtras, make_review
+
+    root = tmp_path / "2026-10-09-殖利率曲線"
+    shutil.copytree(previewed_project.dir, root)
+
+    def numbers(plan) -> ReviewExtras:
+        assert [st.shot.id for st in plan.timeline.shots] == ["SH01", "SH02"]
+        return ReviewExtras(
+            cards={"SH01": [CardSection("numbers", "數字出處", [
+                CheckItem("4.58%", detail="原文第 2 段", status="ok"),
+                CheckItem("<b>3.1%</b>", detail="找不到出處", status="block"),
+            ])]},
+            page=[CardSection("checks", "獨立審片", [CheckItem("節奏沒問題", status="ok")])],
+        )
+
+    make_review(plan_build(root, tts="fake"), contributors=[numbers])
+    page = read_review(root)
+    sh01, sh02 = page.cards
+    assert "4.58%" in sh01.slots["numbers"] and "原文第 2 段" in sh01.slots["numbers"]
+    assert "<b>3.1%</b>" in sh01.slots["numbers"]  # 原樣當文字顯示，不會變成 HTML
+    assert "擋下出片" in sh01.slots["numbers"]
+    assert not sh02.slots.get("numbers", "").strip()
+    assert "獨立審片" in page.page_slots["checks"] and "節奏沒問題" in page.page_slots["checks"]

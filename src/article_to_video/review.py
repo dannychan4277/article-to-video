@@ -14,8 +14,10 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -25,14 +27,22 @@ from urllib.parse import quote
 from article_to_video.build import BuildPlan, plan_build
 from article_to_video.clip_cache import clip_hash
 from article_to_video.clips import ClipRenderError, render_stills
-from article_to_video.review_page import CardModel, PageModel, StillModel, render_review_html
+from article_to_video.review_page import CardModel, CardSection, CheckItem, PageModel, StillModel, render_review_html
 from article_to_video.timeline import ClipPlan, Timeline
 
 __all__ = [
+    "NO_OPEN_ENV",
+    "CardSection",
+    "CheckItem",
+    "Contributor",
     "NarrationPiece",
+    "ReviewExtras",
     "ReviewResult",
     "Still",
+    "auto_open_allowed",
+    "default_contributors",
     "make_review",
+    "open_in_browser",
     "preview_project",
     "shot_narration",
 ]
@@ -43,7 +53,28 @@ MOMENT_GAP = 0.8
 MAX_MOMENTS = 3
 """每個分鏡最多幾張過程靜態圖（不含完成狀態那張）。"""
 
+NO_OPEN_ENV = "ARTICLE_TO_VIDEO_NO_OPEN"
+"""設成 1 就不自動打開審片頁（測試、CI 用）；指令列也可以加 --no-open。"""
+
 Log = Callable[[str], None]
+
+
+@dataclass(frozen=True)
+class ReviewExtras:
+    """其他檢查要放上審片頁的結果。cards：分鏡 id → 那張卡上的幾區（數字對帳放 slot "numbers"、
+    自動檢查放 "checks"）；page：整片層級的幾區（例：獨立審片的總評），排在分鏡卡前面。"""
+
+    cards: dict[str, list[CardSection]] = field(default_factory=dict)
+    page: list[CardSection] = field(default_factory=list)
+
+
+Contributor = Callable[[BuildPlan], ReviewExtras]
+"""審片頁的資料來源：拿到建置計畫（分鏡、時間軸、每個片段的 spec），回傳要加在卡片上的東西。預覽和出片都會呼叫。"""
+
+
+def default_contributors() -> list[Contributor]:
+    """指令列（preview、build）預設用的資料來源。數字對帳（#5）、自動檢查（#11）做好後加在這裡（函式內 import，免得循環匯入）。"""
+    return []
 
 
 def _quiet(_: str) -> None:
@@ -302,7 +333,7 @@ def _storage_key(plan: BuildPlan) -> str:
 
 
 def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], video: Path | None,
-                narration: dict[str, list[NarrationPiece]], version: _Version) -> PageModel:
+                narration: dict[str, list[NarrationPiece]], version: _Version, extras: ReviewExtras) -> PageModel:
     fps = plan.timeline.fps
     cards = [
         CardModel(
@@ -314,6 +345,7 @@ def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], vid
             stills=[StillModel(_rel(page, s.path), s.video_time, s.final) for s in stills.get(st.shot.id, [])],
             continues=st.shot.continues,
             changed=st.shot.id in version.changed,
+            sections=list(extras.cards.get(st.shot.id, [])),
         )
         for st in plan.timeline.shots
     ]
@@ -327,6 +359,7 @@ def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], vid
         cards=cards,
         video_src=_rel(page, video) if video else None,
         removed=version.removed,
+        page_sections=list(extras.page),
     )
 
 
@@ -334,15 +367,22 @@ def make_review(
     plan: BuildPlan,
     *,
     video: Path | None = None,
+    contributors: Sequence[Contributor] = (),
     jobs: int | None = None,
     log: Log = _quiet,
 ) -> ReviewResult:
-    """渲靜態圖（有快取）、寫審片頁。video＝成片（出片後才有）。"""
+    """渲靜態圖（有快取）、寫審片頁。video＝成片（出片後才有）；contributors＝要加在卡片上的檢查結果。"""
+    extras = ReviewExtras()
+    for contribute in contributors:
+        more = contribute(plan)
+        for sid, secs in more.cards.items():
+            extras.cards.setdefault(sid, []).extend(secs)
+        extras.page.extend(more.page)
     stills = render_review_stills(plan, jobs=jobs, log=log)
     narration = shot_narration(plan.timeline)
     version = _update_version(plan.paths.review_state, plan, _shot_hashes(plan, narration))
     page = plan.project.paths.review_page(plan.format.name)
-    model = _page_model(plan, page, stills, video, narration, version)
+    model = _page_model(plan, page, stills, video, narration, version, extras)
     page.write_text(render_review_html(model), encoding="utf-8")
     if version.changed or version.removed:
         log(f"審片頁第 {version.number} 版：改了 {len(version.changed)} 個分鏡"
@@ -355,9 +395,31 @@ def preview_project(
     project_dir: str | os.PathLike,
     *,
     tts: str | None = None,
+    contributors: Sequence[Contributor] = (),
     jobs: int | None = None,
     log: Log = _quiet,
 ) -> ReviewResult:
     """預覽模式：配音＋時間軸＋分鏡靜態圖＋審片頁，不渲片段、不出成片。"""
     plan = plan_build(project_dir, tts=tts, log=log)
-    return make_review(plan, jobs=jobs, log=log)
+    return make_review(plan, contributors=contributors, jobs=jobs, log=log)
+
+
+# ---------------------------------------------------------------- 在瀏覽器打開
+
+
+def auto_open_allowed() -> bool:
+    """建置完要不要自動打開審片頁：只在 macOS，而且沒設 ARTICLE_TO_VIDEO_NO_OPEN、不在 CI 裡。"""
+    if os.environ.get(NO_OPEN_ENV, "").strip() not in ("", "0"):
+        return False
+    if os.environ.get("CI"):
+        return False
+    return sys.platform == "darwin"
+
+
+def open_in_browser(page: Path) -> bool:
+    """用 macOS 的 open 打開審片頁（.html 交給預設瀏覽器）。打不開就回傳 False，不當成建置失敗。"""
+    try:
+        proc = subprocess.run(["open", str(page)], capture_output=True, text=True, encoding="utf-8", timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
