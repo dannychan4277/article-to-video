@@ -536,6 +536,7 @@ def _review(args: argparse.Namespace) -> int:
     from article_to_video import independent_review as ir
     from article_to_video.build import plan_build
     from article_to_video.issue_report import RunRecord
+    from article_to_video.textio import TextInputError, read_text_input
 
     if args.command == "review-frames":
         try:
@@ -573,9 +574,9 @@ def _review(args: argparse.Namespace) -> int:
             kit = ir.find_kit(args.project, plan.format.name)
             src = args.file or str(kit.answer)
             try:
-                text = sys.stdin.read() if src == "-" else Path(src).read_text(encoding="utf-8")
-            except OSError:
-                raise ProjectError(f"讀不到 {src}", title="沒有審片結果",
+                text = read_text_input(src)
+            except TextInputError as e:
+                raise ProjectError(str(e), title="沒有審片結果",
                                    hint="審片 agent 要把結果寫到審片素材資料夾的 review.json。") from None
             try:
                 answer = json.loads(text)
@@ -791,6 +792,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         from pathlib import Path
 
         from article_to_video.feedback import parse_feedback, project_outline
+        from article_to_video.textio import STDIN, TextInputError, read_text_input
 
         try:
             outline, narration = project_outline(args.project)
@@ -799,7 +801,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         ids = [o.id for o in outline]
         by_id = {o.id: o for o in outline}
-        text = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
+        try:
+            text = read_text_input(args.file or STDIN)
+        except TextInputError as e:
+            print(f"讀不到留言：{e}", file=sys.stderr)
+            return 1
         fb = parse_feedback(text)
 
         def comment(c, sid):

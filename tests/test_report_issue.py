@@ -59,7 +59,8 @@ def test_report_carries_an_environment_check(good_report):
     with zipfile.ZipFile(good_report) as z:
         env = {c["key"]: c for c in json.loads(read_text(z, "environment.json"))["checks"]}
         text = read_text(z, "environment.txt")
-    sw_vers = subprocess.run(["sw_vers", "-productVersion"], capture_output=True, text=True, check=True).stdout.strip()
+    sw_vers = subprocess.run(["sw_vers", "-productVersion"], capture_output=True, text=True, encoding="utf-8",
+                             check=True).stdout.strip()
     assert env["macos"]["value"] == sw_vers
     assert env["cpu"]["detail"]["machine"] in {"arm64", "x86_64"}
     assert env["python"]["detail"]["version"] == ".".join(map(str, sys.version_info[:3]))

@@ -122,11 +122,12 @@ def new_project(source: str, *, title: str | None = None, root: str | os.PathLik
     """指令列 `new`：建「日期-標題/專案」、擷取文章（含截字檢查）。擷取不下去就把剛建的資料夾整個拿掉，回 1。
     source 是 - 時從標準輸入讀作者貼的文字。沒給標題就用文章第一段（derive_title）。"""
     from article_to_video.article import ArticleError, extract_article, print_extract_summary
+    from article_to_video.textio import STDIN, TextInputError, read_stdin
 
     base = videos_root(root)
     day = (today or date.today()).isoformat()
     try:
-        text = sys.stdin.buffer.read().decode("utf-8-sig") if source == "-" else None
+        text = read_stdin() if source == STDIN else None
         name = safe_title(title) if title else (derive_title(text.splitlines()) if text is not None else None)
         folder = _free_folder(base, day, name or "未命名")
         project = folder / PROJECT_DIR
@@ -145,6 +146,9 @@ def new_project(source: str, *, title: str | None = None, root: str | os.PathLik
             raise
     except ArticleError as e:
         print(f"擷取失敗：{e}", file=sys.stderr)
+        return 1
+    except TextInputError as e:
+        print(f"開不了新專案：{e}", file=sys.stderr)
         return 1
     except OSError as e:
         print(f"開不了新專案：檔案讀寫出錯（{e.strerror or e}：{e.filename or ''}）。請確認「{base}」可以寫入、磁碟還有空間。",

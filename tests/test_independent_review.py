@@ -137,6 +137,17 @@ def test_recorded_findings_show_on_the_review_page(project):
     assert "標註壓到柱上的數值" not in cards["SH01"].slots.get("review", "")
 
 
+def test_an_answer_piped_in_is_read_as_utf8_whatever_the_macs_language_setting(project):
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    env.update(PYTHONUTF8="0", LC_ALL="en_US.ISO8859-1", LANG="en_US.ISO8859-1")
+    proc = subprocess.run([sys.executable, "-m", "article_to_video", "review-record", str(project), "--file", "-",
+                           "--tts", "fake"], input=json.dumps(REVIEW, ensure_ascii=False).encode("utf-8"),
+                          capture_output=True, env=env)
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+    log = json.loads((project / "check_log.json").read_text(encoding="utf-8"))
+    assert log["rounds"][0]["items"][0]["title"] == "標註壓到柱上的數值"
+
+
 def test_a_malformed_answer_is_explained_and_nothing_is_recorded(project):
     bad = {"items": [{"severity": "超級必修", "title": "x"}, {"severity": "該修", "shot": 9, "title": "y"},
                      {"severity": "可改", "time": "下午", "title": "z"}],

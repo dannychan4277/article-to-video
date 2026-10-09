@@ -73,6 +73,22 @@ def test_cli_turns_pasted_text_into_json_with_shot_ids(tmp_path):
     assert out["problems"] == []
 
 
+def test_pasted_text_is_read_as_utf8_whatever_the_macs_language_setting(tmp_path):
+    """作者那台的語系不是 UTF-8（例如 Latin-1）也一樣：貼上的留言一律照 UTF-8 讀。"""
+    root = tmp_path / "專案"
+    root.mkdir()
+    (root / "narration.json").write_text(json.dumps({"segments": {"s01": "一句話。"}}, ensure_ascii=False), encoding="utf-8")
+    shot = {"chart": {"data": {"title": "標題", "series": [{"label": "甲", "value": 1}]}, "cues": [{"at": 0, "kind": "title"}]}}
+    (root / "shots.json").write_text(json.dumps({"shots": [{"id": "A1", **shot}]}, ensure_ascii=False), encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    env.update(PYTHONUTF8="0", LC_ALL="en_US.ISO8859-1", LANG="en_US.ISO8859-1")
+    proc = subprocess.run([sys.executable, "-m", "article_to_video", "feedback", str(root)],
+                          input="審片留言｜專案｜第 1 版\n分鏡 1：換成折線圖\n".encode("utf-8"), capture_output=True, env=env)
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+    out = json.loads(proc.stdout.decode("utf-8"))
+    assert [c["text"] for c in out["shots"]] == ["換成折線圖"] and out["version"] == 1
+
+
 # ---------------------------------------------------------------- 留言對到分鏡與旁白段（#13）
 
 NARRATION = {"s01": "第一段。", "s02": "第二段，曲線倒掛。", "s03": "第三段，原文寫得很清楚。", "s04": "第四段。"}
@@ -110,7 +126,7 @@ def test_each_comment_says_which_narration_segments_its_shot_plays_over(tmp_path
     root = make_project(tmp_path)
     pasted = ("審片留言｜專案｜第 3 版\n分鏡 1（SH01）：標題改短\n分鏡 2（SH02）：旁白改成「曲線又倒掛了」\n"
               "分鏡 4（SH04）：剪報換一句\n")
-    monkeypatch.setattr("sys.stdin", io.StringIO(pasted))
+    monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(pasted.encode("utf-8")), encoding="utf-8"))
     assert cli.main(["feedback", str(root)]) == 0
     out = json.loads(capsys.readouterr().out)
     got = {c["id"]: (c["number"], c["kind"], c["segments"]) for c in out["shots"]}

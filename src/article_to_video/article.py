@@ -152,12 +152,14 @@ def extract_article(
 
 def run_extract(project_dir: str, source: str) -> int:
     """指令列 `extract`：成功印摘要、回 0；擷取不下去印繁中說明到 stderr、回 1。source 是 - 時從標準輸入讀。"""
+    from article_to_video.textio import STDIN, TextInputError, read_stdin
+
     try:
-        if source == "-":
-            art = extract_article(project_dir, text=sys.stdin.buffer.read().decode("utf-8-sig"))
+        if source == STDIN:
+            art = extract_article(project_dir, text=read_stdin())
         else:
             art = extract_article(project_dir, source)
-    except ArticleError as e:
+    except (ArticleError, TextInputError) as e:
         print(f"擷取失敗：{e}", file=sys.stderr)
         return 1
     except OSError as e:

@@ -1,0 +1,48 @@
+"""讀使用者給的文字：標準輸入（作者貼上的文章、審片留言、審片 agent 的回答）或檔案，一律照 UTF-8 讀。
+
+sys.stdin.read() 會照這台電腦的語系設定解碼；作者的 Mac 語系不是 UTF-8 時，中文就變成亂碼，所以這裡一律
+讀位元組再用 UTF-8 解（開頭的 BOM 拿掉）。不是 UTF-8 的內容丟 TextInputError（繁中，OSError 的子類：
+呼叫端原本處理「讀不到檔」的地方一起接得到）。
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+__all__ = ["STDIN", "TextInputError", "read_stdin", "read_text_input"]
+
+STDIN = "-"
+"""指令列寫「-」＝從標準輸入讀。"""
+
+
+class TextInputError(OSError):
+    """讀不到、或不是 UTF-8 的文字（繁中訊息）。"""
+
+    def __str__(self) -> str:
+        return str(self.args[0]) if self.args else "讀不到文字"
+
+
+def _decode(data: bytes, what: str) -> str:
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise TextInputError(f"{what}不是 UTF-8 編碼的文字，看不懂。請另存成 UTF-8，或直接把文字貼給我。") from None
+
+
+def read_stdin() -> str:
+    """標準輸入的全部文字（UTF-8，不看這台電腦的語系設定）。"""
+    return _decode(sys.stdin.buffer.read(), "貼上的內容")
+
+
+def read_text_input(source: str | os.PathLike) -> str:
+    """source 是「-」就讀標準輸入，不然讀那個檔；一律 UTF-8。讀不到丟 TextInputError。"""
+    if str(source) == STDIN:
+        return read_stdin()
+    path = Path(source).expanduser()
+    try:
+        data = path.read_bytes()
+    except OSError as e:
+        raise TextInputError(f"讀不到 {path}（{e.strerror or e}）") from None
+    return _decode(data, f"「{path.name}」")
