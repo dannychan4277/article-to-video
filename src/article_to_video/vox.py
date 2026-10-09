@@ -3,7 +3,7 @@
 分鏡設定（shots.json）裡 Vox 分鏡寫 "vox": {"cues": [...]}，cue 照出場順序：
   {"at": …, "kind": "image", "image": "圖1", "caption"?: "…"}     文章原圖，下方黑底標籤「圖1」（有 caption 就「圖1｜caption」）
   {"at": …, "kind": "excerpt", "quote"?: "原文裡的幾個字", "paragraph"?: 段號, "occurrence"?: n, "caption"?: "…"}
-                                                                  原文剪報：剪到引文所在的整句、殘句遮住（excerpt.py），標籤「原文段落」
+                                                                  原文剪報：剪到引文所在的整句、靠左重新分行（excerpt.py），標籤「原文段落」
   {"at": 錨點, "kind": "box", "rect": [x, y, 寬, 高]}               框原圖（原圖的像素）；"find": "0.62" 框剪報裡的字（位置自動算）
   {"at": …, "kind": "title" | "point", "text": "…"}                  黑底白字標題條／橫線索引卡（字要數字對帳）
 框畫在它前面最近的那張原圖或剪報上（同一張桌面，接續分鏡也算），中間不能插文字卡；框要錨在旁白唸到那個數字的詞上。
@@ -145,6 +145,7 @@ def resolve_vox(project: Project) -> tuple[Project, VoxPlan]:
     shots = []
     boxes: list[VoxBox] = []
     target: Target | None = None
+    keep = _finds_per_excerpt(project)
     for shot in project.shots:
         if shot.vox is None:
             shots.append(shot)
@@ -171,7 +172,7 @@ def resolve_vox(project: Project) -> tuple[Project, VoxPlan]:
                 cues.append(replace(cue, fields={"kind": cue.kind, "text": cue.fields["text"]}))
                 target = None
                 continue
-            resolved = _resolve_material(cue, article, sources, problems)
+            resolved = _resolve_material(cue, article, sources, problems, keep.get(id(cue), []))
             if resolved is None:
                 target = None  # 已經報錯；後面框這件素材的框不用再報一次
             else:
@@ -191,6 +192,26 @@ def resolve_vox(project: Project) -> tuple[Project, VoxPlan]:
     return replace(project, shots=shots), VoxPlan(boxes=boxes)
 
 
+def _finds_per_excerpt(project: Project) -> dict[int, list[str]]:
+    """每張剪報（cue 的 id）之後要框的字（box 的 find）：排剪報時這些字不拆到兩行，框才框得起來。"""
+    out: dict[int, list[str]] = {}
+    current: int | None = None
+    for shot in project.shots:
+        if shot.vox is None or not shot.continues:
+            current = None
+        if shot.vox is None:
+            continue
+        for cue in shot.vox.cues:
+            if cue.kind == "excerpt":
+                current = id(cue)
+                out[current] = []
+            elif cue.kind != "box":
+                current = None
+            elif current is not None and cue.fields.get("find"):
+                out[current].append(cue.fields["find"])
+    return out
+
+
 def _find_paragraph(quote: str, paragraphs: dict[int, str]) -> tuple[int | None, str]:
     """沒寫 paragraph 時，從全文找引文在哪一段。回傳 (段號, 錯誤說明)。"""
     found = [n for n, t in paragraphs.items() if quote in t]
@@ -201,8 +222,8 @@ def _find_paragraph(quote: str, paragraphs: dict[int, str]) -> tuple[int | None,
     return None, f"「{quote}」在第 {'、'.join(map(str, found))} 段都有：加 \"paragraph\" 指定哪一段，或把引文寫長一點"
 
 
-def _resolve_material(cue: Cue, article: _Article, sources: list[str],
-                      problems: list[str]) -> tuple[dict[str, Any], Target | None] | None:
+def _resolve_material(cue: Cue, article: _Article, sources: list[str], problems: list[str],
+                      keep: list[str]) -> tuple[dict[str, Any], Target | None] | None:
     """原圖、剪報 → (給引擎的欄位, 之後的框要框的那件素材)。"""
     f = cue.fields
     caption = f"｜{f['caption'].strip()}" if f.get("caption") else ""
@@ -234,7 +255,7 @@ def _resolve_material(cue: Cue, article: _Article, sources: list[str],
             problems.append(f"{cue.where}：文章沒有第 {n} 段（共 {len(article.paragraphs)} 段）")
             return None
         try:
-            ex = make_excerpt(n, article.paragraphs[n], quote, article.excerpt_dir, occurrence=f.get("occurrence"))
+            ex = make_excerpt(n, article.paragraphs[n], quote, article.excerpt_dir, occurrence=f.get("occurrence"), keep=keep)
         except ExcerptError as e:
             problems.append(f"{cue.where}：{e}")
             return None

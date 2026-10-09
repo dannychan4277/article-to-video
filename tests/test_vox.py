@@ -531,9 +531,9 @@ def excerpt_png(base: Path, quote: str, article_md: str = ARTICLE_MD) -> Path:
 
 @pytest.mark.parametrize("target,quote", [(1, "十年期平均"), (2, "差距只剩")])
 def test_excerpt_is_cut_at_sentence_ends_and_masks_the_partial_sentences(tmp_path, target, quote):
-    """引文在句子中間 → 剪那一整句；跟它共用一行的前後句（殘句）遮住看不到。"""
+    """引文在句子中間 → 剪那一整句；同一段的前後句（殘句）看不到。"""
     clip = excerpt_png(tmp_path / "a", quote)
-    # 其他句子全換成別的字（版面不變）：被遮住的殘字換了，剪報一個像素都不變
+    # 其他句子全換成別的字：剪報一個像素都不變（只排剪下來的句子）
     others = ARTICLE_MD
     for i, sent in enumerate(SENTENCES):
         if i != target:
@@ -546,3 +546,55 @@ def test_excerpt_is_cut_at_sentence_ends_and_masks_the_partial_sentences(tmp_pat
     assert excerpt_png(tmp_path / "d", disguised(SENTENCES[target]), mine).read_bytes() != clip.read_bytes()
     with Image.open(clip) as im:
         assert im.width > im.height  # 剪的是兩三行字，不是整段
+
+
+# 自製的兩段。第一段：前一句剛好寫滿 18 個字，下一句（要剪的）在整段排版裡只剩 2 個字擠在第一行最右邊。
+# 第二段：一行 20 個字的話，第 20 個字剛好落在「美國十年期公債殖利率」中間；平均分兩行也會切在它中間。
+LAYOUT_MD = ARTICLE_MD + """
+這是前面一句故意寫滿十八個字的句子。殖利率曲線在倒掛之後轉正，靠的是短天期利率下降得比較快。
+
+這是自己寫來測試框的一句話看美國十年期公債殖利率怎麼換行才對。
+"""
+
+
+def text_lines(png: Path) -> list[tuple[int, int, int]]:
+    """剪報圖裡每一行字：(上緣 y, 最左邊的墨 x, 墨的寬度)。用列的投影分行。"""
+    with Image.open(png) as im:
+        ink = np.asarray(im.convert("L")) < 128
+    rows = ink.any(axis=1)
+    bands, y = [], 0
+    while y < len(rows):
+        if rows[y]:
+            y0 = y
+            while y < len(rows) and rows[y]:
+                y += 1
+            bands.append((y0, y))
+        y += 1
+    out = []
+    for y0, y1 in bands:
+        xs = np.nonzero(ink[y0:y1].any(axis=0))[0]
+        out.append((y0, int(xs.min()), int(xs.max() - xs.min())))
+    return out
+
+
+def test_a_clipping_is_set_flush_left_in_balanced_lines(tmp_path):
+    """剪下來的句子從行首重新排：每一行都靠左對齊（不會因為遮掉前一句殘字，第一行看起來靠右），
+    行長平均（不會第一行只剩「殖利」兩個字）。"""
+    clip = excerpt_png(tmp_path, "殖利率曲線在倒掛之後轉正", LAYOUT_MD)
+    lines = text_lines(clip)
+    assert len(lines) == 2, lines
+    lefts = [x for _, x, _ in lines]
+    assert max(lefts) - min(lefts) <= 12, f"行首沒有對齊：{lefts}"
+    widths = [w for _, _, w in lines]
+    assert widths[0] >= 0.6 * max(widths), f"第一行太短：{widths}"
+
+
+def test_a_boxed_phrase_is_never_split_by_a_line_break(tmp_path):
+    """框剪報裡的一段字（find）：排版時這段字不拆到兩行，就不會因為換行剛好落在中間而框不起來。"""
+    shots = [{"id": "SH01", "start": {"segment": "s01"}, "vox": {"cues": [
+        {"at": 0, "kind": "excerpt", "quote": "看美國十年期公債殖利率"},
+        {"at": {"segment": "s01", "word": "兩年期"}, "kind": "box", "find": "美國十年期公債殖利率"}]}}]
+    root = new_project(tmp_path, shots, LAYOUT_MD)
+    [box] = project_boxes(root)[1]
+    x, y, w, h = box.rect
+    assert h < 150 and w > 5 * 88  # 一行字的高度、十個字的寬度
