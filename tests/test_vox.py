@@ -313,6 +313,18 @@ def test_every_box_gets_a_still_showing_the_box(scenario):
         assert yellow_pixels(png) > 2000, png
 
 
+def test_the_highlighter_does_not_change_the_colour_of_the_text_it_covers(scenario):
+    """螢光筆刷在深藍色的數字上：數字還是藍的（不會被正片疊底染成綠字；表格紅跌藍漲的意思才不會亂），紙變黃。"""
+    with Image.open(scenario.dir / "build" / "16x9" / "boxes" / "SH02-框1-畫面.png") as im:
+        a = np.asarray(im.convert("RGB")).astype(int)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    ys, xs = np.nonzero((r > 150) & (g > 130) & (b < 90))
+    assert len(xs) > 2000  # 螢光筆
+    box = a[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    blue = (box[..., 2] > box[..., 0] + 50) & (box[..., 2] > box[..., 1] + 30)
+    assert blue.sum() > 1000, f"螢光筆底下的藍字只剩 {blue.sum()} 個藍色像素"
+
+
 def test_preview_is_never_blocked_by_unchecked_boxes(scenario):
     assert scenario.preview.returncode == 0
     page = (scenario.dir / "審片頁.html").read_text(encoding="utf-8")

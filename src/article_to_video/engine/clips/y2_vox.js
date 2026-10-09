@@ -107,6 +107,25 @@ return {
   },
 };
 function imgBox(it, im, u) { const f = CLIP.fit(im.width, im.height, 16 * u, 16 * u, it.w - 32 * u, it.h - 32 * u - (it.q.text ? 70 * u : 0)); return f; }
+// [article-to-video 內嵌] 螢光筆只上在「紙」上：原圖每個像素依它像不像紙（最暗的那個色版夠亮＝白紙、淺灰底）決定上多少黃，
+// 深色字、彩色字、色塊幾乎不上黃，正片疊底之後還是原本的顏色（原版整塊疊黃：藍字變綠字、紅字變橘，表格紅跌藍漲的意思會亂）。
+// 形狀、從左往右掃的進度跟 CL.highlight 一樣；黃色層每張圖算一次（PAINT.cached），之後每幀只是裁切＋疊上去，確定性。
+function inkSafeHighlight(g, im, it, ix, iy, iw, ih, x0, y0, w, h, q) {
+  if (q <= 0) return;
+  const HL = [218, 207, 8, 0.9], PAPER_LO = 110, PAPER_HI = 200;   // 黃＝CL.highlight 的顏色；最暗色版 ≤110 不上黃、≥200 上滿
+  const key = 'a2v_hl_' + it.q.image, W0 = im.naturalWidth || im.width, H0 = im.naturalHeight || im.height;
+  const layer = PAINT.cached(key, W0, H0, gg => {
+    gg.drawImage(im, 0, 0); const d = gg.getImageData(0, 0, W0, H0), p = d.data;
+    for (let i = 0; i < p.length; i += 4) {
+      const m = clamp((Math.min(p[i], p[i + 1], p[i + 2]) - PAPER_LO) / (PAPER_HI - PAPER_LO));
+      p[i] = HL[0]; p[i + 1] = HL[1]; p[i + 2] = HL[2]; p[i + 3] = Math.round(255 * HL[3] * m);
+    }
+    gg.putImageData(d, 0, 0);
+  });
+  g.save(); g.beginPath(); const ww = w * q; g.moveTo(x0, y0 + 4); for (let i = 0; i <= 20; i++) g.lineTo(x0 + ww * i / 20, y0 + Math.sin(i * 1.7) * 2);
+  g.lineTo(x0 + ww + 6, y0 + h / 2); g.lineTo(x0 + ww, y0 + h); for (let i = 20; i >= 0; i--) g.lineTo(x0 + ww * i / 20, y0 + h + Math.sin(i * 2.3) * 2); g.closePath();
+  g.clip(); g.globalCompositeOperation = 'multiply'; g.imageSmoothingQuality = 'high'; g.drawImage(layer, ix, iy, iw, ih); g.restore();
+}
 function drawItem(g, it, t, ctx) {
   const { u } = ctx, q = it.q, w = it.w, h = it.h;
   if (it.kind === 'image') {
@@ -124,7 +143,7 @@ function drawItem(g, it, t, ctx) {
       const own = ctx.of('image', 'clip').filter(z => z.at <= hq.at).pop(); if (own !== q) continue;
       const l = t - hq.at; if (l < -1e-6) continue;
       const R = hq.data.rect, x0 = -w / 2 + f.x + R[0] * f.w, y0 = -h / 2 + f.y + R[1] * f.h, rw = R[2] * f.w, rh = R[3] * f.h;
-      CL.highlight(g, x0 - 6 * u, y0 - 4 * u, rw + 12 * u, rh + 8 * u, MO.sineInOut(clamp(ls(t, hq.at) / 0.6)));
+      inkSafeHighlight(g, im, it, -w / 2 + f.x, -h / 2 + f.y, f.w, f.h, x0 - 6 * u, y0 - 4 * u, rw + 12 * u, rh + 8 * u, MO.sineInOut(clamp(ls(t, hq.at) / 0.6)));   // [article-to-video 內嵌] 螢光筆只上在紙上，字保持原色（原版 CL.highlight 整塊正片疊底，藍字會變綠字）
       const cq = MO.cubicOut(clamp((ls(t, hq.at) - 0.5) / 0.6));
       const newer = ctx.of('highlight').find(z => z.at > hq.at && z.at <= t + 1e-6 && z.data && z.data.rect && ctx.of('image', 'clip').filter(y => y.at <= z.at).pop() === q);
       const fa = newer ? 1 - 0.75 * clamp((t - newer.at) / 0.3) : 1;   // 同一张图圈了下一处：旧红圈退成淡痕，免得两个圈叠着、旧圈出画
