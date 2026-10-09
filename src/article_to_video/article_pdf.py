@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from pdfminer.converter import PDFPageAggregator
-from pdfminer.layout import LAParams, LTChar, LTFigure, LTImage, LTPage, LTTextBox
+from pdfminer.layout import LAParams, LTAnno, LTChar, LTFigure, LTImage, LTPage, LTTextBox
 from pdfminer.pdfdocument import PDFDocument, PDFPasswordIncorrect
 from pdfminer.pdfinterp import PDFPageInterpreter, PDFResourceManager
 from pdfminer.pdfpage import PDFPage
@@ -221,6 +221,41 @@ def normalize_radicals(text: str) -> str:
     return _RADICALS_RE.sub(lambda m: unicodedata.normalize("NFKC", m.group()), text)
 
 
+def _wide(ch: str) -> bool:
+    """中日韓文字、全形標點（排版上一個字一格的那種）。"""
+    return unicodedata.east_asian_width(ch) in ("W", "F")
+
+
+def _line_text(line: Any) -> str:
+    """一行的文字。PDF 裡真的有的空白字照留（連續的併成一個）；pdfminer 看字距自己補的空白（LTAnno）
+    只留在兩個英數字之間（有些 PDF 的英文字之間沒有空白字，靠字距分詞）。
+
+    兩端對齊（text-align: justify）會把每個字距都撐開，pdfminer 就在每兩個中文字之間補一個空白
+    （試跑：「兩 年 期 從   4.58%」）；中文字旁邊補的空白一律不要。"""
+    parts: list[str] = []  # 真的字；None 表示 pdfminer 補的空白
+    for obj in line:
+        if isinstance(obj, LTChar):
+            t = obj.get_text()
+            if t:
+                parts.append(t)
+        elif isinstance(obj, LTAnno) and obj.get_text() == " ":
+            parts.append(None)  # type: ignore[arg-type]
+    out = ""
+    for i, t in enumerate(parts):
+        if t is not None:
+            if t.isspace():
+                if out and not out.endswith(" "):
+                    out += " "
+            else:
+                out += t
+            continue
+        before = out[-1:] if out else ""
+        after = next((x for x in parts[i + 1:] if x is not None), "")[:1]
+        if before and after and not before.isspace() and not after.isspace() and not _wide(before) and not _wide(after):
+            out += " "
+    return out
+
+
 # ---------------------------------------------------------------- 主流程
 
 
@@ -300,7 +335,7 @@ def _page_lines(ltpage: LTPage, pageno: int) -> list[_Line]:
             continue
         for ln in obj:
             chars = [c for c in ln if isinstance(c, LTChar) and c.get_text().strip()]
-            text = normalize_radicals(ln.get_text().replace("\n", "")).strip()
+            text = normalize_radicals(_line_text(ln).replace("\n", "")).strip()
             if chars and text:
                 lines.append(_Line(pageno, ln.x0, ln.x1, ln.y1, ln.y0, statistics.median(c.size for c in chars), text))
     lines.sort(key=lambda ln: -ln.top)
