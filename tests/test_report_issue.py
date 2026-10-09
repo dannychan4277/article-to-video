@@ -94,6 +94,25 @@ def png_rgb(path: Path) -> bytes:
     ).stdout
 
 
+def test_report_stills_show_the_reported_shot_as_it_was_built(built_project, good_report):
+    """zip 裡 SH02 的靜態圖＝建置時 SH02 片段同一時刻的畫面（片段是 H.264，容許一點壓縮誤差）。"""
+    from article_to_video.ffmpeg import find_ffmpeg
+
+    clip = built_project.dir / "build" / "16x9" / "clips" / "SH02.mp4"
+    with zipfile.ZipFile(good_report) as z:
+        stills = {n: z.read(n) for n in z.namelist() if n.startswith("stills/SH02/")}
+    assert stills
+    for name, data in stills.items():
+        t = float(Path(name).stem[1:])  # t001.23.png
+        still = subprocess.run([str(find_ffmpeg()), "-v", "error", "-i", "-", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                               input=data, capture_output=True, check=True).stdout
+        frame = subprocess.run([str(find_ffmpeg()), "-v", "error", "-i", str(clip), "-ss", f"{t}", "-frames:v", "1",
+                                "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True, check=True).stdout
+        assert len(frame) == len(still) == 1920 * 1080 * 3
+        diff = sum(abs(a - b) for a, b in zip(still[::101], frame[::101])) / len(still[::101])
+        assert diff < 1.0, f"{name} 跟建置出來的 SH02 片段差太多（平均 {diff:.2f}）"
+
+
 def test_maintainer_rerenders_the_reported_shot_from_the_zip_offline(good_report, tmp_path, monkeypatch):
     with zipfile.ZipFile(good_report) as z:
         reported = {n.split("/")[-1]: z.read(n) for n in z.namelist()

@@ -2,21 +2,31 @@
 
 zip 裡只放重現需要的東西：
 
-    report.json            這包的說明：格式版本、外掛版本、專案名、出錯的分鏡、配音層、靜態圖時刻、略過了什麼
+    讀我.txt               給維護者：這包是什麼、怎麼重現
+    report.json            這包的說明：格式版本、外掛版本、專案名、出錯的分鏡、配音層、靜態圖時刻、
+                           最後一次建置的結果、略過了什麼
     問題描述.txt            作者怎麼說的（有給 --note 才有）
+    environment.json/.txt  作者那台的環境檢查（environment.py）
+    errors/last-run.log    最後一次建置印出來的每一行＋錯誤（程式錯誤連 traceback）
+    errors/logs-<比例>/     建置紀錄：render-<片段>.log、assemble.log（每份最多留最後 1 MB）
     project/               重現用的專案（解開就是一個能建置的專案資料夾）
       narration.json       旁白稿
-      shots.json           分鏡設定
+      shots.json           分鏡設定（出錯分鏡引用專案外的圖時，改指 _外部圖片/）
       settings.json        設定快照
-      build/narration/<鍵>.json   配音層的時間點（沒有音檔：重現時補同長度的靜音，不用重新配音、不用連網）
-    stills/<分鏡>/t<秒>.png      出錯分鏡的靜態圖（渲不出來就寫原因在 report.json，不會讓打包失敗）
+      article/…            只有出錯分鏡引用到的圖（原本的相對路徑）
+      _外部圖片/…           出錯分鏡引用到、但在專案資料夾外的圖
+      build/narration/<鍵>.json   配音層的時間點（沒有音檔：重現時補同長度的靜音，不重新配音、不連網）
+      build/<比例>/timeline.json、specs/<片段>.json   最後一次建置的時間軸與引擎 spec
+    stills/<分鏡>/t<秒>.png      出錯分鏡的靜態圖（渲不出來就把原因寫進 report.json，不會讓打包失敗）
 
-不放：文章全文與原檔（article/）、成片、片段、配音音檔、其他檔案。
+不放：文章全文與原檔、沒用到的圖、成片、片段、配音音檔、其他檔案。
+文字檔裡的家目錄換成 ~、/Users/<名字> 換成 /Users/<使用者>；紀錄與環境檢查裡單獨出現的使用者名稱也遮掉。
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -53,7 +63,6 @@ ENV_JSON = "environment.json"
 ENV_TEXT = "environment.txt"
 PROJECT_DIR = "project"
 STILLS_DIR = "stills"
-VARIANT = "16x9"
 
 Log = Callable[[str], None]
 
@@ -222,9 +231,9 @@ def redact(text: str, *, username: bool = True) -> str:
     import getpass
 
     home = str(Path.home())
-    for h in sorted({home, os.path.realpath(home)}, key=len, reverse=True):
-        if len(h) > 1:
-            text = text.replace(h, "~")
+    for h in sorted({home.rstrip("/"), os.path.realpath(home)}, key=len, reverse=True):
+        if len(h) > 1:  # 只換完整的路徑段：家目錄是 /Users/dan 時，/Users/dante 不能變成 ~te
+            text = re.sub(re.escape(h) + r"(?=[/\s\"'\\:]|$)", "~", text)
     text = _USERS_RE.sub("/Users/<使用者>", text)
     if username:
         try:
@@ -326,9 +335,12 @@ def _resolve_shots(wanted: Sequence[str], raw: list[dict], warnings: list[str]) 
 
 
 def _still_times(offset: int, frames: int, fps: int) -> list[float]:
-    """一個分鏡取三張：四分之一、一半、最後一幀（片段內秒數，取到小數兩位＝靜態圖檔名的精度）。"""
+    """一個分鏡取三張：四分之一、一半、最後一幀（片段內秒數）。
+
+    取到小數兩位（靜態圖檔名的精度），一律無條件捨去：四捨五入會讓「最後一幀」跑到片段結尾之後。
+    """
     picks = [offset + frames * 0.25, offset + frames * 0.5, offset + frames - 1]
-    return sorted({round(f / fps, 2) for f in picks})
+    return sorted({math.floor(f / fps * 100 + 1e-6) / 100 for f in picks})
 
 
 def _shot_clips(plan: Any, shot_ids: Sequence[str]) -> dict[str, tuple[Any, list[float]]]:
