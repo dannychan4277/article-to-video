@@ -37,12 +37,11 @@ import wave
 import zipfile
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from importlib import metadata
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from article_to_video.commands import MAINTAINER_PREFIX
-from article_to_video.environment import collect_environment
+from article_to_video.environment import collect_environment, plugin_version
 from article_to_video.project import ProjectError, ProjectPaths, load_project
 
 __all__ = [
@@ -79,13 +78,6 @@ def default_report_dir() -> Path:
 
 def _quiet(_: str) -> None:
     pass
-
-
-def _plugin_version() -> str:
-    try:
-        return metadata.version("article-to-video")
-    except metadata.PackageNotFoundError:
-        return "unknown"
 
 
 # ---------------------------------------------------------------- 最後一次執行的紀錄
@@ -131,7 +123,7 @@ class RunRecord:
         info: dict[str, Any] = {
             "command": self.command, "options": self.options, "started": self.started,
             "finished": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "ok": error is None,
-            "pluginVersion": _plugin_version(),
+            "pluginVersion": plugin_version(),
         }
         if error is not None:
             info["errorType"] = type(error).__name__
@@ -463,7 +455,7 @@ def create_report(
     zip_path = out / f"回報問題-{name}-{time.strftime('%Y%m%d-%H%M%S')}.zip"
     manifest: dict[str, Any] = {
         "format": REPORT_FORMAT,
-        "pluginVersion": _plugin_version(),
+        "pluginVersion": plugin_version(),
         "created": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "project": name if paths else None,
         "shots": [],
@@ -724,8 +716,8 @@ def reproduce_report(
     base = {"report_note": read(NOTE_FILE).strip(), "author_environment": read(ENV_TEXT).strip()}
     if manifest.get("format") != REPORT_FORMAT:
         notes.append(f"這包的格式版本是 {manifest.get('format')}，這版的重現認得 {REPORT_FORMAT}")
-    if manifest.get("pluginVersion") != _plugin_version():
-        notes.append(f"作者那台的外掛是 {manifest.get('pluginVersion')}，這台是 {_plugin_version()}：結果可能不同")
+    if manifest.get("pluginVersion") != plugin_version():
+        notes.append(f"作者那台的外掛是 {manifest.get('pluginVersion')}，這台是 {plugin_version()}：結果可能不同")
     if not paths.shots.is_file():
         errors.append("這包沒有專案（作者打包時沒有專案資料夾），只能看環境檢查與紀錄")
         return ReproduceResult(out, project_dir, errors=errors, notes=notes, **base)

@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -150,6 +151,18 @@ def _version(dist: str) -> str | None:
         return None
 
 
+_COMMIT_RE = re.compile(r"[0-9a-f]{7,40}")
+
+
+def plugin_version(root: Path | None = None) -> str:
+    """外掛版本（環境檢查、回報問題用）。plugin.json 不寫 version（每個 commit 都是一次更新，見 docs/maintaining.md），
+    從 marketplace 裝的外掛放在 ~/.claude/plugins/cache/<marketplace>/<外掛>/<版本>/，版本就是 commit：
+    安裝資料夾的名字像 commit 就報它；不像（開發中的 repo）就報 Python 套件的版本。"""
+    root = root or Path(__file__).resolve().parents[2]
+    pkg = _version("article-to-video") or "unknown"
+    return f"commit {root.name}（套件 {pkg}）" if _COMMIT_RE.fullmatch(root.name) else pkg
+
+
 # ---------------------------------------------------------------- 各項檢查
 
 
@@ -259,7 +272,7 @@ def check_edge_tts() -> EnvCheck:
 
 @env_check("plugin", "外掛版本")
 def check_plugin() -> EnvCheck:
-    ver = _version("article-to-video") or "unknown"
+    ver = plugin_version()
     return EnvCheck("plugin", "外掛版本", None, ver, {"version": ver})
 
 
