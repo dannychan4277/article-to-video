@@ -53,13 +53,12 @@ def sources(root: Path) -> dict[str, set[tuple[str, str, str]]]:
 def test_every_number_on_screen_is_traced_to_the_article(tmp_path):
     root = make_project(tmp_path)
     rep = reconcile(plan_build(root, tts="fake"))
-    # 畫面上（SH01）：副標「美國公債殖利率，2023 年平均，%」、柱上數值 4.58% 3.96%、類目名「兩年期」「十年期」
+    # 畫面上（SH01）：副標「美國公債殖利率，2023 年平均，%」、柱上數值 4.58% 3.96%；類目名「兩年期」「十年期」是天期的名字，
+    # 詞裡的中文數字不算數字
     assert {(n.where, n.shown, n.kind) for n in rep.shots["SH01"]} == {
         ("副標", "2023", "article"),
         ("數值", "4.58%", "article"),
         ("數值", "3.96%", "article"),
-        ("類目名", "兩", "article"),
-        ("類目名", "十", "article"),
     }
     by_shown = {n.shown: n for n in rep.shots["SH01"]}
     assert "原文第 1 段" in by_shown["4.58%"].detail and "4.58%" in by_shown["4.58%"].detail
@@ -96,8 +95,6 @@ def test_numbers_match_after_normalizing_how_they_are_written(tmp_path):
         ("副標", "2023"): "article",      # 二〇二三
         ("數值", "4.58%"): "article",     # 百分之四點五八
         ("數值", "3.96%"): "article",     # ３．９６％
-        ("類目名", "兩"): "article",
-        ("類目名", "十"): "article",
         ("標註", "1.2 萬"): "article",    # 一萬兩千
         ("標註", "4.5%"): "article",      # 4.50%
         ("標註", "4.585"): "none",        # 比文章的 4.58 多一位：不是文章寫的數字
@@ -118,7 +115,42 @@ def test_later_screen_texts_like_vox_index_cards_are_reconciled_too(tmp_path):
 
     rep = reconcile(plan_build(make_project(tmp_path), tts="fake"), sources=[*default_sources(), index_cards])
     assert {(n.shown, n.kind) for n in rep.shots["SH01"] if n.where == "索引卡"} == {
-        ("兩", "article"), ("4.58%", "article"), ("3.1 個百分點", "none")}
+        ("4.58%", "article"), ("3.1 個百分點", "none")}
+
+
+def sh02_numbers(tmp_path: Path, text: str, *, article: str | None = None) -> set[tuple[str, str]]:
+    """SH02 的標註改成 text（文章照 mini_project，或給 article），回傳 {(畫面上的數字, 出處種類)}。"""
+    def edit(shots: dict) -> None:
+        shots["shots"][1]["chart"]["data"]["highlight"]["text"] = text
+    rep = reconcile(plan_build(make_project(tmp_path, edit, article=article), tts="fake"))
+    return {(n.shown, n.kind) for n in rep.shots["SH02"]}
+
+
+@pytest.mark.parametrize("text, shown", [
+    ("長天期低 10%", "10%"),           # 文章只有「十年期」：詞裡的「十」不是數字
+    ("跌了 2%", "2%"),                # 文章只有「兩年期」
+    ("差了 5 個百分點", "5 個百分點"),   # 文章的 4.58% 四捨五入到整數是 5：只寫一位數的數字要原文一字不差
+    ("-4.6", "-4.6"),                 # 文章的 4.58 是正的：正負號要對
+    ("約 4%", "4%"),                  # 3.96 四捨五入是 4，跟上面一樣：整數不比小數好對
+    ("−3.96%", "−3.96%"),             # 數值一樣、正負號相反
+    ("4.6 個百分點", "4.6 個百分點"),    # 4.58% 是殖利率（%），不是差幾個百分點：單位不同就不能四捨五入過去
+])
+def test_numbers_that_only_look_like_the_article_are_still_unsourced(tmp_path, text, shown):
+    """mini_project 的文章：「2023 年，美國兩年期公債殖利率平均是 4.58%，十年期平均只有 3.96%。」"""
+    assert sh02_numbers(tmp_path, text) == {(shown, "none")}
+
+
+@pytest.mark.parametrize("text, article, shown", [
+    ("長天期 4.6%", None, "4.6%"),                         # 4.58 四捨五入到一位小數：留兩位有效數字就可以
+    ("實質殖利率 −0.5%", "實質殖利率一度是 -0.5%。", "−0.5%"),  # 負數對負數
+    ("實質殖利率 −0.5%", "實質殖利率一度是負 0.5%。", "−0.5%"),
+    ("降息 3 碼", "聯準會降息三碼。", "3"),                 # 中文數字帶著單位（碼、倍、%…）才是數字
+    ("十年期", None, None),                                # 詞裡的中文數字不是數字，不用對帳
+])
+def test_numbers_that_really_are_in_the_article_keep_matching(tmp_path, text, article, shown):
+    base = (MINI_PROJECT / "article" / "text.txt").read_text(encoding="utf-8")
+    got = sh02_numbers(tmp_path, text, article=None if article is None else base + "\n" + article)
+    assert got == (set() if shown is None else {(shown, "article")})
 
 
 # ---------------------------------------------------------------- 主切點：正式出片被擋、審片頁標出來

@@ -18,16 +18,31 @@
   public   白名單公有數據：這個分鏡的公有數據圖畫的值、期間標籤、系列名稱（附系列、期間、擷取日期）。
   derived  推算：分鏡設定的 derived 宣告了算式，算式的每個輸入都找得到出處（原文或這張圖的公有數據；10、100、1000…
            換算單位的常數免），而且算出來四捨五入到畫面的位數＝畫面上的數字。
-  article  原文出現：文章裡有一個數字，四捨五入到畫面寫的位數＝畫面上的數字（畫面寫得比文章精確就對不上）。
+  article  原文出現：文章裡有一個數字，照下面的比對規則就是畫面上的數字。
   none     無出處：以上都不是。有任何一個 → check_numbers 擋下正式出片（預覽照樣出，審片頁標出來）。
 
 分鏡設定的推算宣告（shots.json 每個分鏡可選的 derived；parse_derived 驗證，錯誤繁中點名「分鏡 SH02 的 derived[0]」）：
     "derived": [{"value": "0.62", "formula": "4.58 - 3.96", "note": "兩年期減十年期"}]
   value＝畫面上那個數字（字串或數字）；formula＝四則運算＋括號（- − * × x / ÷，數字可帶千分位與 %）；note 選填。
 
-比對前的正規化（find_numbers，文章和畫面用同一套）：全形轉半形、千分位、小數（4.50＝4.5）、百分比（4.58%＝
-百分之四點五八＝4.58，百分號不影響比對）、中文數字（四點五八、兩年期、一萬兩千、二〇二三）、萬／億／兆（1.2 萬＝12,000；
-文章寫「3.2 兆」時，畫面只寫 3.2 也對得上）。正負號不看（「下跌 0.62」對得上畫面的 −0.62）。
+找數字（find_numbers，文章和畫面用同一套）：
+  - 全形轉半形、千分位（12,345＝12345）、小數尾巴的 0（4.50＝4.5）、萬／億／兆（1.2 萬＝12,000；文章寫「3.2 兆」時，
+    畫面只寫 3.2 也對得上）、百分之（百分之四點五八＝4.58%）。
+  - 正負號是數字的一部分：緊貼在數字前面的 −／-（前面不是數字或英文字母；「2019-2024」是範圍），或「負」。
+  - 中文數字只有像數量的才算：有小數（四點五八）、百分之、萬億兆（一萬兩千）、一串像年份的數字（二〇二三），
+    或後面接了單位（%、個百分點、基點、碼、倍、成、元、點）。其他是詞的一部分，不是數字：十年期、兩年期、一季、一年前。
+  - 「10 年期」「2 年期」（阿拉伯數字＋年期／天期）是天期的名字，也不算數字。
+  - 單位：數字旁邊寫的「%」（含百分之）或「個百分點」記下來比對用；其他單位不比。
+
+比對規則（畫面上的數字 s 對文章裡的數字 a；公有數據圖上的值、期間、系列名稱也照這套）：
+  1. 一模一樣（正規化之後數值相等，正負號也一樣）→ 對得上。不管有沒有寫單位（作者常把「個百分點」寫成 %）。
+  2. 四捨五入：a 四捨五入到 s 寫的那一位等於 s，正負號一樣，而且
+     - s 至少寫了兩位有效數字（MIN_ROUNDED_DIGITS）：4.58 → 4.6 可以，→ 5 不行。只有一位有效數字的，不管是整數（4、5）
+       還是小數（0.6、0.7），都要文章裡一模一樣——一位數太容易「剛好」四捨五入到文章裡某個不相干的數；整數跟小數同一套，
+       整數不會比小數好對；
+     - 兩邊都寫了單位時要一樣：文章的 4.58%（殖利率）不能四捨五入成畫面的「4.6 個百分點」（差幾個百分點）。
+  3. 畫面寫得比文章精確（4.585 對 4.58）→ 對不上。
+  推算（derived）的算式結果只要四捨五入到畫面的位數就算：算式是明寫的，不會是巧合。
 
 文章文字只從 read_article() 讀：文章擷取（article.py）寫的 <專案>/article/article.json 段落（有頁碼），
 沒有就讀 article/text.txt（段與段之間空一行）。
@@ -83,23 +98,43 @@ KIND_LABELS = {"article": "原文", "public": "公有數據", "derived": "推算
 @dataclass(frozen=True)
 class FoundNumber:
     text: str
-    """原文寫的樣子（例「4.58%」「四點五八」「1.2 萬」）。"""
+    """原文寫的樣子（例「4.58%」「四點五八」「1.2 萬」「−0.5%」）。"""
     value: Fraction
-    """數值（絕對值；百分號、千分位、萬億都換算過）。"""
+    """數值（帶正負號；百分號、千分位、萬億都換算過）。"""
     quantum: Fraction
-    """寫到哪一位（4.58 → 0.01；1.2 萬 → 1000）：比對時，對方四捨五入到這一位要等於它。"""
+    """寫到哪一位（4.58 → 0.01；1.2 萬 → 1000）。"""
     start: int
     end: int
     bare: Fraction | None = None
     """後面接萬／億／兆（或百、千）時，乘上去之前的數（「3.2 兆」→ 3.2）：圖的單位行寫「兆美元」、柱上只寫 3.2 也對得上。"""
+    unit: str = ""
+    """寫在數字旁邊的單位：「%」（含百分之）、「個百分點」，沒寫就空字串。"""
 
-    def matches(self, other: Fraction) -> bool:
-        """other 四捨五入到這個數字寫的位數，是不是就是它（四捨五入的進位方式不拘）。"""
-        return abs(abs(other) - self.value) * 2 <= self.quantum
+    @property
+    def digits(self) -> int:
+        """寫出來的有效位數：4.58 → 3、4.6 → 2、5 → 1、0.7 → 1、10 → 2、1.2 萬 → 2、2023 → 4。"""
+        n = round(abs(self.value) / self.quantum)
+        return len(str(n)) if n else 1
 
-    def matches_any(self, other: FoundNumber) -> bool:
-        """對方（文章裡的數字）不管帶不帶萬億單位，四捨五入到這個數字寫的位數就是它。"""
-        return self.matches(other.value) or (other.bare is not None and self.matches(other.bare))
+    def rounds_from(self, other: Fraction) -> bool:
+        """other 四捨五入到這個數字寫的位數就是它（正負號要一樣；剛好在中間往哪邊進位都算）。"""
+        return (other < 0) == (self.value < 0) and abs(other - self.value) * 2 <= self.quantum
+
+    def sourced_by_value(self, other: Fraction, unit: str = "") -> bool:
+        """畫面上的這個數字能不能算是 other（文章或公有數據裡的數）：比對規則見模組說明。"""
+        if other == self.value:
+            return True
+        return self.digits >= MIN_ROUNDED_DIGITS and self.rounds_from(other) and not (
+            self.unit and unit and self.unit != unit)
+
+    def sourced_by(self, other: FoundNumber) -> bool:
+        """對方（文章裡的數字）不管帶不帶萬億單位，照比對規則就是畫面上的這個數字。"""
+        return self.sourced_by_value(other.value, other.unit) or (
+            other.bare is not None and self.sourced_by_value(other.bare, other.unit))
+
+
+MIN_ROUNDED_DIGITS = 2
+"""畫面上的數字至少寫了幾位有效數字，才能是文章數字四捨五入來的（4.58 → 4.6 可以，→ 5 不行）。"""
 
 
 _MINUS = {"−": "-", "‒": "-", "–": "-", "－": "-"}
@@ -124,14 +159,43 @@ _CN_BIG = {"萬": 10**4, "万": 10**4, "億": 10**8, "亿": 10**8, "兆": 10**12
 _CN_CHARS = "".join(_CN_DIGITS) + "".join(_CN_SMALL) + "".join(_CN_BIG)
 _MULT = {**{k: v for k, v in _CN_SMALL.items() if k != "十"}, **_CN_BIG}
 
+_SIGN = r"(?P<sign>(?<![0-9A-Za-z.])-|[負负]\s*)?"
+"""負號：緊貼在數字前面、前面不是數字或英文字母的 -（「2019-2024」的 - 是範圍）；或「負」。"""
 _ARABIC_RE = re.compile(
-    r"(?<![\d.])(?P<int>\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.(?P<frac>\d+))?"
+    _SIGN + r"(?<![\d.])(?P<int>\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.(?P<frac>\d+))?"
     r"(?:\s*(?P<mult>[百千萬万億亿兆]+)(?!分))?"
-    r"(?P<pct>\s*(?:%|個百分點|个百分点|百分點))?"
+    r"(?P<pct>\s*(?:%|個百分點|个百分点|百分點|百分点))?"
 )
 _CHINESE_RE = re.compile(
-    rf"(?P<pct>百分之)?(?P<int>[{_CN_CHARS}]+)(?:[點点](?P<frac>[{''.join(_CN_DIGITS)}]+))?"
+    _SIGN + rf"(?P<pct>百分之)?(?P<int>[{_CN_CHARS}]+)(?:[點点](?P<frac>[{''.join(_CN_DIGITS)}]+))?"
 )
+_TENOR_RE = re.compile(r"\s*[年天]期")
+"""「10 年期」「2 年期」：天期的名字，不是數量。"""
+_CN_UNIT_RE = re.compile(r"\s*(?:%|個百分點|个百分点|百分點|百分点|基點|基点|碼|码|倍|成|美元|元|點|点)")
+"""中文數字後面接這些單位才是數量（「降息三碼」）；沒有單位、沒有小數點的中文整數是詞的一部分（十年期、兩年期、一季）。"""
+
+
+def _unit(written: str | None) -> str:
+    """數字旁邊寫的單位，換成比對用的兩種：「%」或「個百分點」；其他（碼、倍…）不比。"""
+    w = (written or "").strip()
+    if w in ("%", "百分之"):
+        return "%"
+    if w in ("個百分點", "个百分点", "百分點", "百分点"):
+        return "個百分點"
+    return ""
+
+
+def _chinese_is_number(m: re.Match[str], norm: str) -> bool:
+    """中文數字是數量（要對帳）還是詞的一部分：有小數、百分之、萬億兆、像年份的一串數字（二〇二三），
+    或後面接了單位（%、個百分點、碼、倍、成、元…）才算數量。「萬一」這種不是數字開頭的也不算。"""
+    run = m.group("int")
+    if run[0] not in _CN_DIGITS and run[0] != "十":
+        return False
+    if m.group("frac") or m.group("pct") or any(c in _CN_BIG for c in run):
+        return True
+    if len(run) >= 3 and all(c in _CN_DIGITS for c in run):
+        return True
+    return _CN_UNIT_RE.match(norm, m.end()) is not None
 
 
 def _chinese_int(s: str) -> tuple[int, int] | None:
@@ -162,32 +226,38 @@ def find_numbers(text: str) -> list[FoundNumber]:
     found: list[FoundNumber] = []
     taken = [False] * len(norm)
     for m in _ARABIC_RE.finditer(norm):
+        end = m.end()
+        for i in range(m.start(), end):
+            taken[i] = True
+        if not m.group("mult") and not m.group("pct") and _TENOR_RE.match(norm, end):
+            continue  # 「10 年期」是天期的名字
         frac = m.group("frac") or ""
+        sign = -1 if m.group("sign") else 1
         value = Fraction(m.group("int").replace(",", "") + ("." + frac if frac else ""))
         quantum = Fraction(1, 10 ** len(frac))
         mult = 1
         for c in m.group("mult") or "":
             mult *= _MULT[c]
-        end = m.end()
-        found.append(FoundNumber(text[m.start():end].strip(), value * mult, quantum * mult, m.start(), end,
-                                 bare=value if mult != 1 else None))
-        for i in range(m.start(), end):
-            taken[i] = True
+        found.append(FoundNumber(text[m.start():end].strip(), sign * value * mult, quantum * mult, m.start(), end,
+                                 bare=sign * value if mult != 1 else None, unit=_unit(m.group("pct"))))
     for m in _CHINESE_RE.finditer(norm):
-        if any(taken[m.start():m.end()]):
+        if any(taken[m.start():m.end()]) or not _chinese_is_number(m, norm):
             continue
         parsed = _chinese_int(m.group("int"))
         if parsed is None:
             continue
         value, unit = parsed
+        sign = -1 if m.group("sign") else 1
         frac = m.group("frac") or ""
         if frac:
             value = Fraction(f"{value}.{''.join(str(_CN_DIGITS[c]) for c in frac)}")
             quantum = Fraction(1, 10 ** len(frac))
         else:
             value, quantum = Fraction(value), Fraction(unit)
-        found.append(FoundNumber(text[m.start():m.end()], value, quantum, m.start(), m.end(),
-                                 bare=value / unit if unit != 1 else None))
+        after = _CN_UNIT_RE.match(norm, m.end())
+        found.append(FoundNumber(text[m.start():m.end()], sign * value, quantum, m.start(), m.end(),
+                                 bare=sign * value / unit if unit != 1 else None,
+                                 unit=_unit(m.group("pct") or (after.group(0) if after else ""))))
     return sorted(found, key=lambda f: f.start)
 
 
@@ -587,7 +657,7 @@ class _Sources:
     def in_article(self, num: FoundNumber) -> str | None:
         """文章裡有沒有一個數字，四捨五入到 num 寫的位數就是 num；有就回「原文第 N 段：…前後文…」。"""
         for p, f in self.entries:
-            if num.matches_any(f):
+            if num.sourced_by(f):
                 return f"{self.article.where(p)}：{_snippet(p.text, f.start, f.end)}"
         return None
 
@@ -599,15 +669,15 @@ class _Sources:
         if point is not None:
             return chart.describe(point)
         for i, v in enumerate(chart.values):
-            if num.matches(Fraction(repr(v.value))):
+            if num.sourced_by_value(Fraction(repr(v.value))):
                 return chart.describe(i)
         for v in chart.values:
-            if any(num.matches(f.value) for f in find_numbers(v.label)):
+            if any(num.sourced_by(f) for f in find_numbers(v.label)):
                 first, last = chart.values[0].label, chart.values[-1].label
                 return f"公有數據的期間（圖上 {first}～{last}）：FRED {chart.request.series}"
         names = [chart.request.name, *(WHITELIST[s].name for s in chart.series)]
         for name in names:
-            if any(num.matches(f.value) for f in find_numbers(name)):
+            if any(num.sourced_by(f) for f in find_numbers(name)):
                 return f"公有數據的系列名稱：{name}（FRED {chart.request.series}）"
         return None
 
@@ -624,7 +694,7 @@ class _Sources:
         """宣告的推算：(成立時的說明, 宣告了但不成立的原因)。"""
         failure = None
         for d in decls:
-            if not num.matches(d.value.value):
+            if not num.rounds_from(d.value.value):
                 continue
             found = {x.text: self.lookup(x, shot_id) for x in d.inputs}
             missing = [x.text for x in d.inputs if found[x.text] is None and not _is_unit_constant(x)]
@@ -632,7 +702,7 @@ class _Sources:
                 failure = (f"宣告的推算 {d.formula} 裡，{'、'.join(missing)} 找不到出處"
                            "（算式裡的數字要在文章裡，或是這張圖的公有數據）")
                 continue
-            if not num.matches(d.result):
+            if not num.rounds_from(d.result):
                 got = d.result_text.removeprefix("= ").removeprefix("≈ ")
                 failure = f"宣告的算式 {d.formula} 算出來 {got}，跟畫面上的 {shown} 對不上"
                 continue
@@ -670,7 +740,7 @@ def reconcile(plan: BuildPlan, *, sources: Sequence[ScreenTextSource] | None = N
             for num in find_numbers(t.text):
                 shown = _shown_number(t, num)
                 kind, detail = "none", ""
-                used.update(k for k, d in enumerate(decls) if num.matches(d.value.value))
+                used.update(k for k, d in enumerate(decls) if num.rounds_from(d.value.value))
                 if (pub := src.in_public(num, shot.id, t.public)) is not None:
                     kind, detail = "public", pub
                 elif (ok := src.derived(num, shown, shot.id, decls))[0] is not None:
