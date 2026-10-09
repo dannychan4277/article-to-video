@@ -66,7 +66,7 @@ class SettingsError(ValueError):
 
     def __init__(self, problems: list[str] | str) -> None:
         self.problems = [problems] if isinstance(problems, str) else list(problems)
-        msg = self.problems[0] if len(self.problems) == 1 else "\n".join(f"- {p}" for p in self.problems)
+        msg = self.problems[0] if len(self.problems) == 1 else "".join(f"\n- {p}" for p in self.problems)
         super().__init__(msg)
 
 
