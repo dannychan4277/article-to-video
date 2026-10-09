@@ -1,6 +1,6 @@
 """建置：專案資料夾 → 成片＋字幕檔。分兩段，後面的票各自接在對的地方：
 
-  plan_build()   讀專案＋驗證 → 字幕字型涵蓋檢查 → 配音層 → 時間軸（錨點、分鏡起訖、接續分鏡）→ 每個片段的引擎 spec。
+  plan_build()   讀專案＋驗證 → 公有數據（讀專案快照或抓 FRED，換成實際數列與來源行）→ 字幕字型涵蓋檢查 → 配音層 → 時間軸（錨點、分鏡起訖、接續分鏡）→ 每個片段的引擎 spec。
                  不渲任何東西，幾秒內完成。審片頁的靜態圖（render_stills(plan.clips[i].spec, …)）從這裡接。
   build_project() plan_build() → preflight 檢查（數字對帳在這裡擋正式出片）→ 片段（快取、並行）→ 旁白音軌 →
                  配樂墊在旁白下（soundtrack.py）→ 字幕 → 接片＋燒字幕＋混音 → 成片.mp4、字幕.srt。
@@ -14,7 +14,7 @@ import json
 import os
 import shutil
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from article_to_video.assemble import (
@@ -25,6 +25,7 @@ from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.music import TRACKS, ensure_track
 from article_to_video.narration import SegmentAudio, get_tts_engine, narrate, write_timing
 from article_to_video.project import Project, ProjectError, VariantPaths, load_project
+from article_to_video.public_data import PublicChart, resolve_public_data
 from article_to_video.subtitles import (
     SUBTITLE_FONT_FAMILY, missing_subtitle_glyphs, subtitle_lines, write_ass, write_srt,
 )
@@ -44,6 +45,8 @@ class BuildPlan:
     audio: dict[str, SegmentAudio]
     timeline: Timeline
     clips: list[ClipPlan]
+    public_data: dict[str, PublicChart] = field(default_factory=dict)
+    """分鏡 id → 這個圖表畫的公有數據（每個點的系列、日期、擷取日；數字對帳與審片頁標出處用）。"""
 
     @property
     def paths(self) -> VariantPaths:
@@ -85,6 +88,7 @@ def plan_build(
     if added:
         log(f"設定快照：從使用者設定補上 {'、'.join(added)}（之後改使用者設定不會影響這支片）")
     project = load_project(project_dir, overrides={"tts": tts})
+    project, public_data = resolve_public_data(project)
     s = project.settings
 
     missing = missing_subtitle_glyphs(project.segments)
@@ -116,7 +120,7 @@ def plan_build(
         f"時間軸：{len(timeline.shots)} 個分鏡，總長 {timeline.duration:.2f} 秒"
         f"（旁白到 {timeline.narration_end:.2f} 秒，片尾 {timeline.outro.frames / timeline.fps:.2f} 秒）"
     )
-    return BuildPlan(project=project, format=fmt, audio=audio, timeline=timeline, clips=clips)
+    return BuildPlan(project=project, format=fmt, audio=audio, timeline=timeline, clips=clips, public_data=public_data)
 
 
 def build_project(

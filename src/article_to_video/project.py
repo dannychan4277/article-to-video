@@ -9,6 +9,7 @@
                          複製來的頻道名、logo、品牌色、聲音、語速、配樂、預設比例（user_settings.py）
       logo.png           片尾卡的 logo（設定快照的一部分，從使用者資料位置複製進來；沒設 logo 就沒有）
       article/           文章原檔、擷取文字與原圖（文章擷取那張票放）
+      public_data/       公有數據快照（<系列代號>.json：數字＋擷取日期）；抓過之後重建不用網路，刪掉就重抓
       成片.mp4           燒好字幕的成片（16:9）
       字幕.srt           字幕檔（檔名故意跟成片不同：同名 .srt 會被播放器自動疊上去，變成兩層字幕）
       build/             建置產物，可整個刪掉重來
@@ -55,10 +56,11 @@ ZH_TW_VOICES = {
     "zh-TW-YunJheNeural": "雲哲",
 }
 
-# t3_finance_chart 認得的 data 欄位（pushFrom 由建置自己算，不讓人寫）
+# t3_finance_chart 認得的 data 欄位（pushFrom 由建置自己算，不讓人寫）＋ publicData（公有數據：
+# 寫系列名稱取代 series 與 source，建置時抓數據換成實際數列、自動寫來源行，見 public_data.py）
 CHART_DATA_KEYS = frozenset({
     "title", "unit", "source", "badge", "chart", "series", "decimals", "prefix", "suffix",
-    "highlight", "colors", "upDown", "xAxis", "xTicks", "axisNote", "push",
+    "highlight", "colors", "upDown", "xAxis", "xTicks", "axisNote", "push", "publicData",
 })
 CHART_CUE_KINDS = frozenset({"title", "bar", "line", "candle", "highlight", "number"})
 SETTINGS_KEYS = frozenset({"voice", "rate", "tts", "gap", "lead", "tail",
@@ -161,6 +163,11 @@ class ProjectPaths:
         return self.root / "article"
 
     @property
+    def public_data(self) -> Path:
+        """公有數據快照：每個系列一個 <代號>.json（數字＋擷取日期），抓過一次之後重建不用網路。"""
+        return self.root / "public_data"
+
+    @property
     def build(self) -> Path:
         return self.root / "build"
 
@@ -235,6 +242,8 @@ class Cue:
 class ChartConfig:
     data: dict[str, Any]
     cues: list[Cue]
+    public: Any = None
+    """公有數據請求（public_data.PublicRequest）；建置時換成 data.series 與 data.source 之後就是 None。"""
 
 
 @dataclass(frozen=True)
@@ -499,6 +508,14 @@ def _load_chart(raw: Any, label: str, segments: Mapping[str, str], problems: _Pr
         _check_chart_data(data, label, problems)
     if "highlight" in data:
         _check_highlight(data["highlight"], f"{label} 的 chart.data.highlight", problems)
+    public = None
+    if "publicData" in data and not continues:
+        from article_to_video.public_data import parse_request  # 避免循環匯入
+
+        public, found = parse_request(data["publicData"], f"{label} 的 chart.data.publicData")
+        for p in found:
+            problems.add(p)
+        data = {k: v for k, v in data.items() if k != "publicData"}
 
     cues_raw = raw.get("cues")
     if not isinstance(cues_raw, list):
@@ -538,7 +555,7 @@ def _load_chart(raw: Any, label: str, segments: Mapping[str, str], problems: _Pr
                 problems.add(f"{where} 的 data.index 要是第幾根柱（0 起算），或這種數字的清單")
         fields = {k: v for k, v in q.items() if k != "at"}
         cues.append(Cue(kind=kind, at=at, fields=fields, where=where))
-    return ChartConfig(data=data, cues=cues)
+    return ChartConfig(data=data, cues=cues, public=public)
 
 
 def _check_chart_data(data: dict, label: str, problems: _Problems) -> None:
@@ -551,6 +568,16 @@ def _check_chart_data(data: dict, label: str, problems: _Problems) -> None:
     kind = data.get("chart", "bar")
     if kind not in ("bar", "line", "candle"):
         problems.add(f"{where} 的 chart 只能是 bar、line、candle，現在是 {kind!r}")
+    if "push" in data and (not _is_number(data["push"]) or not 0 <= data["push"] <= 0.2):
+        problems.add(f"{where} 的 push 要是 0～0.2（整串分鏡總共推近多少，例 0.03）")
+    if "publicData" in data:  # 數列由建置抓（public_data.py）；xTicks 等抓到之後才查
+        if "series" in data:
+            problems.add(f"{where} 的 series 和 publicData 只能二擇一：用公有數據就拿掉 series（數列由建置抓）")
+        if "source" in data:
+            problems.add(f"{where} 用了 publicData，來源行會自動寫（系列、來源、擷取日期），請拿掉 source")
+        if kind == "candle":
+            problems.add(f"{where} 的公有數據只有每天一個值，畫不了 K 線（candle），請改用 line 或 bar")
+        return
     series = data.get("series")
     if not isinstance(series, list) or not series:
         problems.add(f"{where} 少了 series（數列，例 [{{\"label\": \"2023\", \"value\": 4.58}}]）")
@@ -568,8 +595,6 @@ def _check_chart_data(data: dict, label: str, problems: _Problems) -> None:
     xt = data.get("xTicks")
     if xt is not None and not (isinstance(xt, list) and all(isinstance(x, int) and 0 <= x < len(series) for x in xt)):
         problems.add(f"{where} 的 xTicks 要是索引清單（0～{len(series) - 1}）")
-    if "push" in data and (not _is_number(data["push"]) or not 0 <= data["push"] <= 0.2):
-        problems.add(f"{where} 的 push 要是 0～0.2（整串分鏡總共推近多少，例 0.03）")
 
 
 def _check_highlight(h: Any, where: str, problems: _Problems) -> None:
