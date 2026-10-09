@@ -66,6 +66,17 @@ def continuation_changes_highlight_lines(shots, _):
     sh(shots, "SH02")["chart"]["data"]["highlight"]["sub"] = "多一行說明"
 
 
+def chain_head_without_highlight_cue(shots, _):
+    """data.highlight 寫了，但這串的第一個分鏡沒有 highlight cue：引擎只為有標註 cue 的分鏡留標註的空間。"""
+    cues = sh(shots, "SH01")["chart"]["cues"]
+    cues[:] = [c for c in cues if c["kind"] != "highlight"]
+
+
+def continuation_without_its_own_highlight_cue(shots, _):
+    """接續分鏡沒寫自己的 highlight cue：上一個的標註不會沿用過來。"""
+    sh(shots, "SH02")["chart"]["cues"] = []
+
+
 def unknown_cue_kind(shots, _):
     sh(shots, "SH01")["chart"]["cues"][0]["kind"] = "titel"
 
@@ -86,7 +97,11 @@ CASES = {
     "分鏡長度是零": (zero_length_shot, ["分鏡 SH02", "SH01", "切入點"]),
     "沒有這個旁白段": (missing_segment, ["分鏡 SH02", "start", "「s09」"]),
     "接續分鏡改了數列": (continuation_changes_series, ["分鏡 SH02", "接續", "series"]),
-    "接續分鏡標註行數不同": (continuation_changes_highlight_lines, ["分鏡 SH02", "SH01", "標註行數"]),
+    "接續分鏡標註行數不同": (continuation_changes_highlight_lines, ["分鏡 SH02", "SH01", "標註行數", "sub"]),
+    "接續鏈第一個分鏡沒有標註 cue": (chain_head_without_highlight_cue,
+                            ["分鏡 SH02", "SH01 沒有標註 cue", "\"kind\": \"highlight\"", "continues"]),
+    "接續分鏡沒有自己的標註 cue": (continuation_without_its_own_highlight_cue,
+                           ["分鏡 SH02", "SH02 沒有自己的標註 cue", "不會沿用", "\"kind\": \"highlight\""]),
     "不認得的 cue": (unknown_cue_kind, ["分鏡 SH01", "chart.cues[0]", "titel"]),
     "cue 時間超出分鏡": (number_cue_past_shot_end, ["分鏡 SH02", "chart.cues[1]", "超出"]),
     "旁白有字幕字型沒有的字": (narration_char_missing_from_subtitle_font, ["旁白段 s01", "𠀋"]),
@@ -104,6 +119,14 @@ def test_bad_project_is_blocked_with_a_clear_message(tmp_path, case):
         assert needle in msg, f"錯誤訊息少了「{needle}」：\n{msg}"
     assert not (root / "成片.mp4").exists()
     assert not (root / "build" / "16x9" / "clips").exists()  # 渲染前就擋下
+
+
+@pytest.mark.parametrize("edit", [chain_head_without_highlight_cue, continuation_without_its_own_highlight_cue])
+def test_a_missing_highlight_cue_is_not_blamed_on_text_and_sub(tmp_path, edit):
+    """少的是標註 cue，不是 text／sub：訊息不能叫人去改 text、sub（試跑時照著改了也沒用）。"""
+    with pytest.raises(ProjectError) as err:
+        build_project(make_project(tmp_path, edit), tts="fake")
+    assert "text、sub 都寫或都不寫" not in str(err.value)
 
 
 def test_repeated_word_resolves_with_occurrence(tmp_path):

@@ -812,6 +812,8 @@ def _check_highlight(h: Any, where: str, problems: _Problems) -> None:
 
 
 def _highlight_lines(data: Mapping, cues: list[Cue]) -> int:
+    """引擎為標註留幾行的空間：只看這個分鏡自己的 highlight cue（接續分鏡不沿用上一個的標註 cue）；
+    沒有 highlight cue＝0 行，就算 data.highlight 寫了字也一樣。有 cue 時 text、sub 各算一行。"""
     q = next((c for c in cues if c.kind == "highlight"), None)
     if q is None:
         return 0
@@ -819,6 +821,24 @@ def _highlight_lines(data: Mapping, cues: list[Cue]) -> int:
     text = q.fields.get("text") if q.fields.get("text") is not None else h.get("text")
     sub = q.fields.get("sub") if q.fields.get("sub") is not None else h.get("sub")
     return sum(1 for s in (text, sub) if s)
+
+
+_HIGHLIGHT_CUE = '{"at": 錨點, "kind": "highlight"}'
+
+
+def _highlight_mismatch(shot: Shot, prev: Shot, lp: int, lc: int, cue_p: bool, cue_c: bool) -> str:
+    """接續分鏡前後標註留的空間不一樣：照真正的原因說（少了標註 cue，還是 text／sub 行數不同）。
+    lp、lc：兩個分鏡標註的行數（_highlight_lines）；cue_p、cue_c：有沒有自己的 highlight cue。"""
+    head = (f"{shot.label} 接續 {prev.id}，但兩個分鏡為標註留的空間不一樣，切點前後刻度會跳。"
+            "引擎只替有自己標註 cue 的分鏡留標註的空間（data.highlight 寫了字但沒有 cue 不算）")
+    if not cue_p and cue_c:
+        return (f"{head}：{prev.id} 沒有標註 cue，{shot.id} 有。修法：{prev.id} 也加一個 {_HIGHLIGHT_CUE}"
+                f"（標註的字寫在 data.highlight 或 cue 的 text），或 {shot.id} 拿掉 continues、自己畫一張圖")
+    if cue_p and not cue_c:
+        return (f"{head}：{shot.id} 沒有自己的標註 cue，上一個分鏡的標註不會沿用過來。"
+                f"修法：{shot.id} 加一個 {_HIGHLIGHT_CUE}（要換的標註字寫在 data.highlight 或 cue 的 text）")
+    return (f"{head}：兩個都有標註 cue，但標註行數不一樣（{prev.id} {lp} 行、{shot.id} {lc} 行）。"
+            "text 一行、sub 一行（寫在 data.highlight 或 cue 上都算）：兩個分鏡的 text、sub 要寫得一樣多")
 
 
 def _check_vox_boxes(shots: list[Shot], problems: _Problems) -> None:
@@ -869,10 +889,8 @@ def _check_continuations(shots: list[Shot], problems: _Problems) -> None:
         data, cues = effective_chart(shots, i)
         lp, lc = _highlight_lines(p_data, p_cues), _highlight_lines(data, cues)
         if lp != lc:
-            problems.add(
-                f"{shot.label} 接續 {prev.id}，但標註行數不一樣（{prev.id} {lp} 行、{shot.id} {lc} 行），"
-                "引擎會為標註多留的空間不同，切點前後刻度會跳。請讓這兩個分鏡的標註行數一樣（text、sub 都寫或都不寫）"
-            )
+            problems.add(_highlight_mismatch(shot, prev, lp, lc, any(c.kind == "highlight" for c in p_cues),
+                                             any(c.kind == "highlight" for c in cues)))
         has_p = any(c.kind == "number" for c in p_cues)
         has_c = any(c.kind == "number" for c in shot.chart.cues)
         if has_c and not has_p:
