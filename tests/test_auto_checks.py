@@ -13,10 +13,13 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pytest
+from PIL import Image, ImageDraw
 
 from article_to_video.auto_checks import CheckReport, require_checks_cleared, run_checks
 from article_to_video.build import BlockedBuild, BuildResult, build_project
+from article_to_video.clips import text_font
 from article_to_video.timeline import VideoFormat
 
 from conftest import run_cli
@@ -152,6 +155,35 @@ def test_only_clips_that_changed_are_checked_again(lab, tmp_path):
 
 def test_the_end_card_has_no_subtitles_so_its_low_text_is_not_a_band_problem(lab):
     assert [f for f in lab.report.findings if f.clip_id == "end.card"] == []
+
+
+def _found_in(strip: np.ndarray, word: str) -> bool:
+    """strip（灰階，白底黑字）裡找不找得到用外掛附帶字型寫的 word：各種字級滑動比對，平均差夠小就算找到。"""
+    h, w = strip.shape
+    for size in range(10, h + 1):
+        font = text_font(size)
+        x0, y0, x1, y1 = font.getbbox(word)
+        im = Image.new("L", (x1 - x0, y1 - y0), 255)
+        ImageDraw.Draw(im).text((-x0, -y0), word, font=font, fill=0)
+        tpl = np.asarray(im, dtype=np.float32)
+        th, tw = tpl.shape
+        if th > h or tw > w:
+            continue
+        win = np.lib.stride_tricks.sliding_window_view(strip, (th, tw))
+        err = np.abs(win - tpl).mean(axis=(2, 3))
+        if err.min() < 22:  # JPEG 雜訊與反鋸齒容許；豆腐字或簡體字對不上（差 60 以上）
+            return True
+    return False
+
+
+def test_the_qa_contact_sheet_header_is_traditional_chinese_in_the_bundled_font(lab):
+    """qa 的四幀拼圖頁首（給人看的）：用外掛附帶的繁中字型，寫繁中（不是 PIL 預設字型的豆腐字、不是簡體）。"""
+    clip = next(c for c in lab.report.clips if c.clip_id == "SH01")
+    with Image.open(clip.qa_dir / "SH01.jpg") as im:
+        strip = np.asarray(im.convert("L"), dtype=np.float32)[:26]  # 頁首那一條（四幀從下面開始）
+    for word in ("動態", "靜止幀對", "跳變", "確定性"):
+        assert _found_in(strip, word), word
+    assert not _found_in(strip, "运动")
 
 
 def test_unhandled_failures_block_the_final_build_until_they_are_accepted(lab, tmp_path):

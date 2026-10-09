@@ -34,8 +34,11 @@
 import argparse, base64, functools, http.server, io, json, socketserver, threading, urllib.parse
 from pathlib import Path
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from playwright.sync_api import sync_playwright
+
+# [article-to-video 內嵌修改] 拼圖頁首用外掛附帶的繁中字型（原版用 PIL 預設字型：使用者的 Mac 上中文全是豆腐字）
+SHEET_FONT = ImageFont.truetype(str(Path(__file__).resolve().parent / 'lib' / 'fonts' / 'NotoSansTC-500.woff'), 15)
 
 ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 ap.add_argument('--project'); ap.add_argument('--spec', help='参数化片段 spec（走 clip.html，和 render.py --spec 同一套）'); ap.add_argument('--ids'); ap.add_argument('--fps', type=float, default=30)
@@ -256,12 +259,13 @@ with sync_playwright() as p:
         report['segments'].append(rec)
         # 拼图：4 帧 + 热图
         pick = [frames[int(k)] for k in np.linspace(0, n - 1, 4)]
-        H_, W_ = frames[0].shape[:2]; S = Image.new('RGB', (W_ * 5, H_ + 20), 'white'); dr = ImageDraw.Draw(S)
-        for k, f in enumerate(pick): S.paste(Image.fromarray(f.astype(np.uint8)), (k * W_, 20))
+        HB = 26   # [article-to-video 內嵌修改] 頁首高（原 20）：中文字比 PIL 預設字型高
+        H_, W_ = frames[0].shape[:2]; S = Image.new('RGB', (W_ * 5, H_ + HB), 'white'); dr = ImageDraw.Draw(S)
+        for k, f in enumerate(pick): S.paste(Image.fromarray(f.astype(np.uint8)), (k * W_, HB))
         hm = np.clip(heat / max(1, heat.max()) * 255, 0, 255).astype(np.uint8)
         base = Image.fromarray(pick[0].astype(np.uint8)).convert('L').convert('RGB'); red = np.zeros((H_, W_, 3), np.uint8); red[..., 0] = hm
-        S.paste(Image.blend(base, Image.fromarray(red), 0.6), (4 * W_, 20))
-        dr.text((4, 4), f"{s['id']}  运动 {rec['motion_pct']}%  静止帧对 {rec['still_pairs_pct']}%  跳变 {len(spikes)}  {rec['ms_mean']}/{rec['ms_max']}ms  确定性 {'✓' if rec['deterministic'] else '✗'}", fill='black')
+        S.paste(Image.blend(base, Image.fromarray(red), 0.6), (4 * W_, HB))
+        dr.text((4, 1), f"{s['id']}  動態 {rec['motion_pct']}%  靜止幀對 {rec['still_pairs_pct']}%  跳變 {len(spikes)}  {rec['ms_mean']}/{rec['ms_max']}ms  確定性 {'✓' if rec['deterministic'] else '✗'}", fill='black', font=SHEET_FONT)   # [article-to-video 內嵌修改] 繁中
         S.save(out / f"{s['id']}.jpg", quality=85)
         print(f"{s['id']:<18} 运动 {rec['motion_pct']:>5}%  静止帧对 {rec['still_pairs_pct']:>5}%  跳变 {len(spikes)}  {rec['ms_mean']:>6}/{rec['ms_max']:>6}ms  确定性 {'✓' if rec['deterministic'] else '✗ ' + str(rec['det_maxdiff'])}  框景 {len(rec['framing'])}")
         for r in rec['framing']: print(f"    {r['kind']}  {r['t'][0]:.2f}–{r['t'][1]:.2f}s  {r['text']}")

@@ -41,7 +41,7 @@ Vox 剪報 `clips/y2_vox.js`：
 - `lib/fonts/LICENSES.md`：只列附帶的字型，補上原清單沒有的 Noto Sans CJK TC 子集。
 - `clip.js`：缺字除了告警，也記在 `window.__missingGlyphs`。
 - `render.py`：spec 用 UTF-8 讀；`--ffmpeg <路徑>` 指定 ffmpeg（不靠 PATH）；檢查 ffmpeg 結束碼；`--strict-glyphs` 有缺字就在渲染前失敗；頁面 `console.error` 印成 `[page-error]`，跟告警 `[page]` 分開。
-- `qa.py`：`--project` 預設是本資料夾（qa.py 跟引擎放在一起）；spec、`qa.json`、`qa.md` 用 UTF-8 讀寫。
+- `qa.py`：`--project` 預設是本資料夾（qa.py 跟引擎放在一起）；spec、`qa.json`、`qa.md` 用 UTF-8 讀寫。四幀拼圖的頁首改用外掛附帶的繁中字型（`lib/fonts/NotoSansTC-500.woff`）、寫繁中（動態、靜止幀對、跳變、確定性），頁首高 20 → 26 px（原版用 PIL 預設字型，使用者的 Mac 上中文全是豆腐字）。
 - `clips/t3_finance_chart.js`：`data.colors.brand` 品牌色，取代「當品牌用的紅」（頂端色條、小旗、角標、標註圓點、大數字、折線預設色）；沒寫就是原本的紅 `#E3120B`。折線下方漸層改跟著線的顏色（原本寫死紅色）。K 線漲跌的紅綠不變。
 - `clips/t3_finance_chart.js`：`data.colors.ink`：要讀的字與記號（角標、標註圓點、大數字）用的顏色，沒寫就跟 brand 一樣——品牌色太淺時外掛的 `brand.py` 給它同色相加深的版本，色條、小旗照用原色。
 - `clips/t3_finance_chart.js`：負數柱的標註改放在那根柱的數值標籤正下方（讓開它橫跨到的負數柱與標籤，init 裡最低那根柱下面多留文字塊的高度）。原版的斜向標註往下拉，會壓在柱底下方的數值標籤上（16:9、9:16 都會；`tests/test_render_clip.py` 有靜態圖測試）。
