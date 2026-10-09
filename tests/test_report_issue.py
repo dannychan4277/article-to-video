@@ -137,6 +137,17 @@ def test_maintainer_rerenders_the_reported_shot_from_the_zip_offline(good_report
     assert clip.is_file() and clip.stat().st_size > 0
 
 
+def test_an_error_while_opening_the_review_page_is_kept_for_the_report(tmp_path):
+    """open-review 也會渲分鏡靜態圖：出錯時跟 build、preview 一樣記進 last-run，回報問題才拿得到。"""
+    root = tmp_path / "2026-10-09-打不開審片頁"
+    shutil.copytree(MINI_PROJECT, root)
+    (root / "shots.json").write_text('{"shots": [', encoding="utf-8")
+    proc = cli("open-review", str(root), "--tts", "fake")
+    assert proc.returncode == 1 and "Traceback" not in proc.stderr
+    info = json.loads((root / "build" / "last-run.json").read_text(encoding="utf-8"))
+    assert info["command"] == "open-review" and info["ok"] is False and "shots.json" in info["error"]
+
+
 @pytest.fixture(scope="module")
 def failed_build(tmp_path_factory) -> Path:
     """建置失敗的專案：SH02 的標註用了字型沒有的「〇」，渲 SH02 時被引擎擋下（SH01 照樣渲得出來）。"""

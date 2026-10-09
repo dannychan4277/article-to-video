@@ -385,17 +385,25 @@ def open_file_reveal(path) -> bool:
 
 
 def _open_review(args: argparse.Namespace) -> int:
+    from article_to_video.auto_checks import current_video
     from article_to_video.build import plan_build
+    from article_to_video.issue_report import RunRecord
+    from article_to_video.review import default_contributors, make_review
 
+    # 會渲分鏡靜態圖：出錯要跟 build、preview 一樣記進 last-run，回報問題才拿得到
+    rec = RunRecord(args.project, "open-review", {"tts": args.tts, "aspect": args.aspect.name if args.aspect else None})
+    log = rec.tee(lambda m: print(m, flush=True))
     try:
         plan = plan_build(args.project, tts=args.tts, fmt=args.aspect, data_dir=args.data_dir)
-        from article_to_video.auto_checks import current_video
-        from article_to_video.review import default_contributors, make_review
-
-        review = make_review(plan, video=current_video(plan), contributors=default_contributors(args.data_dir))
+        review = make_review(plan, video=current_video(plan), contributors=default_contributors(args.data_dir), log=log)
     except KNOWN_ERRORS as e:
+        rec.finish(e)
         print(f"審片頁打不開：{e}", file=sys.stderr)
         return 1
+    except BaseException as e:
+        rec.finish(e, unexpected=True)
+        raise
+    rec.finish()
     _show_review(review.page, no_open=False, version=review.version)
     return 0
 
