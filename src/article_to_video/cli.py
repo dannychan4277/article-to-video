@@ -110,6 +110,13 @@ def _parser() -> argparse.ArgumentParser:
     ck.add_argument("--jobs", type=int, help="最多同時跑幾個片段的 qa（預設 4）")
     ck.add_argument("--data-dir", help=_DATA_DIR_HELP)
     ck.add_argument("--json", action="store_true", help="最後印 checks.json 的內容（給程式讀）")
+    rs = sub.add_parser("resolve", help="記下必修／該修的處理：--fixed 改好了（獨立審片的問題）、--accept 看過、接受不改")
+    rs.add_argument("project", help="專案資料夾")
+    rs.add_argument("tokens", nargs="*", help="代號，例 R1-2（獨立審片）、qa:SH03:jump@1a2b3c4d（自動檢查），可以一次給好幾個")
+    how = rs.add_mutually_exclusive_group(required=True)
+    how.add_argument("--fixed", metavar="說明", help="改好了：寫怎麼改的（只用在獨立審片的問題）")
+    how.add_argument("--accept", metavar="理由", help="接受不改：寫為什麼（作者決定的加 --by 作者）")
+    rs.add_argument("--by", default="Claude", help="誰決定的：Claude（預設）或 作者")
     cb = sub.add_parser("confirm-box", help="記下 Claude 看過靜態圖、確認沒問題的框（核對代號從 boxes 指令來）")
     cb.add_argument("project", help="專案資料夾")
     cb.add_argument("tokens", nargs="*", help="核對代號，例 SH02:1@1a2b3c4d（可以一次給好幾個）")
@@ -419,11 +426,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         failed = "建置失敗" if args.command == "build" else "預覽失敗"
         try:
             if args.command == "build":
+                from article_to_video.auto_checks import require_checks_cleared
                 from article_to_video.build import build_project
 
-                # 正式出片前先數字對帳：有無出處的數字就擋下（不渲染、不出片）
+                # 正式出片前先數字對帳：有無出處的數字就擋下（不渲染、不出片）；自動檢查、獨立審片查出的必修
+                # 還沒處理（沒改掉、也沒明確接受）也擋
                 res = build_project(args.project, tts=args.tts, jobs=args.jobs, fmt=args.aspect, data_dir=args.data_dir,
-                                    preflight=[check_numbers], log=log)
+                                    preflight=[check_numbers, require_checks_cleared], log=log)
                 print(f"完成：{res.video}（{res.duration:.2f} 秒）")
                 print(f"字幕檔：{res.srt}")
                 failed = "成片做好了，但審片頁沒更新"
@@ -460,6 +469,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _boxes(args)
     if args.command == "checks":
         return _checks(args)
+    if args.command == "resolve":
+        from article_to_video.check_log import record_resolutions
+
+        status, note = ("fixed", args.fixed) if args.fixed is not None else ("accepted", args.accept)
+        try:
+            what = record_resolutions(args.project, args.tokens, status=status, note=note, by=args.by)
+        except ProjectError as e:
+            print(f"處理紀錄失敗：{e}", file=sys.stderr)
+            return 1
+        verb = "改好了" if status == "fixed" else f"接受不改（{args.by}）"
+        print(f"已記下 {len(what)} 項{verb}：")
+        print("\n".join(f"  {t}　{w}" for t, w in zip(args.tokens, what)))
+        print("審片頁下次 build／checks 時更新；正式出片不會再被這幾項擋下。")
+        return 0
     if args.command == "feedback":
         from pathlib import Path
 

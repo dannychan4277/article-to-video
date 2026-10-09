@@ -33,6 +33,7 @@ from article_to_video.check_log import load_log, now, resolution
 from article_to_video.clip_cache import clip_hash
 from article_to_video.clips import QA_SCRIPT, _absolutize_images
 from article_to_video.ffmpeg import find_ffmpeg
+from article_to_video.project import ProjectError
 from article_to_video.review_page import timecode
 
 if TYPE_CHECKING:
@@ -45,6 +46,7 @@ __all__ = [
     "CheckReport",
     "ClipCheck",
     "Finding",
+    "blocking_problems",
     "checks_contributor",
     "checks_json",
     "clips_not_built",
@@ -52,6 +54,7 @@ __all__ = [
     "format_report",
     "load_check_report",
     "report_json",
+    "require_checks_cleared",
     "run_checks",
 ]
 
@@ -693,6 +696,39 @@ def format_report(plan: BuildPlan, report: CheckReport) -> str:
         lines.append("沒有擋出片的問題。" if report.findings or not report.unchecked else "")
     lines.append(f"彙整：{checks_json(plan)}")
     return "\n".join(ln for ln in lines if ln)
+
+
+# ---------------------------------------------------------------- 擋出片
+
+
+RESOLVE_HINT = (
+    "要改：改分鏡設定再出片（改過的片段會自動重查，獨立審片的問題改好後標 --fixed）。\n"
+    "不改：看過畫面、確定要保留，記下理由——作者決定不改的加 --by 作者：\n"
+    "  python -m article_to_video resolve \"{root}\" {tokens} --accept \"理由\"\n"
+    "  python -m article_to_video resolve \"{root}\" R1-2 --fixed \"怎麼改的\"   （獨立審片的問題改好了）"
+)
+
+
+def blocking_problems(plan: BuildPlan) -> list[tuple[str, str]]:
+    """還沒處理的必修：(代號, 一行說明)。自動檢查（片段沒變、上次查出 fail 的）＋獨立審片（每一輪的必修）。"""
+    out = [(f.token, f"{_where(plan, f)} {f.label}：{f.message}（代號 {f.token}）")
+           for f in load_check_report(plan).blocking]
+    from article_to_video.independent_review import unresolved_must  # 避免循環匯入
+
+    out += unresolved_must(plan)
+    return out
+
+
+def require_checks_cleared(plan: BuildPlan) -> None:
+    """正式出片前（build 的 preflight）：還有必修沒處理（沒改掉、也沒明確接受）就丟 ProjectError，不渲、不出片。"""
+    bad = blocking_problems(plan)
+    if not bad:
+        return
+    raise ProjectError(
+        [line for _, line in bad],
+        title=f"還有 {len(bad)} 項必修沒處理，先不出片",
+        hint=RESOLVE_HINT.format(root=plan.project.root, tokens=" ".join(t for t, _ in bad)),
+    )
 
 
 def checks_contributor(plan: BuildPlan) -> ReviewExtras:

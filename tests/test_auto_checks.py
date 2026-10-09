@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from article_to_video.auto_checks import CheckReport, run_checks
-from article_to_video.build import BuildResult, build_project
+from article_to_video.auto_checks import CheckReport, require_checks_cleared, run_checks
+from article_to_video.build import BlockedBuild, BuildResult, build_project
 from article_to_video.timeline import VideoFormat
 
 SMALL = VideoFormat(name="test360", width=640, height=360, fps=30, safe_bottom=47, sub_size=18,
@@ -152,6 +152,30 @@ def test_only_clips_that_changed_are_checked_again(lab, tmp_path):
 
 def test_the_end_card_has_no_subtitles_so_its_low_text_is_not_a_band_problem(lab):
     assert [f for f in lab.report.findings if f.clip_id == "end.card"] == []
+
+
+def test_unhandled_failures_block_the_final_build_until_they_are_accepted(lab, tmp_path):
+    copy = tmp_path / "要出片的實驗室"
+    shutil.copytree(lab.dir, copy)
+    fails = [f.token for f in lab.report.findings if f.status == "fail"]
+    warns = [f.token for f in lab.report.findings if f.status == "warn"]
+    assert fails and warns
+
+    with pytest.raises(BlockedBuild) as blocked:
+        build_project(copy, fmt=SMALL, preflight=[require_checks_cleared])
+    msg = str(blocked.value)
+    assert all(t in msg for t in fails) and not any(t in msg for t in warns)  # 該修只提醒，不擋
+    assert "resolve" in msg and "--accept" in msg
+
+    wrong = run_cli("resolve", str(copy), fails[0], "qa:SH09:jump@00000000", "--accept", "打錯的代號")
+    assert wrong.returncode == 1 and "SH09" in wrong.stderr and "Traceback" not in wrong.stderr
+    assert not (copy / "check_log.json").exists()  # 有一個不對就全部不記
+
+    ok = run_cli("resolve", str(copy), *fails, "--accept", "測試專案：這幾段是故意做壞的", "--by", "作者")
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    build_project(copy, fmt=SMALL, preflight=[require_checks_cleared])  # 不再擋
+    log = json.loads((copy / "check_log.json").read_text(encoding="utf-8"))
+    assert {t: (r["status"], r["by"]) for t, r in log["resolutions"].items()} == {t: ("accepted", "作者") for t in fails}
 
 
 # ---------------------------------------------------------------- 指令列（1080p 的 session 測試專案）

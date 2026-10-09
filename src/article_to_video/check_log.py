@@ -22,7 +22,8 @@ from typing import Any
 
 from article_to_video.project import ProjectPaths
 
-__all__ = ["LOG_VERSION", "RESOLVED", "load_log", "now", "resolution", "save_log"]
+__all__ = ["LOG_VERSION", "RESOLVED", "known_tokens", "load_log", "now", "record_resolutions", "resolution",
+           "save_log"]
 
 LOG_VERSION = 1
 RESOLVED = ("fixed", "accepted")
@@ -56,3 +57,53 @@ def resolution(log: dict[str, Any], token: str) -> dict[str, Any] | None:
     """這個問題的處理紀錄（改好了或接受了）；沒處理、或被下一輪審片重新打開的是 None。"""
     r = log["resolutions"].get(token)
     return r if isinstance(r, dict) and r.get("status") in RESOLVED else None
+
+
+AUTO_PREFIXES = ("qa:", "band:", "hold:")
+
+
+def known_tokens(project_dir: str | os.PathLike) -> dict[str, str]:
+    """認得的代號 → 是什麼：獨立審片每一輪的每一項，加上各比例最近一次自動檢查（build/<比例>/checks.json）查到的。"""
+    root = Path(project_dir)
+    out: dict[str, str] = {}
+    for rnd in load_log(root)["rounds"]:
+        for it in rnd.get("items") or []:
+            if isinstance(it, dict) and it.get("id"):
+                out[str(it["id"])] = f"獨立審片第 {rnd.get('round')} 輪 {it.get('severity', '')}：{it.get('title', '')}"
+    for path in sorted(ProjectPaths(root).build.glob("*/checks.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for f in data.get("findings") or []:
+            if isinstance(f, dict) and f.get("token"):
+                out.setdefault(str(f["token"]), f"自動檢查 {f.get('label', '')}：{f.get('message', '')}")
+    return out
+
+
+def record_resolutions(project_dir: str | os.PathLike, tokens: list[str], *, status: str, note: str,
+                       by: str = "Claude") -> list[str]:
+    """記下這幾個問題的處理（status：fixed＝改好了、accepted＝接受不改）。有一個代號不對就全部不記，丟 ProjectError。"""
+    from article_to_video.project import ProjectError
+
+    root = Path(project_dir)
+    if not root.is_dir():
+        raise ProjectError(f"找不到專案資料夾 {root}", title="記不了")
+    problems: list[str] = []
+    if not tokens:
+        problems.append("沒有給代號（代號在 checks、build 的輸出或審片頁上，例 R1-2、qa:SH03:jump@1a2b3c4d）")
+    if not note.strip():
+        problems.append("要寫一句說明：--fixed 寫怎麼改的，--accept 寫為什麼不改")
+    known = known_tokens(root)
+    for t in tokens:
+        if t not in known:
+            problems.append(f"不認得的代號 {t}（重跑 checks 看現在的代號；分鏡改過的話代號會變）")
+        elif status == "fixed" and t.startswith(AUTO_PREFIXES):
+            problems.append(f"{t} 是自動檢查的問題，不用標改好：改了分鏡、重新出片再跑 checks，就會重查")
+    if problems:
+        raise ProjectError(problems, title="沒有記下任何一項")
+    log = load_log(root)
+    for t in tokens:
+        log["resolutions"][t] = {"status": status, "note": note.strip(), "by": by, "at": now()}
+    save_log(root, log)
+    return [known[t] for t in tokens]
