@@ -156,14 +156,20 @@ class Installer:
         self.poll_interval = poll_interval
         self._log = log
         self.work = self.data_dir / "install"
-        self._lines: list[str] = []
+        self.log_file = self.work / "install.log"
 
     def log(self, msg: str) -> None:
-        self._lines.append(msg)
+        """印出來，同時一行一行接進 install.log（中途被中斷也留得下紀錄）。"""
         self._log(msg)
+        try:
+            with self.log_file.open("a", encoding="utf-8") as f:
+                f.write(msg + "\n")
+        except OSError:
+            pass
 
     def run(self) -> InstallReport:
         self.work.mkdir(parents=True, exist_ok=True)
+        self.log_file.write_text(time.strftime("安裝紀錄 %Y-%m-%d %H:%M:%S\n"), encoding="utf-8")
         self.log(f"開始安裝檢查（這台是 {self.layout.label}，Homebrew 該在 {self.layout.prefix}）")
         steps: list[StepResult] = []
         names = ["Homebrew", "能燒字幕的 ffmpeg", "Chromium", "uv", "edge-tts 連線"]
@@ -188,10 +194,6 @@ class Installer:
         step(5, self._edge)
         report = InstallReport(steps)
         self.log(report.summary())
-        try:
-            (self.work / "install.log").write_text("\n".join(self._lines) + "\n", encoding="utf-8")
-        except OSError:
-            pass
         return report
 
     # ------------------------------------------------------------ 1. Homebrew
