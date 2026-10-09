@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from article_to_video.brand import apply_brand
 from article_to_video.end_card import END_CARD_ID, plan_end_card
 from article_to_video.narration import SegmentAudio
 from article_to_video.project import Anchor, Cue, Project, ProjectError, Shot
@@ -358,7 +359,7 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
         if shot.chart is None:
             raise ProjectError(f"{shot.label} 是 Vox 分鏡，這版的建置還不支援 Vox，先改成財經圖表分鏡")
         data, _ = effective_chart(project.shots, n)
-        data = prepare_chart_data(data)
+        data = apply_brand(prepare_chart_data(data), project.settings.brand_color)
         g0, g1, head = chains[shot.id]
         chain_secs = (g1 - g0) / fps
         total_push = head_push.get(head)
