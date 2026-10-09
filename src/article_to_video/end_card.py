@@ -32,7 +32,8 @@ _GROUP_RE = re.compile(r"^(?P<name>[^（(]+?)\s*[（(](?P<items>[^（()）]+)[�
 def merge_sources(texts: Iterable[str]) -> list[str]:
     """圖上的來源列 → 片尾卡的來源清單。
 
-    - 拿掉「來源：」「資料來源：」這類前綴（卡上統一有「資料來源」小標）；一列寫了好幾個（用「；」隔開）就拆開。
+    - 拿掉「來源：」「資料來源：」這類前綴（卡上統一有「資料來源」小標）。一列就是一個出處
+      （公有數據自動寫的來源行用「；」分欄：「FRED，聯準會（DGS10）；月平均；2026-10-09 擷取」，不拆）。
     - 一模一樣的只留一個，順序照第一次出現。
     - 同一個出處、括號裡列代號的合併：「FRED（DGS2）」＋「FRED（DGS10）」→「FRED（DGS2、DGS10）」（括號後面的說明要一樣）。
     """
@@ -40,10 +41,9 @@ def merge_sources(texts: Iterable[str]) -> list[str]:
     for raw in texts:
         if not isinstance(raw, str):
             continue
-        for part in re.split(r"[；;]", raw):
-            t = " ".join(_PREFIX_RE.sub("", part).split()).strip("，,。 ")
-            if t and t not in entries:
-                entries.append(t)
+        t = " ".join(_PREFIX_RE.sub("", raw).split()).strip("，,。； ")
+        if t and t not in entries:
+            entries.append(t)
     merged: list[Any] = []
     groups: dict[tuple[str, str], list[str]] = {}
     for t in entries:
