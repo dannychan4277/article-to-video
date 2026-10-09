@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import unicodedata
 from dataclasses import dataclass
@@ -80,7 +81,8 @@ def word_time(seg: str, word: str) -> float:
 
 
 def frame(t: float) -> int:
-    return int(t * FPS + 0.5)
+    """秒 → 幀：四捨五入（.5 進位；浮點誤差 2.05×30＝61.4999… 也算 .5）。"""
+    return math.floor(t * FPS + 0.5 + 1e-9)
 
 
 # ---------------------------------------------------------------- 測試專案
@@ -122,6 +124,8 @@ def scenario_shots() -> list[dict]:
         {**chart_shot("SH01", "s01", "兩年期殖利率"), "start": {"segment": "s01"}},
         {"id": "SH02", "start": {"segment": "s02"},
          "vox": {"cues": [{"at": 0, "kind": "image", "image": "圖1"}]}},
+        {"id": "SH03", "start": {"segment": "s03"}, "continues": True,
+         "vox": {"cues": [{"at": {"segment": "s03", "word": "差距"}, "kind": "excerpt", "quote": "差距只剩"}]}},
         chart_shot("SH04", "s04", "曲線倒掛"),
     ]
 
@@ -188,9 +192,9 @@ def is_desk(fr: np.ndarray) -> bool:
 
 def test_vox_shot_shows_the_article_image_with_its_label(scenario):
     spec = json.loads((scenario.specs / "SH02.json").read_text(encoding="utf-8"))
-    [img] = [c for c in spec["cues"] if c.get("image")]
-    assert Path(img["image"]).read_bytes() == (scenario.dir / "article" / "images" / "圖1.png").read_bytes()
-    assert img["text"] == "圖1"
+    labels = {c["text"]: Path(c["image"]) for c in spec["cues"] if c.get("image")}
+    assert set(labels) == {"圖1", "原文段落"}
+    assert labels["圖1"].read_bytes() == (scenario.dir / "article" / "images" / "圖1.png").read_bytes()
     # 圖貼上桌面後：自製的圖沒有接近黑色的像素，桌面也沒有——畫面上的黑色只會是圖下方的標籤條
     f = frame(SEG_START["s02"] + 1.0)
     fr = picture(video_frames(scenario.video, [f])[f])
@@ -203,6 +207,25 @@ def test_charts_and_vox_shots_interleave_in_one_video(scenario):
     frames = video_frames(scenario.video, [frame(t) for t in marks.values()])
     kinds = {sid: is_desk(frames[frame(t)]) for sid, t in marks.items()}
     assert kinds == {"SH01": False, "SH02": True, "SH04": False}
+
+
+def mean_diff(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.abs(picture(a) - picture(b)).mean())
+
+
+def test_continued_vox_shot_has_no_cut(scenario):
+    """SH03 接續 SH02：同一張桌面，切點前後一幀幾乎一樣；對照組：財經圖表切到 Vox 是真的切。"""
+    cut, hard = frame(SEG_START["s03"]), frame(SEG_START["s02"])
+    fr = video_frames(scenario.video, [cut - 1, cut, hard - 1, hard])
+    assert mean_diff(fr[cut - 1], fr[cut]) < 1.0
+    assert mean_diff(fr[hard - 1], fr[hard]) > 20
+
+
+def test_vox_camera_drifts_slowly_while_holding_on_an_image(scenario):
+    """圖貼好之後、下一件素材來之前，鏡頭停在圖上慢慢推近：畫面在動，但動得很少。"""
+    a, b = frame(SEG_START["s02"] + 0.8), frame(SEG_START["s02"] + 1.6)
+    fr = video_frames(scenario.video, [a, b])
+    assert 0.5 < mean_diff(fr[a], fr[b]) < 8
 
 
 # ---------------------------------------------------------------- 原文剪報

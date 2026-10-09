@@ -740,6 +740,14 @@ def _check_continuations(shots: list[Shot], problems: _Problems) -> None:
         if not shot.continues:
             continue
         prev = shots[i - 1]
+        if shot.vox is not None or prev.vox is not None:
+            if shot.vox is None or prev.vox is None:
+                kind = "Vox 分鏡" if shot.vox is not None else "財經圖表分鏡"
+                problems.add(
+                    f"{shot.label} 設了 continues，但它是{kind}、上一個分鏡 {prev.id} 不是：Vox 分鏡只能接續 Vox 分鏡"
+                    "（同一張桌面不切），財經圖表只能接續財經圖表"
+                )
+            continue
         if shot.chart is None or prev.chart is None:
             problems.add(f"{shot.label} 設了 continues，但它和上一個分鏡 {prev.id} 都要是財經圖表分鏡才能接續")
             continue
