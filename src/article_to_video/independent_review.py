@@ -591,8 +591,9 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
         def check_item(it: dict[str, Any]) -> CheckItem:
             res = resolution(book, it["id"])
             text = f"{it['title']}（{it['id']}）"
-            detail = "；".join(x for x in (it.get("detail"), f"建議：{it['fix']}" if it.get("fix") else "",
-                                          it.get("evidence")) if x)
+            parts = (it.get("detail"), f"建議：{it['fix']}" if it.get("fix") else "",
+                     f"證據：{it['evidence']}" if it.get("evidence") else "")
+            detail = "；".join(x.rstrip("。；") for x in parts if x)
             if res is not None:
                 label = "已修好" if res["status"] == "fixed" else "已接受"
                 return CheckItem(text, detail=f"{label}（{res.get('by', '')}）：{res.get('note', '')}",
