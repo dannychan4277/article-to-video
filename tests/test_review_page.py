@@ -6,11 +6,17 @@
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import unquote
+
+import pytest
 
 REVIEW_PAGE = "審片頁.html"
 
@@ -42,13 +48,15 @@ class ReviewPage:
     videos: list[str] = field(default_factory=list)
     overall_boxes: int = 0
     menu_text: str = ""
+    changes_text: str = ""
+    """「這版改了哪些分鏡」那一區的文字。"""
     page_slots: dict[str, str] = field(default_factory=dict)
     attrs: dict[str, str] = field(default_factory=dict)
 
 
 class _Parser(HTMLParser):
     """認 class：card（data-shot-id、data-shot-number、data-changed）、narration、timecode、still（data-t）、
-    comment、overall、slot（data-slot）、menu；<video src>。"""
+    comment、overall、slot（data-slot）、menu；id=changes；<video src>。"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -85,6 +93,8 @@ class _Parser(HTMLParser):
                     self.capture.append((target, len(self.stack)))
             if "slot" in cls:
                 self.capture.append(("slot:" + a.get("data-slot", ""), len(self.stack)))
+            if a.get("id") == "changes":
+                self.capture.append(("changes", len(self.stack)))
 
     def _in_card(self) -> bool:
         return any(tag == "article" and "card" in c for tag, c, _ in self.stack)
@@ -105,6 +115,8 @@ class _Parser(HTMLParser):
             card = self.page.cards[-1] if self.page.cards else None
             if target == "menu":
                 self.page.menu_text += data
+            elif target == "changes":
+                self.page.changes_text += data
             elif target.startswith("slot:"):
                 name = target[5:]
                 if self._in_card() and card is not None:
@@ -206,3 +218,80 @@ def test_cards_also_show_the_moment_just_before_each_later_beat(previewed_projec
 def test_each_card_shows_where_the_shot_sits_in_the_video(previewed_project):
     page = read_review(previewed_project.dir)
     assert [c.timecode.strip() for c in page.cards] == ["0:00.0–0:05.7", "0:05.7–0:08.4"]
+
+
+# ---------------------------------------------------------------- 出片之後
+
+
+def test_after_the_final_build_the_page_embeds_the_video(built_project):
+    page = read_review(built_project.dir)
+    assert page.attrs.get("data-stage") == "final"
+    assert len(page.videos) == 1
+    assert local_file(built_project.dir, page.videos[0]).resolve() == built_project.video.resolve()
+    assert [(c.number, c.id) for c in page.cards] == [(1, "SH01"), (2, "SH02")]
+    for card in page.cards:
+        assert all(piece in card.narration for piece in EXPECTED_NARRATION[card.id])
+        assert card.stills and local_file(built_project.dir, card.stills[0][0]).is_file()
+
+
+
+def run_cli(command: str, root: Path) -> None:
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    proc = subprocess.run([sys.executable, "-m", "article_to_video", command, str(root), "--tts", "fake"],
+                          capture_output=True, text=True, encoding="utf-8", env=env)
+    assert proc.returncode == 0, f"{command} 失敗：\n{proc.stdout}\n{proc.stderr}"
+
+
+def edit_json(path: Path, fn) -> None:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    fn(data)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+@pytest.fixture
+def copy_of_built(built_project, tmp_path) -> Path:
+    dst = tmp_path / "2026-10-09-殖利率曲線"
+    shutil.copytree(built_project.dir, dst)
+    return dst
+
+
+def changed_ids(page: ReviewPage) -> list[str]:
+    return [c.id for c in page.cards if c.changed]
+
+
+def test_rebuilt_page_marks_the_shots_that_changed_since_the_last_version(copy_of_built):
+    root = copy_of_built
+    first = read_review(root)
+    assert first.attrs["data-version"] == "1"
+    assert changed_ids(first) == []
+
+    edit_json(root / "shots.json", lambda d: d["shots"][1]["chart"]["data"]["highlight"].update(text="長天期偏低"))
+    run_cli("preview", root)
+    page = read_review(root)
+    assert page.attrs["data-version"] == "2"
+    assert changed_ids(page) == ["SH02"]
+    assert "分鏡 2" in page.changes_text
+
+    run_cli("build", root)  # 沒再改：出片後還是第 2 版，標記留著
+    page = read_review(root)
+    assert page.attrs["data-stage"] == "final"
+    assert page.attrs["data-version"] == "2"
+    assert changed_ids(page) == ["SH02"]
+
+
+def test_narration_edits_count_as_changes_to_the_shots_that_say_them(copy_of_built):
+    root = copy_of_built
+    edit_json(root / "narration.json", lambda d: d["segments"].update(s02="十年期僅有三點九六，曲線倒掛。"))
+    run_cli("preview", root)
+    page = read_review(root)
+    assert changed_ids(page) == ["SH01"]  # 「僅有」在 SH01 那段唸；SH02 的旁白和畫面都沒變
+    assert "十年期僅有三點九六" in page.cards[0].narration
+
+
+def test_page_says_which_shots_were_removed(copy_of_built):
+    root = copy_of_built
+    edit_json(root / "shots.json", lambda d: d["shots"].pop(1))
+    run_cli("preview", root)
+    page = read_review(root)
+    assert [c.id for c in page.cards] == ["SH01"]
+    assert "拿掉了" in page.changes_text and "分鏡 2" in page.changes_text

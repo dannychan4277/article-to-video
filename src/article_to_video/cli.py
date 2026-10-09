@@ -57,6 +57,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         print(f"完成：{res.video}（{res.duration:.2f} 秒）")
         print(f"字幕檔：{res.srt}")
+        from article_to_video.review import make_review
+
+        try:
+            review = make_review(res.plan, video=res.video, jobs=args.jobs, log=lambda m: print(m, flush=True))
+        except KNOWN_ERRORS as e:
+            print(f"成片做好了，但審片頁沒更新：{e}", file=sys.stderr)
+            return 1
+        print(f"審片頁：{review.page}")
         return 0
     if args.command == "preview":
         from article_to_video.review import preview_project

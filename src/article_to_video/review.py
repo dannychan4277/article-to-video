@@ -228,7 +228,67 @@ def render_review_stills(plan: BuildPlan, *, jobs: int | None = None, log: Log =
 @dataclass(frozen=True)
 class ReviewResult:
     page: Path
+    version: int
+    """審片頁第幾版：分鏡內容（畫面或旁白）有變才加一。"""
+    changed: list[str]
+    """這版跟上一版比，內容改過的分鏡 id（新加的也算）。"""
+    removed: list[str]
+    """上一版有、這版拿掉的分鏡 id。"""
     stills: dict[str, list[Still]] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------- 版本：這版改了哪些分鏡
+
+
+@dataclass(frozen=True)
+class _Version:
+    number: int
+    changed: list[str]
+    removed: list[tuple[str, int]]
+
+
+def _shot_hashes(plan: BuildPlan, narration: dict[str, list[NarrationPiece]]) -> dict[str, str]:
+    """每個分鏡的內容雜湊＝它的片段雜湊（spec＋引擎檔＋圖片）＋在片段裡的位置與長度＋它唸的旁白。
+    在成片裡的絕對時間不算：前面的分鏡變長，後面的分鏡往後挪，但畫面沒變就不算改過。"""
+    clip_of = _clip_of(plan)
+    clip_hashes = {cp.id: clip_hash(cp) for cp in plan.clips}
+    out: dict[str, str] = {}
+    for st in plan.timeline.shots:
+        cp = clip_of[st.shot.id]
+        payload = [clip_hashes[cp.id], st.start_frame - cp.start_frame, st.frames,
+                   [[p.segment, p.text] for p in narration[st.shot.id]]]
+        out[st.shot.id] = hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
+    return out
+
+
+def _update_version(state_path: Path, plan: BuildPlan, hashes: dict[str, str]) -> _Version:
+    """跟上一次寫審片頁時比：一樣就沿用版本號與標記（重跑不會把標記洗掉），不一樣就加一版、重算標記。"""
+    shots = [{"id": st.shot.id, "number": st.shot.number, "hash": hashes[st.shot.id]} for st in plan.timeline.shots]
+    prev = None
+    if state_path.is_file():
+        try:
+            prev = json.loads(state_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            prev = None
+    if not isinstance(prev, dict) or not isinstance(prev.get("shots"), list) or not isinstance(prev.get("version"), int):
+        version = _Version(1, [], [])
+    elif [(s.get("id"), s.get("hash")) for s in prev["shots"]] == [(s["id"], s["hash"]) for s in shots]:
+        version = _Version(prev["version"], list(prev.get("changed", [])),
+                           [(r[0], r[1]) for r in prev.get("removed", [])])
+    else:
+        old = {s.get("id"): s for s in prev["shots"]}
+        changed = [s["id"] for s in shots if s["id"] not in old or old[s["id"]].get("hash") != s["hash"]]
+        now = {s["id"] for s in shots}
+        removed = [(s.get("id"), s.get("number")) for s in prev["shots"] if s.get("id") not in now]
+        version = _Version(prev["version"] + 1, changed, removed)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({
+        "version": version.number,
+        "shots": shots,
+        "changed": version.changed,
+        "removed": [list(r) for r in version.removed],
+    }, ensure_ascii=False, indent=1), encoding="utf-8")
+    return version
 
 
 def _rel(page: Path, target: Path) -> str:
@@ -241,9 +301,9 @@ def _storage_key(plan: BuildPlan) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], video: Path | None) -> PageModel:
+def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], video: Path | None,
+                narration: dict[str, list[NarrationPiece]], version: _Version) -> PageModel:
     fps = plan.timeline.fps
-    narration = shot_narration(plan.timeline)
     cards = [
         CardModel(
             id=st.shot.id,
@@ -253,18 +313,20 @@ def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], vid
             narration=[(p.text, p.starts_mid, p.ends_mid) for p in narration[st.shot.id]],
             stills=[StillModel(_rel(page, s.path), s.video_time, s.final) for s in stills.get(st.shot.id, [])],
             continues=st.shot.continues,
+            changed=st.shot.id in version.changed,
         )
         for st in plan.timeline.shots
     ]
     return PageModel(
         project=plan.project.root.name,
         storage_key=_storage_key(plan),
-        version=1,
+        version=version.number,
         stage="final" if video else "preview",
         generated=datetime.now().strftime("%Y-%m-%d %H:%M"),
         duration=plan.timeline.duration,
         cards=cards,
         video_src=_rel(page, video) if video else None,
+        removed=version.removed,
     )
 
 
@@ -277,9 +339,16 @@ def make_review(
 ) -> ReviewResult:
     """渲靜態圖（有快取）、寫審片頁。video＝成片（出片後才有）。"""
     stills = render_review_stills(plan, jobs=jobs, log=log)
+    narration = shot_narration(plan.timeline)
+    version = _update_version(plan.paths.review_state, plan, _shot_hashes(plan, narration))
     page = plan.project.paths.review_page(plan.format.name)
-    page.write_text(render_review_html(_page_model(plan, page, stills, video)), encoding="utf-8")
-    return ReviewResult(page=page, stills=stills)
+    model = _page_model(plan, page, stills, video, narration, version)
+    page.write_text(render_review_html(model), encoding="utf-8")
+    if version.changed or version.removed:
+        log(f"審片頁第 {version.number} 版：改了 {len(version.changed)} 個分鏡"
+            + (f"、拿掉 {len(version.removed)} 個" if version.removed else ""))
+    return ReviewResult(page=page, version=version.number, changed=list(version.changed),
+                        removed=[r[0] for r in version.removed], stills=stills)
 
 
 def preview_project(
