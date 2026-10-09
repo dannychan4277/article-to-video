@@ -25,7 +25,7 @@ __all__ = ["DUCK_DB", "GAP_DB", "OUTRO_DB", "MixReport", "mix_soundtrack"]
 
 DUCK_DB = -22.0
 GAP_DB = -14.0
-OUTRO_DB = -9.0
+OUTRO_DB = -6.0
 BRIDGE = 2.0
 ATTACK = 0.3
 RELEASE = 0.6
