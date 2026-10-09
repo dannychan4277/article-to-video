@@ -91,6 +91,7 @@ return {
       for (let i = 0; i < n; i++) if (i !== hiI && base(i) && kept.every(j => Math.abs(xs[i] - xs[j]) >= half(i) + half(j) + 16 * u)) kept.push(i);
       L.xKeep = new Set(kept);
     }
+    if (kind === 'line') placeLineText(ctx, c, hiI, qh1, H1);
   },
   draw(c0, t, ctx) {
     // alpha：图是白纸黑字，叠在深色画面上墨色看不见。先画进缓冲，再带一圈白色光晕合成（和 t1 同一招）
@@ -150,9 +151,9 @@ return {
       const pts = S.map((r, i) => [xs[i], yS(r.value)]);
       const lp = MO.smooth(dp);
       const hp = CH.line(c, pts, lp, { col: L.col.main, lw: 5 * u, headR: 9 * u, area: { top: F.y, base: F.y + F.h, c0: rgba(L.col.main, 0.12, 'rgba(227,18,11,0.12)'), c1: rgba(L.col.main, 0, 'rgba(227,18,11,0)') } });
-      if (hp && lp < 1) { const v = yS.inv(hp[1]); c.save(); c.font = `700 ${36 * u}px ${NUM}`; c.fillStyle = L.col.main; c.textAlign = 'left'; c.textBaseline = 'middle'; TY.tabular(c, fmtv(d, v), hp[0] + 20 * u, hp[1] - 4 * u); c.restore(); }
+      if (hp && lp < 1) { const v = yS.inv(hp[1]); c.save(); c.font = `700 ${36 * u}px ${NUM}`; c.fillStyle = L.col.main; c.textAlign = 'left'; c.textBaseline = 'middle'; haloTabular(c, fmtv(d, v), hp[0] + 20 * u, hp[1] - 4 * u, {}, 8 * u); c.restore(); }   // [article-to-video 內嵌修改] 描白邊
       else if (lp >= 1) { const v = S[n - 1].value; c.save(); if (qh && hi === n - 1) c.globalAlpha = 1 - clamp(ctx.lt(t, qh.at) / 0.25);   // [Danny 本机改] 标注就是最后一点时，线头数值让位，免得两个数字叠在一起
-        c.font = `700 ${36 * u}px ${NUM}`; c.fillStyle = L.col.main; c.textAlign = 'right'; c.textBaseline = 'alphabetic'; TY.tabular(c, fmtv(d, v), pts[n - 1][0], pts[n - 1][1] - 24 * u, { align: 'right' }); c.restore(); }
+        c.font = `700 ${36 * u}px ${NUM}`; c.fillStyle = L.col.main; c.textAlign = 'right'; c.textBaseline = 'alphabetic'; haloTabular(c, fmtv(d, v), L.endLab.x, L.endLab.y, { align: 'right' }, 8 * u); c.restore(); }   // [article-to-video 內嵌修改] 位置挑不被線穿過的（placeLineText）、描白邊
       if (hi >= 0) anchor = pts[hi];
     } else {
       const cw = Math.min(30 * u, L.slot * 0.6);
@@ -183,7 +184,7 @@ return {
         const y0 = y + vlab, y1 = top - 6 * u;
         if (y1 - y0 > 6 * u) { c.strokeStyle = INK; c.lineWidth = 2 * u; c.beginPath(); c.moveTo(x, y0); c.lineTo(lerp(x, cx, lp), lerp(y0, y1, lp)); c.stroke(); }
         c.globalAlpha = fp; c.fillStyle = INK; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
-        lines.forEach((ln, i) => { c.font = i === 0 ? `700 ${50 * u * fs}px ${NUM}` : `400 ${28 * u * fs}px ${CN}`; c.fillText(ln, cx, top + (NEG_LINE1 + i * NEG_LINE2) * u * fs + (1 - fp) * 12 * u); });
+        lines.forEach((ln, i) => { c.font = i === 0 ? `700 ${50 * u * fs}px ${NUM}` : `400 ${28 * u * fs}px ${CN}`; haloText(c, ln, cx, top + (NEG_LINE1 + i * NEG_LINE2) * u * fs + (1 - fp) * 12 * u, 10 * u); });   // [article-to-video 內嵌修改] 描白邊（試跑 #9）
         c.restore();
       }
     } else if (qh && anchor && kind === 'bar' && above) {
@@ -201,15 +202,16 @@ return {
         const y1 = bottom + 10 * u;
         if (y0 - y1 > 6 * u) { c.strokeStyle = INK; c.lineWidth = 2 * u; c.beginPath(); c.moveTo(x, y0); c.lineTo(lerp(x, cx, lp), lerp(y0, y1, lp)); c.stroke(); }
         c.globalAlpha = fp; c.fillStyle = INK; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
-        lines.forEach((ln, i) => { c.font = i === 0 ? `700 ${50 * u * fs}px ${NUM}` : `400 ${28 * u * fs}px ${CN}`; c.fillText(ln, cx, bottom - (lines.length - 1 - i) * lh * (i === 0 ? 1 : 0.62) + (1 - fp) * 12 * u); });
+        lines.forEach((ln, i) => { c.font = i === 0 ? `700 ${50 * u * fs}px ${NUM}` : `400 ${28 * u * fs}px ${CN}`; haloText(c, ln, cx, bottom - (lines.length - 1 - i) * lh * (i === 0 ? 1 : 0.62) + (1 - fp) * 12 * u, 10 * u); });   // [article-to-video 內嵌修改] 描白邊（試跑 #9）
         c.restore();
       }
     } else if (qh && anchor) {
       if (kind === 'bar') anchor = [anchor[0] - Math.min(150 * u, L.slot * 0.62) / 2, anchor[1]];
       const H0 = d.highlight || {}, lines = [C(qh.text, H0.text), C(qh.sub, H0.sub)].filter(Boolean);
-      const right = anchor[0] > F.x + F.w * 0.55, tx = right ? anchor[0] - 60 * u : anchor[0] + 60 * u;
-      const ty = Math.max(F.y + 60 * u, anchor[1] - 140 * u);   // [article-to-video 內嵌修改] 負數柱另外處理（上面那段），這裡只剩正數柱與折線、K 線
-      CH.callout(c, ctx.lt(t, qh.at), 0, { x: anchor[0], y: anchor[1], tx, ty, lines, col: INK, dotCol: L.col.ink, font: `700 ${50 * u}px ${NUM}`, font2: `400 ${28 * u * fs}px ${CN}`, align: right ? 'right' : 'left', r: 9 * u });
+      const right = anchor[0] > F.x + F.w * 0.55, co = kind === 'line' ? L.lineCo : null;   // [article-to-video 內嵌修改] 折線：位置照 placeLineText 挑的（不壓線、零軸）
+      const tx = co ? co.tx : right ? anchor[0] - 60 * u : anchor[0] + 60 * u;
+      const ty = co ? co.ty : Math.max(F.y + 60 * u, anchor[1] - 140 * u);   // [article-to-video 內嵌修改] 負數柱另外處理（上面那段），這裡只剩正數柱與折線、K 線
+      CH.callout(c, ctx.lt(t, qh.at), 0, { x: anchor[0], y: anchor[1], tx, ty, lines, col: INK, dotCol: L.col.ink, font: `700 ${50 * u}px ${NUM}`, font2: `400 ${28 * u * fs}px ${CN}`, align: co ? co.align : right ? 'right' : 'left', r: 9 * u, halo: 10 * u });
     }
     // ---- 大数字（number cue：at = 落定时刻） ----
     for (const q of ctx.of('number')) {
@@ -226,4 +228,60 @@ return {
   },
 };
 function C(...a) { return a.find(v => v != null && v !== ''); }
+// [article-to-video 內嵌修改] 折線的標註與線尾數值擺哪（真實試跑 #9）。原版標註固定在點的右上（或左上）140、線尾數值固定寫在線頭左上，
+// 常壓到零軸、線本身和格線（線最後往下掉時，線尾數值正好被線穿過）。改成從幾個候選位置挑分數最低的：
+// 壓到線、壓到線尾數值＝重罰；壓到零軸＝中罰；引線穿過折線＝中罰；壓到格線＝輕罰（字另外描白邊，格線碰不到字）；
+// 離原本的位置越遠、放在點的下方，各加一點分。只看資料與版面、init 一次算好，確定性。
+function placeLineText(ctx, c, hiI, qh1, H1) {
+  const { u, data: d } = ctx, { F, S, xs, yS } = L, n = S.length, fs = ctx.portrait ? 1.2 : 1;
+  const pts = S.map((r, i) => [xs[i], yS(r.value)]);
+  const right = F.x + F.w - 80 * u;                                     // 右邊那一欄是刻度值，不放字
+  const grow = (R, m) => ({ x0: R.x0 - m, y0: R.y0 - m, x1: R.x1 + m, y1: R.y1 + m });
+  const hitsSeg = (a, b, R) => { const k = Math.max(2, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / (3 * u)));
+    for (let j = 0; j <= k; j++) { const x = lerp(a[0], b[0], j / k), y = lerp(a[1], b[1], j / k); if (x >= R.x0 && x <= R.x1 && y >= R.y0 && y <= R.y1) return true; } return false; };
+  const lineHits = R => { const G = grow(R, 8 * u); let k = 0; for (let i = 1; i < n; i++) if (hitsSeg(pts[i - 1], pts[i], G)) k++; return k; };
+  const zeroY = L.zeroBased && L.ticks[0] < 0 ? yS(0) : null;           // 零軸（黑色粗線）在圖區中間時
+  const zeroHit = R => zeroY != null && R.y0 - 12 * u < zeroY && R.y1 + 12 * u > zeroY;
+  const gridHits = R => L.ticks.filter(v => zeroY == null || Math.abs(v) > 1e-9).filter(v => { const y = yS(v); return y > R.y0 - 2 * u && y < R.y1 + 2 * u; }).length;
+  const overlap = (A, B) => !!(A && B && A.x0 < B.x1 && B.x0 < A.x1 && A.y0 < B.y1 && B.y0 < A.y1);
+  // 線尾數值（36 號粗體、右對齊在最後一點的 x）：上方（原版）、下方、左邊
+  c.font = `700 ${36 * u}px ${NUM}`;
+  const lab = fmtv(d, S[n - 1].value), lw = [...lab].reduce((s, ch) => s + c.measureText(/[0-9]/.test(ch) ? '0' : ch).width, 0);
+  const [ex, ey] = pts[n - 1], asc = 27 * u, desc = 6 * u;
+  const endScore = k => (k.R.x0 < F.x || k.R.y0 < F.y - 30 * u || k.R.y1 > F.y + F.h ? 1e6 : 0) + 1000 * lineHits(k.R) + 400 * zeroHit(k.R) + 20 * gridHits(k.R) + k.pref;
+  L.endLab = [{ x: ex, y: ey - 24 * u, pref: 0 }, { x: ex, y: ey + 24 * u + asc, pref: 6 }, { x: ex, y: ey - 60 * u, pref: 8 },
+    { x: ex - 22 * u, y: ey + asc / 2, pref: 12 }, { x: ex, y: ey + 60 * u + asc, pref: 14 }]
+    .map(k => ({ ...k, R: { x0: k.x - lw, x1: k.x, y0: k.y - asc, y1: k.y + desc } }))
+    .reduce((b, k) => endScore(k) < endScore(b) ? k : b);
+  // 標註（CH.callout：第一行 50 號粗體、第二行 28 號；字從 (tx±12, ty+8) 起、行距 40）
+  if (hiI < 0 || !S[hiI]) return;
+  const lines = [C(qh1 && qh1.text, H1.text), C(qh1 && qh1.sub, H1.sub)].filter(Boolean);
+  c.font = `700 ${50 * u}px ${NUM}`; let tw = lines[0] ? c.measureText(lines[0]).width : 0;
+  c.font = `400 ${28 * u * fs}px ${CN}`; if (lines[1]) tw = Math.max(tw, c.measureText(lines[1]).width);
+  const [ax, ay] = pts[hiI], toRight = !(ax > F.x + F.w * 0.55), endR = hiI === n - 1 ? null : L.endLab.R;   // 標的就是最後一點時線尾數值會淡出讓位
+  const crossings = (A, T) => { let k = 0; for (let i = 1; i < n; i++) if (i !== hiI && i !== hiI + 1 && segX(A, T, pts[i - 1], pts[i])) k++; return k; };
+  const segDist = (p, a, b) => { const vx = b[0] - a[0], vy = b[1] - a[1], q = clamp(((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / (vx * vx + vy * vy || 1)); return Math.hypot(p[0] - a[0] - q * vx, p[1] - a[1] - q * vy); };
+  const hugs = (A, T) => { const len = Math.hypot(T[0] - A[0], T[1] - A[1]); let k = 0;   // 引線離開圓點 24 之後還貼著折線走（看起來像線的一部分）
+    for (let s = 24 * u; s < len; s += 6 * u) { const p = [lerp(A[0], T[0], s / len), lerp(A[1], T[1], s / len)]; for (let i = 1; i < n; i++) if (segDist(p, pts[i - 1], pts[i]) < 12 * u) { k++; break; } } return k; };
+  let best = null;
+  for (const dy of [-140, -190, -240, -100, 110, 160, 210]) for (const dx of [60, 120, 200, -60, -120, -200]) {
+    const tx = ax + dx * u, ty = ay + dy * u, align = dx > 0 ? 'left' : 'right';
+    const x0 = align === 'left' ? tx + 12 : tx - 12 - tw, R = { x0, x1: x0 + tw, y0: ty + 8 - 46 * u, y1: ty + 8 + (lines.length - 1) * 40 + 10 * u };
+    if (R.x0 < F.x || R.x1 > right || R.y0 < F.y - 10 * u || R.y1 > F.y + F.h) continue;
+    const s = 1000 * lineHits(R) + 1000 * overlap(grow(R, 6 * u), endR) + 400 * zeroHit(R) + 300 * crossings([ax, ay], [tx, ty]) + 40 * hugs([ax, ay], [tx, ty]) + 20 * gridHits(R)
+      + 0.3 * (Math.abs(dy + 140) + Math.abs(dx - (toRight ? 60 : -60))) + (dy > 0 ? 40 : 0);
+    if (!best || s < best.s) best = { s, tx, ty, align };
+  }
+  L.lineCo = best;                                                       // 圖太小、一個都放不下：照原版的位置
+}
+function segX(a, b, p, q) { const o = (r, s, v) => Math.sign((s[0] - r[0]) * (v[1] - r[1]) - (s[1] - r[1]) * (v[0] - r[0])); return o(a, b, p) !== o(a, b, q) && o(p, q, a) !== o(p, q, b); }
+// [article-to-video 內嵌修改] 等寬數字（同 TY.tabular）＋白邊：先描一圈白、再填字，格線、面積底色碰不到字
+function haloTabular(c, str, x, y, { align = 'left' } = {}, w = 8) {
+  const chs = [...str], ws = chs.map(ch => c.measureText(/[0-9]/.test(ch) ? '0' : ch).width), total = ws.reduce((s, v) => s + v, 0);
+  let cx = align === 'right' ? x - total : align === 'center' ? x - total / 2 : x; const pos = ws.map(wi => { const p = cx + wi / 2; cx += wi; return p; });
+  const ta = c.textAlign; c.textAlign = 'center';
+  c.save(); c.strokeStyle = '#FFFFFF'; c.lineWidth = w; c.lineJoin = 'round'; chs.forEach((ch, i) => c.strokeText(ch, pos[i], y)); c.restore();
+  chs.forEach((ch, i) => c.fillText(ch, pos[i], y)); c.textAlign = ta; return total;
+}
+function haloText(c, s, x, y, w) { c.save(); c.strokeStyle = '#FFFFFF'; c.lineWidth = w; c.lineJoin = 'round'; c.strokeText(s, x, y); c.restore(); c.fillText(s, x, y); }
 })();

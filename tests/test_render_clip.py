@@ -200,6 +200,104 @@ def test_annotation_above_a_short_bar_has_a_visible_leader_line(tmp_path, aspect
     assert leader_rows >= 24 * (1080 / 1080), f"引線只看得到 {leader_rows} 像素"
 
 
+def _components(mask):
+    """mask（二維 bool）的連通塊（8 鄰）：每塊一個 (ys, xs)。測試裡的小區域用，不追求快。"""
+    import numpy as np
+
+    seen = np.zeros_like(mask, dtype=bool)
+    out = []
+    h, w = mask.shape
+    for y0, x0 in zip(*np.nonzero(mask)):
+        if seen[y0, x0]:
+            continue
+        stack, ys, xs = [(y0, x0)], [], []
+        seen[y0, x0] = True
+        while stack:
+            y, x = stack.pop()
+            ys.append(y)
+            xs.append(x)
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    yy, xx = y + dy, x + dx
+                    if 0 <= yy < h and 0 <= xx < w and mask[yy, xx] and not seen[yy, xx]:
+                        seen[yy, xx] = True
+                        stack.append((yy, xx))
+        out.append((np.array(ys), np.array(xs)))
+    return out
+
+
+# 自製的月資料（不是任何文章的數字）：先倒掛、谷底在第 9 個月、回正，最後兩個月往下掉
+DIP = [0.80, 0.55, 0.30, 0.10, -0.15, -0.40, -0.60, -0.75, -0.85, -0.80, -0.70, -0.55,
+       -0.40, -0.20, 0.05, 0.25, 0.40, 0.45, 0.50, 0.55, 0.60, 0.62, 0.48, 0.35]
+
+
+def _dip_spec(aspect: str) -> dict:
+    from article_to_video.timeline import FORMATS
+
+    return {
+        "grammar": "t3_finance_chart", "duration": 3.2, **FORMATS[aspect].spec_base(),
+        "data": {"title": "利差倒掛之後轉正", "unit": "示意數據，百分點", "source": "來源：測試用自製數字",
+                 "chart": "line", "decimals": 2, "xTicks": [0, 12, 23],
+                 "series": [{"label": f"{2024 + i // 12}-{i % 12 + 1:02d}", "value": v} for i, v in enumerate(DIP)],
+                 "highlight": {"index": 8, "text": "倒掛最深"}},
+        "cues": [{"at": 0, "kind": "title"}, {"at": 0.1, "kind": "line", "dur": 1.0}, {"at": 2.0, "kind": "highlight"}],
+    }
+
+
+@pytest.mark.parametrize("aspect", ["16x9", "9x16"])
+def test_line_annotation_keeps_off_the_line_and_the_zero_axis(tmp_path, aspect):
+    """折線的標註文字不壓線、不壓零軸（谷底往上 140 的預設位置正好壓在零軸上）。標註出現前後各一張靜態圖：
+    多出來的深色粗筆畫＝標註文字（細的引線去掉），那塊在標註出現前不能有折線（紅）或零軸（整列深色）。"""
+    import numpy as np
+    from PIL import Image
+
+    before, after = (np.asarray(Image.open(p).convert("RGB")).astype(int)
+                     for p in render_stills(_dip_spec(aspect), tmp_path, [1.9, 3.15]).paths)
+    text = (np.abs(after - before).max(axis=-1) > 60) & (after.max(axis=-1) < 90)
+    core = text.copy()  # 侵蝕 5×5：2 像素寬的引線消失，粗體字的筆畫留著
+    for dy in range(-2, 3):
+        for dx in range(-2, 3):
+            core[2:-2, 2:-2] &= text[2 + dy: text.shape[0] - 2 + dy, 2 + dx: text.shape[1] - 2 + dx]
+    ys, xs = np.nonzero(core)
+    assert len(ys) > 50, "找不到標註文字"
+    y0, y1, x0, x1 = ys.min() - 6, ys.max() + 7, xs.min() - 6, xs.max() + 7
+    under = before[y0:y1, x0:x1]
+    red = (under[..., 0] > 170) & (under[..., 1] < 100) & (under[..., 2] < 100)
+    assert red.sum() == 0, f"標註文字壓在折線上（{red.sum()} 個像素）"
+    dark_rows = ((under.max(axis=-1) < 90).mean(axis=1) > 0.8).sum()
+    assert dark_rows == 0, "標註文字壓在零軸上"
+
+
+@pytest.mark.parametrize("aspect", ["16x9", "9x16"])
+def test_line_end_value_is_not_crossed_by_the_line_or_a_gridline(tmp_path, aspect):
+    """線尾數值（例「0.35」）：線最後往下掉時，預設寫在線頭左上會被線穿過，格線也剛好穿過字。
+    最後一幀線頭附近的紅色連通塊：線（最大那塊）以外每個字自成一塊（「0.35」四塊），線的像素不進到字的範圍；
+    字的範圍裡也沒有格線的淺灰。"""
+    import numpy as np
+    from PIL import Image
+
+    spec = _dip_spec(aspect)
+    [png] = render_stills(spec, tmp_path, [1.9]).paths
+    a = np.asarray(Image.open(png).convert("RGB")).astype(int)
+    red = (a[..., 0] > 170) & (a[..., 1] < 120) & (a[..., 2] < 120)
+    red[: spec["safe"].get("top", 0) + 120] = False    # 頂端色條、小旗也是紅的
+    ys, xs = np.nonzero(red)
+    end_x = xs.max()                                   # 線頭（圓點的右緣）
+    end_y = int(np.median(ys[xs >= end_x - 3]))
+    roi = (slice(max(0, end_y - 140), end_y + 140), slice(end_x - 220, end_x + 20))
+    comps = sorted(_components(red[roi]), key=lambda c: -len(c[0]))
+    dot_x = end_x - (end_x - 220)                      # 線頭圓點（白邊把它和線分開）是最右邊那塊，不是字
+    line, glyphs = comps[0], [c for c in comps[1:] if len(c[0]) > 15 and c[1].max() < dot_x - 2]
+    assert len(glyphs) >= 4, f"線尾數值的字黏在線上（分開的字只有 {len(glyphs)} 塊）"
+    gy = np.concatenate([g[0] for g in glyphs]); gx = np.concatenate([g[1] for g in glyphs])
+    box = (slice(gy.min() - 2, gy.max() + 3), slice(gx.min() - 2, gx.max() + 3))
+    inside = ((line[0] >= box[0].start) & (line[0] < box[0].stop) & (line[1] >= box[1].start) & (line[1] < box[1].stop))
+    assert inside.sum() == 0, f"折線穿過線尾數值（{inside.sum()} 個像素）"
+    region = a[roi][box]
+    gray = (region.min(axis=-1) > 170) & (region.max(axis=-1) < 238) & (np.ptp(region, axis=-1) < 12)
+    assert gray.sum() < 5, f"格線穿過線尾數值（{gray.sum()} 個像素）"
+
+
 def test_page_error_fails_loudly(tmp_path):
     out = tmp_path / "bad.mp4"
     spec = short_chart_spec("十年期殖利率", grammar="no_such_grammar")

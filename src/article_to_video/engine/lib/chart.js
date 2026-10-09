@@ -106,7 +106,8 @@ CH.candles = (c, rows, xs, yS, cw, p, { up = '#e0322f', down = '#11a05a', lag = 
 
 // ---------- 标注：圆点弹出（弹簧）→ 脉冲环 → 引线画出 → 文字淡入。时间用秒，便于对口播 ----------
 // lt 秒；t0 开始时刻；(x,y) 数据点；(tx,ty) 文字锚点；lines 第一行用 font、其余用 font2（数字先说，比较后说）
-CH.callout = (c, lt, t0, { x, y, tx, ty, lines = [], col = '#121212', dotCol = '#e3120b', font = '600 30px sans-serif', font2, align = 'left', r = 11 }) => {
+// [article-to-video 內嵌修改] halo（線寬，預設 0＝不描）：字先描一圈白邊再填，格線、面積底色碰不到字
+CH.callout = (c, lt, t0, { x, y, tx, ty, lines = [], col = '#121212', dotCol = '#e3120b', font = '600 30px sans-serif', font2, align = 'left', r = 11, halo = 0 }) => {
   const k = lt - t0; if (k <= 0) return;
   const s = MO.spring(k, { duration: 0.45, bounce: 0.25 });
   c.save();
@@ -118,7 +119,9 @@ CH.callout = (c, lt, t0, { x, y, tx, ty, lines = [], col = '#121212', dotCol = '
   if (fp > 0) {
     c.globalAlpha = fp; c.fillStyle = col; c.textAlign = align; c.textBaseline = 'alphabetic';
     const dx = align === 'left' ? 12 : align === 'right' ? -12 : 0;
-    lines.forEach((L, i) => { c.font = i === 0 ? font : (font2 || font); c.fillText(L, tx + dx + (1 - fp) * (align === 'right' ? 16 : -16), ty + 8 + i * 40); });
+    lines.forEach((L, i) => { c.font = i === 0 ? font : (font2 || font); const px = tx + dx + (1 - fp) * (align === 'right' ? 16 : -16), py = ty + 8 + i * 40;
+      if (halo) { c.save(); c.strokeStyle = '#FFFFFF'; c.lineWidth = halo; c.lineJoin = 'round'; c.strokeText(L, px, py); c.restore(); }
+      c.fillText(L, px, py); });
   }
   c.restore();
 };
