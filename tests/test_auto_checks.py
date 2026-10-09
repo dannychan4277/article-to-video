@@ -178,6 +178,19 @@ def test_unhandled_failures_block_the_final_build_until_they_are_accepted(lab, t
     assert {t: (r["status"], r["by"]) for t, r in log["resolutions"].items()} == {t: ("accepted", "作者") for t in fails}
 
 
+@pytest.mark.parametrize("command", [["resolve", "qa:SH01:jump@00000000", "--accept", "理由"],
+                                     ["confirm-box", "SH01:1@00000000"]])
+def test_recording_commands_take_the_data_dir_like_every_other_command(tmp_path, command):
+    """主 skill 每個指令都習慣帶 --data-dir：記處理、記核對的指令也要收，不能跳英文的 argparse 錯誤。"""
+    root = tmp_path / "專案"
+    root.mkdir()
+    name, *rest = command
+    proc = run_cli(name, root, *rest, "--data-dir", tmp_path / "使用者資料")
+    assert proc.returncode == 1  # 空的專案、亂寫的代號：照樣用繁中說哪裡不對
+    assert "usage" not in proc.stderr and "unrecognized arguments" not in proc.stderr, proc.stderr
+    assert "失敗：" in proc.stderr and "Traceback" not in proc.stderr
+
+
 # ---------------------------------------------------------------- 指令列（1080p 的 session 測試專案）
 
 

@@ -14,7 +14,8 @@
                                                   「影片／解說影片／日期-標題」（見 publish.py、videos.py）
   boxes <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--data-dir D]
                                                   列出 Vox 框、渲每個框的靜態圖（照這個比例）、印核對代號
-  confirm-box <專案資料夾> <核對代號>… [--note 文字]   記下 Claude 看過靜態圖、確認過的框（見 boxes.py）
+  confirm-box <專案資料夾> <核對代號>… [--note 文字] [--data-dir D]
+                                                  記下 Claude 看過靜態圖、確認過的框（見 boxes.py）
   checks <專案資料夾> [--aspect …] [--tts …] [--jobs N] [--data-dir D] [--json]
                                                   自動檢查（出片之後）：每個片段跑 qa、白底片段查字幕帶，彙整到分鏡，
                                                   寫 build/<比例>/checks.json、更新審片頁（見 auto_checks.py）
@@ -24,7 +25,7 @@
                                                   （審片 agent 用）從成片抽全解析度幀
   review-record <專案資料夾> [--aspect …] [--file 檔|-] [--tts …] [--data-dir D]
                                                   記下審片 agent 的回答（預設讀素材資料夾的 review.json），更新審片頁
-  resolve <專案資料夾> <代號>… (--fixed 說明 | --accept 理由) [--by 作者|Claude]
+  resolve <專案資料夾> <代號>… (--fixed 說明 | --accept 理由) [--by 作者|Claude] [--data-dir D]
                                                   記下必修的處理：改好了（獨立審片）或接受不改；記了就不再擋出片
   lint <專案資料夾>                                 旁白規則檢查（narration.json；規則見 lint.py）；有要改的結束碼 1
   narrate <專案資料夾> [--tts edge|fake] [--data-dir D]
@@ -166,13 +167,13 @@ def _parser() -> argparse.ArgumentParser:
     rf.add_argument("--step", type=float, default=0.25, help="連續幀的間隔秒數（預設 0.25）")
     rr = add("review-record", "記下獨立審片 agent 的回答（review.json），寫進審片頁", "tts", "data_dir", "aspect")
     rr.add_argument("--file", help="回答檔（預設：審片素材資料夾裡的 review.json；- ＝從標準輸入讀）")
-    rs = add("resolve", "記下必修／該修的處理：--fixed 改好了（獨立審片的問題）、--accept 看過、接受不改")
+    rs = add("resolve", "記下必修／該修的處理：--fixed 改好了（獨立審片的問題）、--accept 看過、接受不改", "data_dir")
     rs.add_argument("tokens", nargs="*", help="代號，例 R1-2（獨立審片）、qa:SH03:jump@1a2b3c4d（自動檢查），可以一次給好幾個")
     how = rs.add_mutually_exclusive_group(required=True)
     how.add_argument("--fixed", metavar="說明", help="改好了：寫怎麼改的（只用在獨立審片的問題）")
     how.add_argument("--accept", metavar="理由", help="接受不改：寫為什麼（作者決定的加 --by 作者）")
     rs.add_argument("--by", default="Claude", help="誰決定的：Claude（預設）或 作者")
-    cb = add("confirm-box", "記下 Claude 看過靜態圖、確認沒問題的框（核對代號從 boxes 指令來）")
+    cb = add("confirm-box", "記下 Claude 看過靜態圖、確認沒問題的框（核對代號從 boxes 指令來）", "data_dir")
     cb.add_argument("tokens", nargs="*", help="核對代號，例 SH02:1@1a2b3c4d（可以一次給好幾個）")
     cb.add_argument("--note", default="", help="備註（例：框在「十年期」那一列的 3.96 上）")
     nw = add("new", "開新專案：在「影片／解說影片」建「日期-標題/專案」資料夾，擷取文章（含截字檢查）", project=None)
