@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import hashlib
-import html
 import json
 import os
 import shutil
@@ -19,12 +18,14 @@ import tempfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
 from article_to_video.build import BuildPlan, plan_build
 from article_to_video.clip_cache import clip_hash
 from article_to_video.clips import ClipRenderError, render_stills
+from article_to_video.review_page import CardModel, PageModel, StillModel, render_review_html
 from article_to_video.timeline import ClipPlan, Timeline
 
 __all__ = [
@@ -41,7 +42,6 @@ MOMENT_GAP = 0.8
 """畫面事件跟上一個事件至少隔這麼多秒，才另外出一張「這個事件之前」的靜態圖。"""
 MAX_MOMENTS = 3
 """每個分鏡最多幾張過程靜態圖（不含完成狀態那張）。"""
-_ASSETS = Path(__file__).resolve().parent / "review_assets"
 
 Log = Callable[[str], None]
 
@@ -231,54 +231,40 @@ class ReviewResult:
     stills: dict[str, list[Still]] = field(default_factory=dict)
 
 
-def timecode(seconds: float) -> str:
-    """成片時間碼，給作者看：分:秒.十分之一秒（例 1:05.3）。"""
-    tenths = round(seconds * 10)
-    return f"{tenths // 600}:{tenths % 600 / 10:04.1f}"
-
-
 def _rel(page: Path, target: Path) -> str:
     return quote(os.path.relpath(target, page.parent).replace(os.sep, "/"))
 
 
-def _asset(name: str) -> str:
-    return (_ASSETS / name).read_text(encoding="utf-8")
+def _storage_key(plan: BuildPlan) -> str:
+    """瀏覽器存留言用的鍵：同一個專案資料夾、同一個比例共用（file:// 的頁面共用同一個 localStorage）。"""
+    raw = f"{plan.project.root}|{plan.format.name}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-def _render_page(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], video: Path | None) -> str:
-    e = html.escape
-    project_name = plan.project.root.name
-    narration = shot_narration(plan.timeline)
+def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], video: Path | None) -> PageModel:
     fps = plan.timeline.fps
-    cards: list[str] = []
-    for st in plan.timeline.shots:
-        shot = st.shot
-        imgs = "".join(
-            f'<img class="still" src="{_rel(page, s.path)}" data-t="{s.video_time:.3f}" alt="分鏡 {shot.number} 的畫面" loading="lazy">'
-            for s in stills.get(shot.id, [])
+    narration = shot_narration(plan.timeline)
+    cards = [
+        CardModel(
+            id=st.shot.id,
+            number=st.shot.number,
+            start=st.start_frame / fps,
+            end=st.end_frame / fps,
+            narration=[(p.text, p.starts_mid, p.ends_mid) for p in narration[st.shot.id]],
+            stills=[StillModel(_rel(page, s.path), s.video_time, s.final) for s in stills.get(st.shot.id, [])],
+            continues=st.shot.continues,
         )
-        pieces = "".join(
-            f'<p>{"…" if p.starts_mid else ""}{e(p.text)}{"…" if p.ends_mid else ""}</p>' for p in narration[shot.id]
-        )
-        cards.append(
-            f'<article class="card" id="shot-{e(shot.id)}" data-shot-id="{e(shot.id)}" data-shot-number="{shot.number}">'
-            f'<h2>分鏡 {shot.number}</h2>'
-            f'<span class="timecode" data-start="{st.start_frame / fps:.3f}">'
-            f'{timecode(st.start_frame / fps)}–{timecode(st.end_frame / fps)}</span>'
-            f'<div class="stills">{imgs}</div>'
-            f'<div class="narration">{pieces}</div>'
-            f'<label>想改什麼？<textarea class="comment" data-shot-id="{e(shot.id)}"></textarea></label>'
-            f'</article>'
-        )
-    video_html = f'<video controls preload="metadata" src="{_rel(page, video)}"></video>' if video else ""
-    return (
-        '<!doctype html>\n<html lang="zh-Hant-TW">\n<head>\n<meta charset="utf-8">\n'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-        f'<title>審片頁｜{e(project_name)}</title>\n<style>\n{_asset("review.css")}\n</style>\n</head>\n<body>\n'
-        f'<header><h1>審片頁</h1><p>{e(project_name)}</p></header>\n'
-        f'{video_html}\n<main>\n' + "\n".join(cards) +
-        '\n<section class="overall-box"><label>整體意見<textarea class="overall"></textarea></label></section>\n'
-        '</main>\n</body>\n</html>\n'
+        for st in plan.timeline.shots
+    ]
+    return PageModel(
+        project=plan.project.root.name,
+        storage_key=_storage_key(plan),
+        version=1,
+        stage="final" if video else "preview",
+        generated=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        duration=plan.timeline.duration,
+        cards=cards,
+        video_src=_rel(page, video) if video else None,
     )
 
 
@@ -292,8 +278,7 @@ def make_review(
     """渲靜態圖（有快取）、寫審片頁。video＝成片（出片後才有）。"""
     stills = render_review_stills(plan, jobs=jobs, log=log)
     page = plan.project.paths.review_page(plan.format.name)
-    page.write_text(_render_page(plan, page, stills, video), encoding="utf-8")
-    log(f"審片頁：{page}")
+    page.write_text(render_review_html(_page_model(plan, page, stills, video)), encoding="utf-8")
     return ReviewResult(page=page, stills=stills)
 
 
