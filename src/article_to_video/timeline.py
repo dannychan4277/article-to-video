@@ -31,7 +31,9 @@ from article_to_video.narration import SegmentAudio
 from article_to_video.project import Anchor, Cue, Project, ProjectError, Shot
 
 __all__ = [
+    "FORMATS",
     "FORMAT_16x9",
+    "FORMAT_9x16",
     "ClipPlan",
     "CueTiming",
     "Outro",
@@ -42,6 +44,7 @@ __all__ = [
     "build_timeline",
     "effective_chart",
     "plan_clips",
+    "video_format",
 ]
 
 T3 = "t3_finance_chart"
@@ -52,6 +55,16 @@ DEFAULT_AXIS_NOTE = "縱軸未從 0 開始"
 
 @dataclass(frozen=True)
 class VideoFormat:
+    """畫面比例：尺寸、字幕樣式、畫面上哪些地方不能放字。產物放 build/<name>/，成片檔名見 ProjectPaths.video。
+
+    兩種「讓開的邊」（px）：
+    - ui_*：平台介面區。短影音平台（YouTube Shorts、Reels、TikTok）蓋在畫面上的地方：頂端分頁列、底部帳號／說明／
+      音樂列與導覽列、右側按讚留言分享按鈕欄。沒有字幕的片段（片尾卡）只讓這些（card_safe）。
+    - safe_*：旁白期間的片段（財經圖表、Vox）要讓的邊＝平台介面區＋燒錄字幕帶（＋慢推會往外推的一點），
+      圖表的標題、刻度、來源列都排在裡面（clip_safe）。
+    字幕：sub_* 是 ASS 樣式（字級、底邊距、左右邊距、深底框內距），底邊距 sub_margin_v 要讓字幕框整個在 ui_bottom 之上。
+    """
+
     name: str = "16x9"
     width: int = 1920
     height: int = 1080
@@ -62,9 +75,59 @@ class VideoFormat:
     sub_margin_v: int = 46
     sub_margin_lr: int = 60
     sub_pad: int = 12
+    safe_top: int = 0
+    safe_right: int = 0
+    ui_top: int = 0
+    ui_bottom: int = 0
+    ui_right: int = 0
+    label: str = "橫式 16:9"
+
+    @staticmethod
+    def _nonzero(**edges: int) -> dict[str, int]:
+        # 只寫有讓的邊：16:9 的 spec 跟加這些欄位之前一模一樣（不會白白讓所有片段重渲）
+        return {k: v for k, v in edges.items() if v}
+
+    def clip_safe(self) -> dict[str, int]:
+        """旁白期間的片段（有字幕）給引擎的 spec.safe。"""
+        return self._nonzero(top=self.safe_top, bottom=self.safe_bottom, right=self.safe_right)
+
+    def card_safe(self) -> dict[str, int]:
+        """沒有字幕的片段（片尾卡）給引擎的 spec.safe：只讓平台介面區。"""
+        return self._nonzero(top=self.ui_top, bottom=self.ui_bottom, right=self.ui_right)
+
+    def spec_base(self) -> dict[str, Any]:
+        """旁白期間的片段 spec 共用的部分（fps、寬高、safe）。財經圖表用它；Vox 分鏡（#8）也要用它。"""
+        return {"fps": self.fps, "width": self.width, "height": self.height, "safe": self.clip_safe()}
 
 
 FORMAT_16x9 = VideoFormat()
+
+FORMAT_9x16 = VideoFormat(
+    name="9x16", width=1080, height=1920, label="直式 9:16",
+    # 平台介面區：各平台沒有官方像素規格，第三方量測／廣告範本差很多（頂 8–15%、底 20–35%、右 120–200 px），
+    # 取中間偏保守：頂 240（12.5%，分頁列／搜尋鈕）、底 540（28%，帳號＋兩行說明＋音樂列＋導覽列）、右 140（按鈕欄）。
+    ui_top=240, ui_bottom=540, ui_right=140,
+    # 字幕：字級 64（ASS 的字級是行高；這套字型的中文字寬約字級的 0.69 倍＝44 px。手機直拿看約 2.9 mm，
+    # 跟 16:9 橫放全螢幕的 54 號字差不多大）。左右各留 160：置中，框的右緣（字＋內距 12）在按鈕欄左邊；
+    # 一行最多 17 個中文字，一句 25 字以內（旁白規則）最多折兩行。框的底邊貼著 ui_bottom 上緣：libass 的 MarginV
+    # 量到字的底，深底框再往外多 sub_pad，所以 sub_margin_v＝540＋12（實測一行的框 y 1292–1379）。
+    sub_size=64, sub_margin_v=540 + 12, sub_margin_lr=160, sub_pad=12,
+    # 圖表要讓的邊：頂＝平台頂端；底＝平台底部＋兩行字幕的框（2×64＋2×12）＋24 間隔；右＝按鈕欄＋20（慢推最多
+    # 放大 6%，右緣會往外推約 20 px）。
+    safe_top=240, safe_bottom=540 + 2 * 64 + 2 * 12 + 24, safe_right=140 + 20,
+)
+
+FORMATS = {f.name: f for f in (FORMAT_16x9, FORMAT_9x16)}
+
+
+def video_format(aspect: str) -> VideoFormat:
+    """「16:9」「9:16」「16x9」「9x16」「橫式」「直式」→ VideoFormat。看不懂丟 ProjectError（繁中）。"""
+    from article_to_video.user_settings import SettingsError, normalize_value  # 避免循環匯入
+
+    try:
+        return FORMATS[normalize_value("aspect", aspect)]
+    except SettingsError:
+        raise ProjectError(f"畫面比例「{aspect}」看不懂，只能是 16:9（橫式）或 9:16（直式）") from None
 
 
 @dataclass(frozen=True)
@@ -370,10 +433,7 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
         spec = {
             "grammar": T3,
             "duration": st.frames / fps,
-            "fps": fps,
-            "width": fmt.width,
-            "height": fmt.height,
-            "safe": {"bottom": fmt.safe_bottom},
+            **fmt.spec_base(),
             "data": data,
             "cues": cues,
         }

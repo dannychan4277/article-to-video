@@ -13,9 +13,10 @@
       成片.mp4           燒好字幕的成片（16:9）
       審片頁.html        給作者看的審片頁（預覽與出片都會更新）
       字幕.srt           字幕檔（檔名故意跟成片不同：同名 .srt 會被播放器自動疊上去，變成兩層字幕）
+      成片-9x16.mp4、字幕-9x16.srt、審片頁-9x16.html   直式（9:16）版，跟 16:9 的並存（--aspect 9:16 或預設比例設直式）
       build/             建置產物，可整個刪掉重來
         narration/       配音層快取（依「配音層｜聲音｜語速｜文字」）與 timing.json
-        16x9/            這個畫面比例的產物：specs/、clips/、logs/、fonts/、stills/、timeline.json、review.json、subs.*、narration.wav、soundtrack.wav
+        16x9/、9x16/     各畫面比例的產物：specs/、clips/、logs/、fonts/、stills/、timeline.json、review.json、subs.*、narration.wav、soundtrack.wav
 
 設定檔都是 UTF-8 JSON，由 Claude 寫、這裡驗證。驗證錯誤一次列出全部問題，每條都指出哪個分鏡、哪個欄位。
 """
@@ -93,7 +94,7 @@ class ProjectError(ValueError):
 
 @dataclass(frozen=True)
 class VariantPaths:
-    """某個畫面比例（16x9；直式那張票加 9x16）的建置產物。"""
+    """某個畫面比例（16x9、9x16；見 timeline.FORMATS）的建置產物。"""
 
     root: Path
 

@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+import math
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +27,7 @@ __all__ = [
     "check_libass_log",
     "missing_subtitle_glyphs",
     "subtitle_lines",
+    "wrap_subtitle",
     "write_ass",
     "write_srt",
 ]
@@ -88,8 +91,59 @@ def _ass_text(s: str) -> str:
     return s.replace("\\", "＼").replace("{", "｛").replace("}", "｝")
 
 
+_NO_LINE_START = set("、，。．・：；？！）」』】》〉…%％")
+"""這些標點不能放在一行開頭（跟著前一個字）。"""
+
+
+_EM_PER_SIZE = 1000 / 1448
+"""ASS 字級＝行高：libass 把字型的 ascender＋descender（Noto Sans CJK：1160＋288，每 em 1000）縮放成字級，
+所以一個中文字（1 em）寬約字級的 0.69 倍（實測 58 號字 13 個字寬 520 px）。"""
+
+
+def _em(ch: str) -> float:
+    """估一個字的寬度（em）：中日韓與全形字 1；其他（英數、半形標點）抓寬一點 0.6。"""
+    return 1.0 if unicodedata.east_asian_width(ch) in ("W", "F") else 0.6
+
+
+def wrap_subtitle(text: str, max_em: float) -> list[str]:
+    """一塊字幕放不進一行（max_em 個中文字寬）就自己折成幾行、每行差不多長。
+
+    libass 只會在空白處折行，中文整句沒有空白就直接衝出畫面（直式一行只放得下 17 個字）。
+    英數連在一起的（例 2024、DGS10、4.58%）不拆開；「、」「）」「%」這類不放在行首。
+    """
+    units: list[str] = []
+    for ch in text:
+        ascii_run = ch.isascii() and not ch.isspace() and units and units[-1][-1].isascii() and not units[-1][-1].isspace()
+        if units and (ascii_run or ch in _NO_LINE_START):
+            units[-1] += ch
+        else:
+            units.append(ch)
+    width = [sum(_em(c) for c in u) for u in units]
+    total = sum(width)
+    if total <= max_em:
+        return [text]
+    n = math.ceil(total / max_em)
+    while True:
+        lines: list[str] = []
+        cur, cur_w, target = "", 0.0, total / n
+        for u, w in zip(units, width):
+            if cur and (cur_w + w > max_em or (cur_w + w / 2 > target and len(lines) < n - 1)):
+                lines.append(cur.strip())
+                cur, cur_w = "", 0.0
+            if not cur and u.isspace():
+                continue  # 行首不留空白
+            cur += u
+            cur_w += w
+        lines.append(cur.strip())
+        if len(lines) <= n or n > len(units):
+            return lines
+        n += 1
+
+
 def write_ass(lines: Iterable[SubtitleLine], path: Path, fmt: VideoFormat) -> None:
-    """深底框白字：BorderStyle 3（不透明底框），框色 #141414、約 25% 透明，Outline＝框的內距。"""
+    """深底框白字：BorderStyle 3（不透明底框），框色 #141414、約 25% 透明，Outline＝框的內距。
+    一行放不下的字幕自己折行（wrap_subtitle）：可用寬度＝畫面寬－左右邊距。"""
+    max_em = (fmt.width - 2 * fmt.sub_margin_lr) / (fmt.sub_size * _EM_PER_SIZE)
     box = "&H40141414"
     style = ",".join(str(x) for x in [
         "Default", SUBTITLE_FONT_FAMILY, fmt.sub_size, "&H00FFFFFF", "&H00FFFFFF", box, box,
@@ -106,7 +160,9 @@ def write_ass(lines: Iterable[SubtitleLine], path: Path, fmt: VideoFormat) -> No
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
     events = "".join(
-        f"Dialogue: 0,{_ass_time(x.start)},{_ass_time(x.end)},Default,,0,0,0,,{_ass_text(x.text)}\n" for x in lines
+        f"Dialogue: 0,{_ass_time(x.start)},{_ass_time(x.end)},Default,,0,0,0,,"
+        + r"\N".join(_ass_text(t) for t in wrap_subtitle(x.text, max_em)) + "\n"
+        for x in lines
     )
     path.write_text(head + events, encoding="utf-8")
 

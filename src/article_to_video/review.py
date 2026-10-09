@@ -39,7 +39,7 @@ from article_to_video.build import BuildPlan, plan_build
 from article_to_video.clip_cache import clip_hash
 from article_to_video.clips import ClipRenderError, render_stills
 from article_to_video.review_page import CardModel, CardSection, CheckItem, PageModel, StillModel, render_review_html
-from article_to_video.timeline import ClipPlan, Timeline
+from article_to_video.timeline import ClipPlan, Timeline, VideoFormat
 
 __all__ = [
     "NO_OPEN_ENV",
@@ -381,6 +381,7 @@ def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], vid
         video_src=_rel(page, video) if video else None,
         removed=version.removed,
         page_sections=list(extras.page),
+        aspect=plan.format.name,
     )
 
 
@@ -419,10 +420,12 @@ def preview_project(
     contributors: Sequence[Contributor] = (),
     jobs: int | None = None,
     data_dir: str | os.PathLike | None = None,
+    fmt: VideoFormat | None = None,
     log: Log = _quiet,
 ) -> ReviewResult:
-    """預覽模式：配音＋時間軸＋分鏡靜態圖＋審片頁，不渲片段、不出成片。data_dir：使用者資料位置（設定快照用）。"""
-    plan = plan_build(project_dir, tts=tts, data_dir=data_dir, log=log)
+    """預覽模式：配音＋時間軸＋分鏡靜態圖＋審片頁，不渲片段、不出成片。data_dir：使用者資料位置（設定快照用）。
+    fmt：畫面比例（不給就照設定快照的預設比例，見 plan_build）。"""
+    plan = plan_build(project_dir, tts=tts, fmt=fmt, data_dir=data_dir, log=log)
     return make_review(plan, contributors=contributors, jobs=jobs, log=log)
 
 
