@@ -28,6 +28,7 @@ from article_to_video.subtitles import (
     SUBTITLE_FONT_FAMILY, missing_subtitle_glyphs, subtitle_lines, write_ass, write_srt,
 )
 from article_to_video.timeline import FORMAT_16x9, ClipPlan, Timeline, VideoFormat, build_timeline, plan_clips
+from article_to_video.user_settings import snapshot_into_project
 
 __all__ = ["BuildPlan", "BuildResult", "build_project", "plan_build"]
 
@@ -74,8 +75,13 @@ def plan_build(
     tts: str | None = None,
     fmt: VideoFormat = FORMAT_16x9,
     ffmpeg: Path | None = None,
+    data_dir: str | os.PathLike | None = None,
     log: Log = _quiet,
 ) -> BuildPlan:
+    """data_dir：使用者資料位置（見 user_settings.py）。專案還沒有設定快照時，從那裡的使用者設定補進 settings.json。"""
+    added = snapshot_into_project(project_dir, data_dir)
+    if added:
+        log(f"設定快照：從使用者設定補上 {'、'.join(added)}（之後改使用者設定不會影響這支片）")
     project = load_project(project_dir, overrides={"tts": tts})
     s = project.settings
 
@@ -118,11 +124,12 @@ def build_project(
     jobs: int | None = None,
     fmt: VideoFormat = FORMAT_16x9,
     preflight: Sequence[Callable[[BuildPlan], None]] = (),
+    data_dir: str | os.PathLike | None = None,
     log: Log = _quiet,
 ) -> BuildResult:
     """建置成片。preflight：渲染前的檢查，丟 ProjectError 就不出片（數字對帳那張票接在這裡）。"""
     ffmpeg = find_ffmpeg()
-    plan = plan_build(project_dir, tts=tts, fmt=fmt, ffmpeg=ffmpeg, log=log)
+    plan = plan_build(project_dir, tts=tts, fmt=fmt, ffmpeg=ffmpeg, data_dir=data_dir, log=log)
     for check in preflight:
         check(plan)
 

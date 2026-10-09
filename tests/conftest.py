@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import socket
@@ -69,6 +70,31 @@ def _block_network():
         socket.getaddrinfo = _real_getaddrinfo  # type: ignore[assignment]
 
 
+TEST_CHANNEL = "測試頻道"
+
+
+@pytest.fixture(autouse=True, scope="session")
+def user_data_dir(tmp_path_factory):
+    """使用者設定一律放 tmp，絕不讀寫真正的 ~/Library/Application Support/article-to-video。
+
+    用環境變數 ARTICLE_TO_VIDEO_DATA 指過去，被測程式另開的子行程也吃得到。
+    裡面先放一份「裝好之後」的使用者設定：只填了頻道名（片尾卡要用），其他用預設。
+    """
+    d = tmp_path_factory.mktemp("使用者資料")
+    (d / "settings.json").write_text(json.dumps({"channel": TEST_CHANNEL}, ensure_ascii=False), encoding="utf-8")
+    saved = {k: os.environ.get(k) for k in ("ARTICLE_TO_VIDEO_DATA", "CLAUDE_PLUGIN_DATA")}
+    os.environ["ARTICLE_TO_VIDEO_DATA"] = str(d)
+    os.environ.pop("CLAUDE_PLUGIN_DATA", None)
+    try:
+        yield d
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 @dataclass(frozen=True)
 class BuiltProject:
     dir: Path
@@ -78,7 +104,7 @@ class BuiltProject:
 
 
 @pytest.fixture(scope="session")
-def built_project(tmp_path_factory) -> BuiltProject:
+def built_project(tmp_path_factory, user_data_dir) -> BuiltProject:
     """把 tests/fixtures/mini_project 複製到 tmp（路徑故意帶中文和空白），用 CLI＋假配音層建置一次，整個 session 共用。"""
     root = tmp_path_factory.mktemp("影片") / "解說影片 測試" / "2026-10-09-殖利率曲線"
     shutil.copytree(MINI_PROJECT, root)
