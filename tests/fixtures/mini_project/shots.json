@@ -1,0 +1,44 @@
+{
+ "shots": [
+  {
+   "id": "SH01",
+   "note": "測試用自製分鏡：2023 年兩年期與十年期美國公債殖利率年平均（FRED DGS2、DGS10 日資料自算，2026-10-09 下載）",
+   "start": {"segment": "s01"},
+   "chart": {
+    "data": {
+     "title": "短天期殖利率反而比較高",
+     "unit": "美國公債殖利率，2023 年平均，%",
+     "source": "來源：FRED（DGS2、DGS10），年平均自算",
+     "chart": "bar",
+     "decimals": 2,
+     "suffix": "%",
+     "series": [
+      {"label": "兩年期", "value": 4.58},
+      {"label": "十年期", "value": 3.96}
+     ],
+     "highlight": {"index": 0, "text": "短天期較高"}
+    },
+    "cues": [
+     {"at": 0, "kind": "title"},
+     {"at": {"segment": "s01", "word": "殖利率"}, "kind": "bar", "data": {"index": 0}},
+     {"at": {"segment": "s01", "word": "四點五八", "edge": "end"}, "kind": "highlight"},
+     {"at": {"segment": "s02", "word": "十年期", "offset": 0.1}, "kind": "bar", "data": {"index": 1}}
+    ]
+   }
+  },
+  {
+   "id": "SH02",
+   "note": "接續 SH01：同一張圖，第一幀就畫好，只換標註",
+   "start": {"segment": "s02", "word": "曲線"},
+   "continues": true,
+   "chart": {
+    "data": {
+     "highlight": {"index": 1, "text": "長天期較低"}
+    },
+    "cues": [
+     {"at": {"segment": "s02", "word": "倒掛"}, "kind": "highlight"}
+    ]
+   }
+  }
+ ]
+}

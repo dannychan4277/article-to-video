@@ -6,9 +6,18 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import socket
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
+
+FIXTURES = Path(__file__).parent / "fixtures"
+MINI_PROJECT = FIXTURES / "mini_project"
 
 _LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 
@@ -58,3 +67,25 @@ def _block_network():
         socket.socket.connect = _real_connect  # type: ignore[method-assign]
         socket.socket.connect_ex = _real_connect_ex  # type: ignore[method-assign]
         socket.getaddrinfo = _real_getaddrinfo  # type: ignore[assignment]
+
+
+@dataclass(frozen=True)
+class BuiltProject:
+    dir: Path
+    video: Path
+    srt: Path
+    stdout: str
+
+
+@pytest.fixture(scope="session")
+def built_project(tmp_path_factory) -> BuiltProject:
+    """把 tests/fixtures/mini_project 複製到 tmp（路徑故意帶中文和空白），用 CLI＋假配音層建置一次，整個 session 共用。"""
+    root = tmp_path_factory.mktemp("影片") / "解說影片 測試" / "2026-10-09-殖利率曲線"
+    shutil.copytree(MINI_PROJECT, root)
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    proc = subprocess.run(
+        [sys.executable, "-m", "article_to_video", "build", str(root), "--tts", "fake"],
+        capture_output=True, text=True, encoding="utf-8", env=env,
+    )
+    assert proc.returncode == 0, f"建置失敗：\n{proc.stdout}\n{proc.stderr}"
+    return BuiltProject(dir=root, video=root / "成片.mp4", srt=root / "字幕.srt", stdout=proc.stdout)

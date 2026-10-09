@@ -1,0 +1,143 @@
+"""片段快取＋並行渲染：只重渲內容有變的片段，刪掉已經不存在的分鏡留下的舊檔。
+
+快取鍵（sha256）＝ 快取版本 ＋ spec（圖片路徑換成圖片內容的雜湊，所以專案搬家不會失效）
+               ＋ 這個片段用到的引擎檔（render.py、clip.html、clip.js、clips/<語法>.js、lib/*.js、字型）。
+檔案：specs/<片段>.json（實際給引擎的 spec）、clips/<片段>.mp4、clips/<片段>.sha256（渲成功才寫）、logs/render-<片段>.log。
+"""
+
+from __future__ import annotations
+
+import copy
+import functools
+import hashlib
+import json
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+
+from article_to_video.clips import ENGINE_DIR, ClipRenderError, render_clip
+from article_to_video.project import VariantPaths
+from article_to_video.timeline import ClipPlan
+
+__all__ = ["CACHE_VERSION", "RenderReport", "clip_hash", "engine_fingerprint", "render_planned_clips"]
+
+CACHE_VERSION = "1"
+_OUR_SUFFIXES = {".json", ".mp4", ".sha256", ".log"}
+
+
+@dataclass(frozen=True)
+class RenderReport:
+    rendered: list[str]
+    cached: list[str]
+    clips: dict[str, Path]
+    """片段 id → mp4，照時間順序。"""
+    hashes: dict[str, str]
+
+
+@functools.cache
+def engine_fingerprint(grammar: str) -> str:
+    files = [ENGINE_DIR / "render.py", ENGINE_DIR / "clip.html", ENGINE_DIR / "clip.js",
+             ENGINE_DIR / "clips" / f"{grammar}.js"]
+    files += sorted((ENGINE_DIR / "lib").glob("*.js"))
+    files += sorted((ENGINE_DIR / "lib" / "fonts").glob("*.woff"))
+    h = hashlib.sha256()
+    for f in files:
+        h.update(f.relative_to(ENGINE_DIR).as_posix().encode())
+        h.update(b"\0")
+        h.update(f.read_bytes())
+    return h.hexdigest()
+
+
+def _file_digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def clip_hash(plan: ClipPlan) -> str:
+    spec = copy.deepcopy(plan.spec)
+    for cue in spec.get("cues") or []:
+        img = cue.get("image") if isinstance(cue, dict) else None
+        if isinstance(img, str) and img and not img.startswith(("data:", "http:", "https:")):
+            p = Path(img)
+            cue["image"] = "sha256:" + (_file_digest(p) if p.is_file() else f"missing:{img}")
+    payload = json.dumps(spec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    h = hashlib.sha256()
+    for part in (CACHE_VERSION, payload, engine_fingerprint(plan.grammar)):
+        h.update(part.encode())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def render_planned_clips(
+    plans: Sequence[ClipPlan],
+    paths: VariantPaths,
+    *,
+    ffmpeg: Path,
+    jobs: int = 3,
+    on_clip: Callable[[str, bool], None] | None = None,
+) -> RenderReport:
+    """渲（或從快取拿）每個片段。任一片段失敗就丟 ClipRenderError，訊息點名是哪個分鏡。"""
+    for d in (paths.specs, paths.clips, paths.logs):
+        d.mkdir(parents=True, exist_ok=True)
+    keep = {p.id for p in plans}
+    _remove_stale(paths, keep)
+
+    hashes = {p.id: clip_hash(p) for p in plans}
+    todo: list[ClipPlan] = []
+    cached: list[str] = []
+    for p in plans:
+        spec_path = paths.specs / f"{p.id}.json"
+        spec_path.write_text(json.dumps(p.spec, ensure_ascii=False, indent=1), encoding="utf-8")
+        mp4, stamp = paths.clips / f"{p.id}.mp4", paths.clips / f"{p.id}.sha256"
+        if mp4.is_file() and stamp.is_file() and stamp.read_text(encoding="utf-8").strip() == hashes[p.id]:
+            cached.append(p.id)
+            if on_clip:
+                on_clip(p.id, True)
+        else:
+            stamp.unlink(missing_ok=True)
+            todo.append(p)
+
+    def one(p: ClipPlan) -> str:
+        mp4 = paths.clips / f"{p.id}.mp4"
+        log = paths.logs / f"render-{p.id}.log"
+        try:
+            res = render_clip(paths.specs / f"{p.id}.json", mp4, ffmpeg=ffmpeg)
+        except ClipRenderError as e:
+            log.write_text(e.log, encoding="utf-8")
+            shots = "、".join(p.shot_ids)
+            raise ClipRenderError(f"分鏡 {shots} 的片段渲染失敗：{e}", page_errors=e.page_errors, log=e.log) from e
+        log.write_text("\n".join(res.warnings), encoding="utf-8")
+        (paths.clips / f"{p.id}.sha256").write_text(hashes[p.id], encoding="utf-8")
+        return p.id
+
+    rendered: list[str] = []
+    if todo:
+        with ThreadPoolExecutor(max_workers=max(1, min(jobs, len(todo)))) as pool:
+            futures = [pool.submit(one, p) for p in todo]
+            errors: list[ClipRenderError] = []
+            for f in futures:
+                try:
+                    pid = f.result()
+                    rendered.append(pid)
+                    if on_clip:
+                        on_clip(pid, False)
+                except ClipRenderError as e:
+                    errors.append(e)
+            if errors:
+                if len(errors) == 1:
+                    raise errors[0]
+                raise ClipRenderError("\n\n".join(str(e) for e in errors), log="\n".join(e.log for e in errors))
+
+    return RenderReport(rendered=rendered, cached=cached,
+                        clips={p.id: paths.clips / f"{p.id}.mp4" for p in plans}, hashes=hashes)
+
+
+def _remove_stale(paths: VariantPaths, keep: set[str]) -> None:
+    """刪掉已經不在分鏡設定裡的片段、spec、戳記、紀錄（不然 qa 會掃到舊的）。"""
+    for d in (paths.specs, paths.clips, paths.logs):
+        for f in d.iterdir():
+            if not f.is_file() or f.suffix not in _OUR_SUFFIXES:
+                continue
+            stem = f.stem[len("render-"):] if f.name.startswith("render-") else f.stem
+            if stem not in keep:
+                f.unlink()
