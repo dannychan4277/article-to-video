@@ -102,6 +102,9 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video narrate "<專�
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings set --project "<專案>" --voice 曉雨 --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
+- 「講快一點／慢一點」（整支片）：同一行改成 `--rate`，預設 +15%，一次調 5% 左右（快：`--rate +20%`；慢：`--rate +10%`）；
+  整支重新配音，再 narrate 看新的秒數調錨點。以後的片都要這個語速，拿掉 `--project`。
+
 ## 3. 預覽（只重渲改到的分鏡）
 
 ```

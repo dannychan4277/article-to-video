@@ -15,7 +15,7 @@
     雙重否定        不是不、不能不、不會不、沒有不、非不、不得不
     指代            它、其、此、該（「其他、其實、尤其、因此、應該…」這些詞裡的不算）
     英文縮寫        全大寫或兩個字母以內的英文，AI 配音可能逐字母唸；同一個全稿只提醒一次
-    全長            用每秒 4 字估，不在 2–4 分鐘（480–960 字）
+    全長            用每秒 4.4 字估，不在 2–4 分鐘（528–1056 字）
 
 字數（n_chars）：中文一字一個；全大寫縮寫逐字母唸（FRED＝4）；其他英文字約三個字母一個音；標點不算。
 看語意的規則（用作者的詞、不加原文沒有的主張、一句一個畫面…）這裡查不到，見主 skill 的 narration-rules.md。
@@ -35,7 +35,8 @@ from article_to_video.project import NARRATION_FILE, ProjectError
 __all__ = ["LintIssue", "LintReport", "SegmentLint", "format_lint", "lint_project", "lint_segments", "n_chars"]
 
 PUNCT = "，。？！；：、「」『』（）()《》〈〉… ,.?!;:\"'"
-ZH_PER_SEC = 4.0
+ZH_PER_SEC = 4.4
+"""估全長用：每秒唸幾個字（不算標點，含段間停頓）。預設語速 +15%、頭尾空白修掉之後，示範片實測 500 字 114 秒（4.38）；之前 +5% 時是 3.73。"""
 SEGMENT_MIN, SEGMENT_MAX = 25, 60
 BREATH_MAX = 12
 SENTENCE_MAX = 25

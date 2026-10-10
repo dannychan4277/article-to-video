@@ -87,6 +87,102 @@ def test_unused_cache_entries_are_cleaned_up(tmp_path):
     assert len(list(tmp_path.glob("*.wav"))) == 1
 
 
+# ---------------------------------------------------------------- 頭尾靜音（節奏）
+
+
+class ToneTTS:
+    """測試替身：聽得到聲音的配音。開頭靜音 0.6 秒、每個字一段 0.25 秒的 440 Hz 音（第 i 個字的音量各不相同，
+    用來認出聽到的是哪個字）、標點停 0.3 秒、結尾靜音 1.0 秒——像 edge-tts 一樣頭尾帶一大段空白。"""
+
+    name = "tone"
+    HEAD, CHAR, PAUSE, TAIL = 0.6, 0.25, 0.3, 1.0
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @staticmethod
+    def amp(i: int) -> int:
+        return 2000 + 1500 * i
+
+    def synthesize(self, text, *, voice, rate, out_stem):
+        import math
+        import struct
+
+        self.calls += 1
+        sr, t, words, samples = 48000, self.HEAD, [], []
+
+        def silence(sec: float) -> None:
+            samples.extend([0] * round(sec * sr))
+
+        silence(self.HEAD)
+        n = 0
+        for i, ch in enumerate(text):
+            if ch in "，。":
+                silence(self.PAUSE)
+                t += self.PAUSE
+                continue
+            k = round(self.CHAR * sr)
+            samples.extend(round(self.amp(n) * math.sin(2 * math.pi * 440 * j / sr)) for j in range(k))
+            words.append(WordTiming(i, i + 1, round(t, 6), round(t + self.CHAR, 6)))
+            t += self.CHAR
+            n += 1
+        silence(self.TAIL)
+        path = out_stem.with_suffix(".wav")
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(sr)
+            w.writeframes(struct.pack(f"<{len(samples)}h", *samples))
+        return Synthesis(path, words)
+
+
+def _rms(path: Path, start: float, end: float) -> float:
+    import math
+    import struct
+
+    with wave.open(str(path)) as w:
+        sr = w.getframerate()
+        w.setpos(round(start * sr))
+        raw = w.readframes(round((end - start) * sr))
+    xs = struct.unpack(f"<{len(raw) // 2}h", raw)
+    return math.sqrt(sum(x * x for x in xs) / len(xs)) if xs else 0.0
+
+
+def test_long_silence_before_and_after_each_segment_is_trimmed_to_a_short_pad(tmp_path):
+    """節奏：edge-tts 每段頭尾自帶約 0.2／0.8 秒空白，段與段之間停了 1.2 秒以上。配音層把頭尾的空白修成固定的一小段，
+    詞的時間跟著挪——每個詞的時間點上，修過的音檔裡聽到的還是那個字（錨點照樣落在詞上）；段落中間的停頓不動。"""
+    tts = ToneTTS()
+    text = "殖利率，走高。"
+    out = narrate({"s01": text}, engine=tts, voice="v", rate="+0%", cache_dir=tmp_path)
+    a = out["s01"]
+    assert 0 < a.words[0].start < 0.15  # 原本 0.6 秒
+    assert 0.05 < a.duration - a.speech_end < 0.3  # 原本 1.0 秒
+    with wave.open(str(a.audio)) as w:
+        assert w.getnframes() / w.getframerate() == pytest.approx(a.duration, abs=1e-4)
+    for n, wt in enumerate(a.words):  # 每個詞的時間裡聽到的就是那個字的音量（正弦波 RMS＝振幅／√2）
+        assert _rms(a.audio, wt.start + 0.03, wt.end - 0.03) == pytest.approx(ToneTTS.amp(n) / 2 ** 0.5, rel=0.03)
+    assert _rms(a.audio, 0, a.words[0].start - 0.01) < 50  # 第一個字之前是安靜的
+    assert a.words[3].start - a.words[2].end == pytest.approx(ToneTTS.PAUSE, abs=0.001)  # 逗號的停頓不動
+
+    again = narrate({"s01": text}, engine=tts, voice="v", rate="+0%", cache_dir=tmp_path)["s01"]
+    assert tts.calls == 1 and (again.duration, again.words) == (a.duration, a.words)
+
+    # 回報問題重現時：快取裡只有時間點、音檔換成同長度的靜音——修剪的位置照記下來的，時間跟作者那台一樣
+    [meta] = tmp_path.glob("*.json")
+    raw = meta.with_suffix(".wav")
+    frames = wave.open(str(raw)).getnframes()
+    with wave.open(str(raw), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(48000)
+        w.writeframes(b"\x00\x00" * frames)
+    for f in tmp_path.glob("*.wav"):
+        if f != raw:
+            f.unlink()
+    silent = narrate({"s01": text}, engine=tts, voice="v", rate="+0%", cache_dir=tmp_path)["s01"]
+    assert tts.calls == 1 and (silent.duration, silent.words) == (a.duration, a.words)
+
+
 # ---------------------------------------------------------------- edge-tts（假資料流）
 
 

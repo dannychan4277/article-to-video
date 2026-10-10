@@ -257,7 +257,9 @@ class Settings:
 
     voice: str = "zh-TW-HsiaoChenNeural"
     """edge 的聲音（曉臻／曉雨／雲哲）。付費配音各有自己的聲音（下面），換配音層不用改這個。"""
-    rate: str = "+5%"
+    rate: str = "+15%"
+    """語速（edge 的 rate；ElevenLabs speed、Google speakingRate 換算成 1＋語速%）。預設 +15%（2026-10 節奏調快；
+    之前是 +5%，舊片的設定快照記著當時的值，重建不變）。作者說「講快一點／慢一點」就改這個（settings set --rate）。"""
     tts: str = "edge"
     """配音層：edge（免費，預設）、elevenlabs、google（付費，要 API key，見 tts_providers.py）、fake（測試）。"""
     elevenlabs_voice: str = DEFAULT_ELEVENLABS_VOICE
@@ -265,8 +267,10 @@ class Settings:
     elevenlabs_model: str = DEFAULT_ELEVENLABS_MODEL
     google_voice: str = DEFAULT_GOOGLE_VOICE
     """Google 的聲音名稱（cmn-TW-Wavenet-A…）。"""
-    gap: float = 0.35
-    """每段旁白之後的留白秒數（下一段的起點＝上一段起點＋長度＋留白）。"""
+    gap: float = 0.25
+    """每段旁白之後的留白秒數（下一段的起點＝上一段起點＋長度＋留白）。配音層已把每段頭尾的空白修成
+    narration.LEAD_PAD／TAIL_PAD，所以段與段之間聽到的停頓約 0.55 秒（2026-10 節奏調快；之前 0.35＋edge 自帶的空白約 1.3 秒）。
+    不在設定快照裡：舊片重建也用這個值。"""
     lead: float = 0.15
     """錨點對到詞的「開頭」時，畫面提早這麼多秒出現，看起來才同步。"""
     tail: float = 5.0

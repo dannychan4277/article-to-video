@@ -319,6 +319,47 @@ def test_a_project_made_before_paid_voices_keeps_its_edge_voice(tmp_path, capsys
     assert snap["voice"] == "zh-TW-HsiaoYuNeural"
 
 
+def test_new_videos_talk_a_little_faster_with_every_voice(tmp_path, tts_server, monkeypatch, capsys):
+    """節奏（Danny：快一些些）：新片預設語速 +15%，三家一樣快——edge 的 rate、ElevenLabs 的 speed、Google 的
+    speakingRate；段與段之間的留白 0.25 秒。舊片的設定快照記著當時的語速，重建不會變快（留白和頭尾修剪會套用）。"""
+    import edge_tts
+
+    from test_narration import _mp3_bytes
+
+    audio, rates = _mp3_bytes(tmp_path, 1.0), []
+
+    class EdgeLike:
+        def __init__(self, text, voice, *, rate, **kw):
+            rates.append(rate)
+            self.text = text
+
+        async def stream(self):
+            yield {"type": "audio", "data": audio}
+            yield {"type": "WordBoundary", "offset": 1_000_000, "duration": 2_000_000, "text": self.text[:1]}
+
+    monkeypatch.setattr(edge_tts, "Communicate", EdgeLike)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", FAKE_KEY)
+    monkeypatch.setenv("GOOGLE_TTS_API_KEY", FAKE_GOOGLE_KEY)
+    data = tmp_path / "plugin-data"
+    _cli(capsys, "settings", "set", "--data-dir", data, "--channel", "小明")
+    new = _project(tmp_path)
+    for tts in ("edge", "elevenlabs", "google"):
+        _cli(capsys, "narrate", new, "--data-dir", data, "--tts", tts)
+    assert json.loads((new / "settings.json").read_text(encoding="utf-8"))["rate"] == "+15%"
+    assert set(rates) == {"+15%"}
+    assert [r["body"]["voice_settings"]["speed"] for r in tts_server.synth("elevenlabs")] == pytest.approx([1.15] * 2)
+    assert [r["body"]["audioConfig"]["speakingRate"] for r in tts_server.synth("google")] == pytest.approx([1.15] * 2)
+    # 假配音層 s01＝0.1＋12 字×0.2＋2 個標點×0.25＋0.3＝3.3 秒（整段靜音，不修剪）；s02 從 3.3＋0.25 起
+    assert "s02（3.55 秒起" in _cli(capsys, "narrate", new, "--data-dir", data, "--tts", "fake")
+
+    old = tmp_path / "舊片"
+    old.mkdir()
+    (old / "narration.json").write_text((new / "narration.json").read_text(encoding="utf-8"), encoding="utf-8")
+    (old / "settings.json").write_text(json.dumps({"channel": "小明", "rate": "+5%", "tts": "google"}), encoding="utf-8")
+    _cli(capsys, "narrate", old, "--data-dir", data)
+    assert tts_server.synth("google")[-1]["body"]["audioConfig"]["speakingRate"] == pytest.approx(1.05)
+
+
 # ---------------------------------------------------------------- key 不外流
 
 

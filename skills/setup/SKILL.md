@@ -99,7 +99,7 @@ afplay ${CLAUDE_PLUGIN_DATA}/previews/voices/voice-zh-TW-YunJheNeural.wav
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings set --voice 曉雨 --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-覺得講太快或太慢：語速預設 +5%，可以改成例如 `--rate +10%` 或 `--rate -5%`，用
+覺得講太快或太慢：語速預設 +15%，可以改成例如 `--rate +10%`（慢一點）或 `--rate +20%`（快一點），用
 `samples voice --rate +10% …`（其他照上面）重產試聽檔再聽一次，滿意了 `settings set` 時一起帶 `--rate`。
 
 ### 換成付費配音（ElevenLabs、Google）
