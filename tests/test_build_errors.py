@@ -67,6 +67,10 @@ def continuation_without_its_own_highlight_cue(shots, _):
     sh(shots, "SH02")["chart"]["cues"] = []
 
 
+def highlight_past_the_series(shots, _):
+    sh(shots, "SH02")["chart"]["data"]["highlight"]["index"] = 5
+
+
 def unknown_cue_kind(shots, _):
     sh(shots, "SH01")["chart"]["cues"][0]["kind"] = "titel"
 
@@ -87,7 +91,8 @@ CASES = {
     "分鏡長度是零": (zero_length_shot, ["分鏡 SH02", "SH01", "切入點"]),
     "沒有這個旁白段": (missing_segment, ["分鏡 SH02", "start", "「s09」"]),
     "接續分鏡改了數列": (continuation_changes_series, ["分鏡 SH02", "接續", "series"]),
-    "不認得的 cue": (unknown_cue_kind, ["分鏡 SH01", "chart.cues[0]", "titel"]),
+    "標註標到不存在的點": (highlight_past_the_series, ["分鏡 SH02", "標註", "第 5 個", "只有 2 個"]),
+    "不認得的 cue": (unknown_cue_kind,["分鏡 SH01", "chart.cues[0]", "titel"]),
     "cue 時間超出分鏡": (number_cue_past_shot_end, ["分鏡 SH02", "chart.cues[1]", "超出"]),
     "旁白有字幕字型沒有的字": (narration_char_missing_from_subtitle_font, ["旁白段 s01", "𠀋"]),
 }

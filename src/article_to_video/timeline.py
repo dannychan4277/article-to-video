@@ -507,6 +507,25 @@ def _chain_layout(project: Project, members: list[int]) -> dict[str, Any]:
     return {"highlights": highlights, "number": number}
 
 
+def _check_highlight_points(project: Project) -> None:
+    """每個標註標的點要在數列裡（公有數據抓到之後才知道有幾個點，所以在這裡查）。引擎遇到不存在的點會略過，不能默默少一個標註。"""
+    problems: list[str] = []
+    for n, shot in enumerate(project.shots):
+        if shot.chart is None:
+            continue
+        data, _ = effective_chart(project.shots, n)
+        series = data.get("series") if isinstance(data.get("series"), list) else []
+        for cue in shot.chart.cues:
+            if cue.kind != "highlight":
+                continue
+            i = resolve_highlight(cue.fields, data)["index"]
+            if isinstance(i, int) and not 0 <= i < len(series):
+                problems.append(f"{shot.label} 的標註（{cue.where}）標第 {i} 個點（0 起算），但數列只有 {len(series)} 個點"
+                                f"（0～{len(series) - 1}）：改 data.highlight.index 或 cue 的 data.index")
+    if problems:
+        raise ProjectError(problems, title="標註標到不存在的點")
+
+
 def _opening_at(cue: CueTiming, st: ShotTiming) -> float:
     """給引擎的 at：影片開頭那個分鏡的 title cue 落在第一幀時，提早到 OPENING_TITLE_AT（第一幀就讀得到）。"""
     if st.start_frame == 0 and cue.kind == "title" and not cue.carried and cue.at <= 0:
@@ -523,6 +542,7 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
         if st.shot.chart is not None:
             members.setdefault(chains[st.shot.id][2], []).append(n)
     layouts = {head: _chain_layout(project, ns) for head, ns in members.items() if len(ns) > 1}
+    _check_highlight_points(project)
     plans: list[ClipPlan] = []
     for n, st in enumerate(timeline.shots):
         shot = st.shot
