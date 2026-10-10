@@ -110,7 +110,7 @@
 ### 公有數據（自動抓、自動寫出處）
 
 ```json
-"data": {"title": "通膨預期一年來大致持平", "unit": "美國十年期通膨預期，%", "chart": "line", "decimals": 2, "suffix": "%",
+"data": {"title": "十年期通膨預期，大致持平", "unit": "美國十年期通膨預期，%", "chart": "line", "decimals": 2, "suffix": "%",
          "publicData": {"series": "DGS10-DFII10", "from": "2025-01-01", "to": "2025-12-31", "every": "month"}}
 ```
 
