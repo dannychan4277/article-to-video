@@ -48,7 +48,7 @@
 |---|---|---|
 | edge-tts（預設） | 免費 | 非官方介面，見下方「授權與注意」 |
 | Google Cloud Text-to-Speech | 一般用量落在每月免費額度內 | 台灣口音有 Standard、WaveNet 各 3 個聲音；要有開了帳單的 Google Cloud 專案 |
-| ElevenLabs | 依方案點數計費，一支 3 分鐘的片約 600 點 | 付費方案才能商用 |
+| ElevenLabs | 依方案點數計費，一支 3 分鐘的片旁白約 750 點、加上修改約 1,000–1,500 點 | 付費方案才能商用 |
 
 換付費配音需要一組 API 金鑰，放在 `~/.config/article-to-video/elevenlabs.key` 或 `~/.config/article-to-video/google-tts.key`（也可以用環境變數 `ELEVENLABS_API_KEY`、`GOOGLE_TTS_API_KEY`）。金鑰不會寫進專案檔、紀錄或回報問題的 zip。換配音不用重寫旁白或分鏡，只要重新配音、重新渲染畫面。
 
