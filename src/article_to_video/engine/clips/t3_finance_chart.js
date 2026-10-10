@@ -67,7 +67,6 @@ return {
       const vmin = Math.min(...vals), need = 56 * u * fs0; roomFor(need);
       while ((vmin - ticks[0]) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.unshift(+(ticks[0] - step).toFixed(10));
     }
-    const qh1 = ctx.of('highlight')[0], hiI = qh1 ? hlOf(qh1, d, S.length).index : -1;
     const posL = hls.filter(h => S[h.index] && S[h.index].value >= 0), negL = hls.filter(h => S[h.index] && S[h.index].value < 0);   // [article-to-video 內嵌修改] 整串的標註（見上面 chainLayout）
     if (kind === 'bar' && posL.length) {   // 标注的柱子上方要留够文字块（[Danny 本机改] 原本只管「不是最高那根」；标最高那根时斜向标注被 ty 夹在 F.y+60，文字压回柱子上）
       const nL = Math.max(...posL.map(h => h.lines.length)), need = (52 * nL + 44 + 30) * u * fs0, vmax = Math.max(...vals); roomFor(need);
@@ -89,14 +88,17 @@ return {
     const ink = (d.colors && d.colors.ink) || brand;                      // [article-to-video 內嵌修改] 品牌色太淺時，要讀的字與記號用加深的 ink（色條、小旗照用原色）
     L.col = { main, accent: (d.colors && d.colors.accent) || main, dim: (d.colors && d.colors.dim) || '#C6D2D8', brand, ink };
     L.updown = d.upDown === 'us' ? ['#1B9E5A', RED] : [RED, '#1B9E5A'];
-    if (!category) {   // [article-to-video 內嵌] 時間軸的名字互相重疊就不寫：直式畫面窄、字又放大兩成，原版的抽稀間隔常讓相鄰名字疊在一起。被標註那根優先，其餘照原本的規則（含 xTicks）從左到右、放得下才寫；沒有重疊時跟原版一樣
+    if (!category) {   // [article-to-video 內嵌] 時間軸的名字互相重疊就不寫：直式畫面窄、字又放大兩成，原版的抽稀間隔常讓相鄰名字疊在一起。照原本的規則（含 xTicks）從左到右、放得下才寫；沒有重疊時跟原版一樣
       c.font = `400 ${L.xFont}px ${NUM}`;
       const half = i => c.measureText(String(S[i].label ?? '')).width / 2;
       const base = i => d.xTicks ? d.xTicks.includes(i) : i % L.every === 0 || (i === n - 1 && (n - 1) % L.every >= L.every / 2);
-      const kept = hiI >= 0 && S[hiI] ? [hiI] : [];
-      for (let i = 0; i < n; i++) if (i !== hiI && base(i) && kept.every(j => Math.abs(xs[i] - xs[j]) >= half(i) + half(j) + 16 * u)) kept.push(i);
+      // [article-to-video 內嵌修改] 被標註的那一點不再硬塞名字：換標註（接續分鏡）時 x 軸名字會跟著變，硬塞的還會擠掉旁邊原本的名字。標註的字自己寫日期
+      const kept = [];
+      for (let i = 0; i < n; i++) if (base(i) && kept.every(j => Math.abs(xs[i] - xs[j]) >= half(i) + half(j) + 16 * u)) kept.push(i);
       L.xKeep = new Set(kept);
     }
+    c.font = `400 ${28 * u * fs0}px ${NUM}`;                               // [article-to-video 內嵌修改] 右側刻度值最寬到哪：線頭跟著跑的數值不能超過這裡
+    L.axisX0 = F.x + F.w - Math.max(...ticks.map(v => c.measureText(TY.fmt(v, tdec)).width)) - 10 * u;
     // [article-to-video 內嵌修改] 標註照時間一個換一個（接續分鏡：建置把上一個分鏡最後的標註沿用過來、時間寫成負的，第一幀就在）。
     // 跟前一個一模一樣（同一點、同樣的字）的標註不重來一次：start 沿用前一個的。位置（折線挑的位置、柱的三種擺法）每個標註 init 算好
     L.hl = ctx.of('highlight').map(q => hlOf(q, d, n)).filter(h => S[h.index]);
@@ -130,9 +132,9 @@ return {
     const gp = MO.seg(ctx.lt(t, gStart), 0, 0.6);
     const fmtTick = v => TY.fmt(v, L.tdec);
     CH.grid(c, F, L.ticks, yS, gp, { col: GRID, zeroCol: L.zeroBased ? INK : GRID, font: `400 ${28 * u * fs}px ${NUM}`, labelCol: '#5b666b', side: 'right', lw: 1.5 * u, zeroLw: 3 * u, fmt: fmtTick, labelDy: -10 * u });
-    const qh0 = ctx.of('highlight')[0], hi0 = qh0 ? (qh0.data && qh0.data.index != null ? qh0.data.index : (d.highlight && d.highlight.index != null ? d.highlight.index : S.length - 1)) : -1;
-    const keep = L.xKeep ? (i => L.xKeep.has(i)) : i => d.xTicks ? (d.xTicks.includes(i) || i === hi0) : i % L.every === 0 || i === hi0 ||   // [Danny 本机改] data.xTicks：自己指定要写名字的索引（时间轴按月/按年对齐）
-      (i === S.length - 1 && (S.length - 1) % L.every >= L.every / 2);   // 被标注的那根永远有名字；末尾标签离上一个太近就不硬塞
+    // [article-to-video 內嵌修改] 原版「被标注的那根永远有名字」拿掉（類目軸本來每根都有名字；寫了 xTicks 就只寫 xTicks），換標註時 x 軸不跳
+    const keep = L.xKeep ? (i => L.xKeep.has(i)) : i => d.xTicks ? d.xTicks.includes(i) : i % L.every === 0 ||   // [Danny 本机改] data.xTicks：自己指定要写名字的索引（时间轴按月/按年对齐）
+      (i === S.length - 1 && (S.length - 1) % L.every >= L.every / 2);   // 末尾标签离上一个太近就不硬塞
     const xp = MO.seg(ctx.lt(t, gStart + 0.15), 0, 0.5), xy = F.y + F.h + 46 * u, xo = { font: `400 ${L.xFont}px ${NUM}`, col: '#3a4246' };
     if (!L.stagger) CH.xLabels(c, S.map((r, i) => ({ x: xs[i], label: keep(i) ? String(r.label ?? '') : '' })), xy, xp, xo);
     else { CH.xLabels(c, S.map((r, i) => ({ x: xs[i], label: i % 2 ? '' : String(r.label ?? '') })), xy, xp, xo); CH.xLabels(c, S.map((r, i) => ({ x: xs[i], label: i % 2 ? String(r.label ?? '') : '' })), xy + L.xFont * 1.15, xp, xo); }
@@ -167,7 +169,13 @@ return {
       pts = S.map((r, i) => [xs[i], yS(r.value)]);
       const lp = MO.smooth(dp);
       const hp = CH.line(c, pts, lp, { col: L.col.main, lw: 5 * u, headR: 9 * u, area: { top: F.y, base: F.y + F.h, c0: rgba(L.col.main, 0.12, 'rgba(227,18,11,0.12)'), c1: rgba(L.col.main, 0, 'rgba(227,18,11,0)') } });
-      if (hp && lp < 1) { const v = yS.inv(hp[1]); c.save(); c.font = `700 ${36 * u}px ${NUM}`; c.fillStyle = L.col.main; c.textAlign = 'left'; c.textBaseline = 'middle'; haloTabular(c, fmtv(d, v), hp[0] + 20 * u, hp[1] - 4 * u, {}, 8 * u); c.restore(); }   // [article-to-video 內嵌修改] 描白邊
+      if (hp && lp < 1) {   // [article-to-video 內嵌修改] 描白邊；快到最後一點時滑到線尾數值的位置（原版一直寫在線頭右邊，最後幾幀壓到右側刻度值，長完再跳到線尾數值的位置）
+        const v = yS.inv(hp[1]), txt = fmtv(d, v), [ex, ey] = pts[n - 1]; c.save(); c.font = `700 ${36 * u}px ${NUM}`; c.fillStyle = L.col.main; c.textAlign = 'left';
+        c.textBaseline = 'middle'; const am = c.measureText('0').actualBoundingBoxAscent; c.textBaseline = 'alphabetic'; const aa = c.measureText('0').actualBoundingBoxAscent;
+        const tw = [...txt].reduce((s, ch) => s + c.measureText(/[0-9]/.test(ch) ? '0' : ch).width, 0);
+        const R = Math.max(tw + 40 * u, ex + 20 * u + tw - L.axisX0 + 10 * u), w = clamp((hp[0] - (ex - R)) / R);   // 線頭離最後一點 R 以內開始滑
+        const x = Math.min(lerp(hp[0] + 20 * u, hp[0] + L.endLab.x - ex - tw, w), L.axisX0 - tw), y = lerp(hp[1] - 4 * u + aa - am, hp[1] + L.endLab.y - ey, w);
+        haloTabular(c, txt, x, y, {}, 8 * u); c.restore(); }
       else if (lp >= 1 && endA > 0) { const v = S[n - 1].value; c.save(); c.globalAlpha = endA;
         c.font = `700 ${36 * u}px ${NUM}`; c.fillStyle = L.col.main; c.textAlign = 'right'; c.textBaseline = 'alphabetic'; haloTabular(c, fmtv(d, v), L.endLab.x, L.endLab.y, { align: 'right' }, 8 * u); c.restore(); }   // [article-to-video 內嵌修改] 位置挑不被線穿過的（placeLineText）、描白邊
     } else {

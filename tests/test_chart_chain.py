@@ -86,7 +86,7 @@ STILLS = {
     "SH01": [0.0, LAST],
     "SH02": [0.0, 0.7, LAST],   # 0.7 秒：還沒唸到「跌最深」
     "SH03": [0.0, 0.2, LAST],
-    "SH04": [0.0, LAST],
+    "SH04": [0.0, 1.2, 1.3, 1.4, LAST],   # 1.2～1.4 秒：折線快長完（線頭跑到右邊、靠近刻度值）
     "SH05": [0.0, LAST],
     "SH06": [0.0, LAST],
 }
@@ -166,7 +166,7 @@ def test_axis_stays_put_through_a_continued_chain(chain, shots):
 # ---------------------------------------------------------------- 1. 切點看不出來
 
 
-@pytest.mark.parametrize("before, after", [("SH01", "SH02"), ("SH02", "SH03"), ("SH04", "SH05")])
+@pytest.mark.parametrize("before, after", [("SH01", "SH02"), ("SH02", "SH03"), ("SH04", "SH05"), ("SH05", "SH06")])
 def test_continued_chart_looks_the_same_across_the_cut(chain, before, after):
     """上一個分鏡最後一幀 vs 接續分鏡第一幀：標註、淡掉的柱、線尾數值都要一樣（只有這句要換的東西才開始動，
     第一幀頂多動一點點）。原本：標註在切點消失、淡掉的柱閃回原色、線尾數值跳出來。"""
@@ -195,3 +195,29 @@ def test_only_what_the_new_label_changes_moves_during_the_switch(chain):
     same = ~dilate(np.abs(old - new).max(axis=-1) > 8, 50)
     moved = int(((np.abs(mid - old).max(axis=-1) > 40) & same).sum())
     assert moved < 150, f"換標註時，新舊都一樣的地方動了 {moved} 個像素"
+
+
+# ---------------------------------------------------------------- 4. x 軸名字不跳、線頭數值不壓刻度
+
+
+def x_label_row(chain: Chain, img: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    """x 軸名字那一列（最下面那條格線底下）。"""
+    _, bottom = grid_span(chain, ref)
+    return img[bottom + 8: bottom + 90]
+
+
+def test_x_axis_labels_stay_put_through_a_continued_chain(chain):
+    """折線一串：SH04 標谷底（不在 xTicks 上）、SH05／SH06 標最後一點，x 軸寫名字的位置從頭到尾一樣。
+    原本：被標註的那一點硬塞一個名字（擠掉旁邊原本有的），換標註時 x 軸名字跟著變。"""
+    ref = chain.last("SH04")
+    for sid in ("SH05", "SH06"):
+        n = changed(x_label_row(chain, chain.last(sid), ref), x_label_row(chain, ref, ref))
+        assert n == 0, f"{sid} 的 x 軸名字跟 SH04 不一樣（{n} 個像素）"
+
+
+@pytest.mark.parametrize("t", [1.2, 1.3, 1.4])
+def test_moving_line_value_never_covers_the_axis_numbers(chain, t):
+    """折線長出來時，線頭旁邊跟著跑的數值快到右邊時不能壓到右側的刻度值：刻度欄跟長完之後一樣。"""
+    ref = chain.last("SH04")
+    n = changed(tick_column(chain, chain.at("SH04", t), ref), tick_column(chain, ref, ref))
+    assert n == 0, f"{t} 秒線頭數值壓到刻度欄（{n} 個像素）"
