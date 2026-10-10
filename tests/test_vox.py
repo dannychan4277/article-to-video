@@ -347,21 +347,47 @@ def test_checking_every_box_unblocks_the_final_build(scenario):
     assert scenario.video.is_file()
 
 
-def test_box_followed_too_soon_by_the_next_item_blocks_the_final_build(tmp_path):
-    """框跟下一件素材至少隔 2 秒：SH03 的剪報改成一切進來就貼，SH02 的框之後只隔 1.9 秒 → 正式出片擋下。"""
+@pytest.mark.parametrize("excerpt_at", [0, 0.6])
+def test_box_followed_too_soon_by_the_next_item_blocks_the_final_build(tmp_path, excerpt_at):
+    """框推近（0.9 秒）之後鏡頭至少停 1.2 秒，再花 0.8 秒移到下一件素材：框到下一件至少隔 2.9 秒。
+    SH03 的剪報改成切進來 0 秒／0.6 秒就貼，SH02 的框之後只隔 1.9／2.5 秒 → 正式出片擋下（以前的 2 秒規則會放過 2.5 秒）。
+    SH03 的框到切走隔 2.3 秒：切走不用移鏡頭，2.1 秒就夠。"""
     shots = scenario_shots()
-    shots[2]["vox"]["cues"][0]["at"] = 0
+    shots[2]["vox"]["cues"][0]["at"] = excerpt_at
     root = new_project(tmp_path, shots)
     confirm_boxes(root, [b.token for b in project_boxes(root)[1]])  # 框本身核對過，只剩時間不夠
     gaps = {s.box.id: s.gap for s in box_statuses(plan_build(root, tts="fake"))}
-    expected = SEG_START["s03"] - word_time("s02", "三點九六")
-    assert expected < 2 and abs(gaps["SH02:1"] - expected) <= 1 / FPS
-    assert gaps["SH03:1"] >= 2
+    expected = SEG_START["s03"] + excerpt_at - word_time("s02", "三點九六")
+    assert expected < 2.9 and abs(gaps["SH02:1"] - expected) <= 1 / FPS
+    assert 2.1 <= gaps["SH03:1"] < 2.9
     with pytest.raises(BlockedBuild) as e:
         build_project(root, tts="fake", fmt=SMALL)
     msg = str(e.value)
-    assert "SH02:1" in msg and "2 秒" in msg
+    assert "SH02:1" in msg and "1.2 秒" in msg and "2.9 秒" in msg
     assert "SH03:1" not in msg and "✗ 還沒核對" not in msg
+
+
+def test_a_box_right_after_another_needs_less_time_when_the_camera_need_not_move(tmp_path):
+    """同一張表上連著框兩格、隔 2.45 秒：第二格在第一格推近後的畫面裡 → 鏡頭原地推過去，2.0 秒就夠；
+    第一格推得很近（zoom 6），第二格不在畫面裡 → 鏡頭要先移過去，要 2.9 秒 → 擋下。"""
+    root, where = new_table_project(tmp_path, {})
+
+    def shots(zoom: float | None) -> list[dict]:
+        rect = lambda k: [where[k][0] - 8, where[k][1] - 8, where[k][2] + 16, where[k][3] + 16]  # noqa: E731
+        first = {"at": {"segment": "s02", "word": "十年期"}, "kind": "box", "rect": rect("c1"),
+                 **({"zoom": zoom} if zoom else {})}
+        return [{"id": "SH01", "start": {"segment": "s01"}, "vox": {"cues": [
+            {"at": 0, "kind": "image", "image": "圖1"}, first,
+            {"at": {"segment": "s03", "word": "原文"}, "kind": "box", "rect": rect("c0")}]}}]
+
+    gap = word_time("s03", "原文") - word_time("s02", "十年期")
+    assert abs(gap - 2.45) < 0.01
+    write_project(root, shots(None))
+    ok = {s.box.id: s for s in box_statuses(plan_build(root, tts="fake", fmt=SMALL))}
+    assert ok["SH01:1"].gap_ok and ok["SH01:1"].next_what == "下一個框"
+    write_project(root, shots(6))
+    far = {s.box.id: s for s in box_statuses(plan_build(root, tts="fake", fmt=SMALL))}
+    assert not far["SH01:1"].gap_ok and "移過去" in far["SH01:1"].next_what
 
 
 def edit_box(root: Path, shot_id: str, **changes: object) -> None:

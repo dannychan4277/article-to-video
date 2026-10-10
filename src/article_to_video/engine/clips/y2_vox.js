@@ -57,13 +57,22 @@ return {
     const hls = ctx.of('highlight');
     const events = [...items.map(it => ({ at: it.q.at, it })), ...hls.map(h => ({ at: h.at, h }))].sort((a, b) => a.at - b.at);
     let curItem = null;
+    // [article-to-video 內嵌] 框（有 data.frame）的鏡頭時間由外掛給（data.camera，跟外掛算「框停多久」的規則同一組數）：
+    // 揭開後 pushAt 秒開始推、推 push 秒；要先移過去的框提早 travel 秒出發；框之後換下一件素材，在它出現前 itemTravel＋0.05 秒才出發
+    // ——鏡頭在框上停到最後一刻（真實試跑 #5：原版推近 1 秒、下一件前 0.95 秒就走，框只停 0.4～1 秒）。
+    const CAMV = { pushAt: 0.1, push: 0.8, travel: 0.8, itemTravel: 0.75, ...((ctx.data && ctx.data.camera) || {}) };
+    // [article-to-video 內嵌] 長距離移動時中途拉遠（dip）：移動到一半時，出發點與目的地的中心都還在畫面的八成以內，
+    // 不會有幾幀只剩桌面（真實試跑 #5：從推近的表格移到下一張卡，中間一秒多是空桌面）。
+    const dipFor = (a, b) => { const dx = Math.abs(b.x - a.x), dy = Math.abs(b.y - a.y), zm = Math.min(dx ? Ws * 0.8 / dx : Infinity, dy ? Hs * 0.8 / dy : Infinity), zg = Math.sqrt(a.z * b.z); return zg > zm ? zm / zg : 1; };
+    let onBox = false;   // 上一件是框（有 data.frame）
     for (const e of events) {
       if (e.it) {
         const tgt = { x: e.it.x, y: e.it.y, z: zFor(e.it) };
         if (!last) { keys.push({ t: 0, ...tgt }); }
-        else { const t0 = Math.max(last.t + 0.25, e.at - 0.95, Math.min(curItem ? curItem.done : 0, e.at - 0.4)), t1 = Math.max(t0 + 0.35, e.at - 0.05);   // 上一张卡没读完相机不走（最晚 at−0.4 起跑）
-          keys.push({ t: t0, x: last.x, y: last.y, z: last.z }); keys.push({ t: t1, ...tgt, ease: MO.longTail }); }
-        last = keys[keys.length - 1]; curItem = e.it;
+        else { const t0 = onBox ? Math.max(last.t + 0.1, e.at - CAMV.itemTravel - 0.05) : Math.max(last.t + 0.25, e.at - 0.95, Math.min(curItem ? curItem.done : 0, e.at - 0.4)), t1 = Math.max(t0 + 0.35, e.at - 0.05);   // 上一张卡没读完相机不走（最晚 at−0.4 起跑）
+          // 從框離開用 sineInOut（原版 longTail 前段猛、尾巴拖很長：鏡頭早早停在還沒有東西的空位上等）
+          keys.push({ t: t0, x: last.x, y: last.y, z: last.z }); keys.push({ t: t1, ...tgt, ease: onBox ? MO.sineInOut : MO.longTail }); keys[keys.length - 1].dip = dipFor(keys[keys.length - 2], keys[keys.length - 1]); }
+        last = keys[keys.length - 1]; curItem = e.it; onBox = false;
       } else if (curItem && curItem.kind === 'image' && e.h.data && e.h.data.rect && e.h.data.frame) {
         // [article-to-video 內嵌] 框的鏡頭由外掛排好（data.frame＝原圖上推近後要留在畫面裡的範圍，已照可用畫面的寬高比；
         // data.travel＝框不在目前畫面裡、要先移過去）。原版只看框多大就推（最多到上一鏡的 2.6 倍），正在唸的那一行、
@@ -75,10 +84,11 @@ return {
         const x0 = Math.min(fx0, bx - rx), x1 = Math.max(fx1, bx + rx), y0 = Math.min(fy0, by - ry), y1 = Math.max(fy1, by + ry);
         const fill = (ctx.data && ctx.data.frameFill) || FRAME_FILL;
         const z = Math.min(Ws * fill / (x1 - x0), Hs * fill / (y1 - y0)), cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-        const t0 = e.h.data.travel ? Math.max(last.t + 0.1, e.at - 0.8) : Math.max(last.t + 0.1, e.at + 0.2);
-        const t1 = e.h.data.travel ? Math.max(t0 + 0.35, e.at - 1 / ctx.FPS) : t0 + 1.0;
+        const t0 = e.h.data.travel ? Math.max(last.t + 0.1, e.at - CAMV.travel) : Math.max(last.t + 0.1, e.at + CAMV.pushAt);
+        const t1 = e.h.data.travel ? Math.max(t0 + 0.35, e.at - 1 / ctx.FPS) : t0 + CAMV.push;
         keys.push({ t: t0, x: last.x, y: last.y, z: last.z }); keys.push({ t: t1, x: cx, y: cy, z, ease: MO.sineInOut });
-        last = keys[keys.length - 1];
+        if (e.h.data.travel) keys[keys.length - 1].dip = dipFor(keys[keys.length - 2], keys[keys.length - 1]);
+        last = keys[keys.length - 1]; onBox = true;
       } else if (curItem && curItem.kind === 'image' && e.h.data && e.h.data.rect) {
         const im = ctx.IMG[curItem.q.image], R = e.h.data.rect, ib = imgBox(curItem, im, u);
         const cx = curItem.x + (ib.x + (R[0] + R[2] / 2) * ib.w) - curItem.w / 2, cy = curItem.y + (ib.y + (R[1] + R[3] / 2) * ib.h) - curItem.h / 2;
@@ -91,7 +101,7 @@ return {
         const x0 = cx - rw / 2, inView = Math.abs(x0 - last.x) * last.z < Ws / 2 - 20 * u && Math.abs(cy - last.y) * last.z < Hs / 2 - rh * last.z / 2;
         const t0 = inView ? Math.max(last.t + 0.1, e.at + 0.2) : Math.max(last.t + 0.1, e.at - 0.8), t1 = inView ? t0 + 1.0 : Math.max(t0 + 0.35, e.at - 1 / ctx.FPS);
         keys.push({ t: t0, x: last.x, y: last.y, z: last.z }); keys.push({ t: t1, x: cx, y: cy, z, ease: MO.sineInOut });
-        last = keys[keys.length - 1];
+        last = keys[keys.length - 1]; onBox = false;
       }
     }
     if (!keys.length) keys.push({ t: 0, x: W / 2, y: H / 2, z: 1 });
@@ -100,7 +110,7 @@ return {
     const end = keys[keys.length - 1]; keys.push({ t: Math.max(end.t + 0.01, ctx.dur), x: end.x, y: end.y, z: end.z * (1 + 0.01 * Math.max(0, ctx.dur - end.t)), ease: MO.linear });   // 停住后 1%/s 慢推
   },
   draw(c, t, ctx) {
-    const { W, H, u } = ctx, cam = CAM.at(keys, t);
+    const { W, H, u } = ctx, cam = camAt(t);
     const buf = UI.scratch('clip_vox', W, H), g = buf.getContext('2d'); g.reset();
     g.save(); g.translate((ctx.safe.left - ctx.safe.right) / 2, (ctx.safe.top - ctx.safe.bottom) / 2); CAM.apply(g, cam);   // [article-to-video 內嵌] 左右也平移（原版只平移上下）
     if (!ctx.alpha) { g.fillStyle = g.createPattern(CL.paperTile('clipdesk', C.desk, { amt: 12, fibers: 320, fiberCol: [110, 95, 70] }), 'repeat'); const s = 4 / cam.z; g.fillRect(cam.x - W * s, cam.y - H * s, W * 2 * s, H * 2 * s); }
@@ -113,7 +123,7 @@ return {
       CL.slideIn(g, q.at + ls(t, q.at), q.at, it.x, it.y, it.rot, gg => drawItem(gg, it, t, ctx), { from: ctx.portrait ? [120 * u, 360 * u] : [420 * u, -60 * u], tilt: 0.2, dur: 0.55, fps: 1e6 });
     }
     g.restore();
-    const [vx, vy] = CAM.velocity(tt => CAM.at(keys, tt), t);
+    const [vx, vy] = CAM.velocity(camAt, t);
     if (Math.hypot(vx, vy) >= 1.5) c.drawImage(buf, 0, 0);   // 先垫一张不偏移的：motionBlur 第一张就是偏移的，画面四边会留一圈半透明（出片是灰边）
     CAM.motionBlur(c, buf, vx * 0.6, vy * 0.6, 7);
     if (!ctx.alpha) {                                                   // 暗角＋静态颗粒（纸纹是贴死的，不逐帧抖）
@@ -122,6 +132,16 @@ return {
     }
   },
 };
+// [article-to-video 內嵌] 相機＝CAM.at 再加上移動途中的拉遠：關鍵幀 b 有 dip（<1）時，從上一個關鍵幀到 b 的路上，
+// 縮放乘上 dip^(4e(1−e))（e＝已走的比例，走到一半拉最遠、兩端不變），位置照舊，所以接得起來、不會頓一下。
+function camAt(t) {
+  const k = CAM.at(keys, t);
+  if (k.v == null) return k;
+  let i = 1; while (i < keys.length - 1 && t > keys[i].t) i++;
+  const b = keys[i];
+  if (b && b.dip && b.dip < 1) k.z *= Math.pow(b.dip, 4 * k.v * (1 - k.v));
+  return k;
+}
 function imgBox(it, im, u) { const f = CLIP.fit(im.width, im.height, 16 * u, 16 * u, it.w - 32 * u, it.h - 32 * u - (it.q.text ? 70 * u : 0)); return f; }
 // [article-to-video 內嵌] 螢光筆只上在「紙」上：原圖每個像素依它像不像紙（最暗的那個色版夠亮＝白紙、淺灰底）決定上多少黃，
 // 深色字、彩色字、色塊幾乎不上黃，正片疊底之後還是原本的顏色（原版整塊疊黃：藍字變綠字、紅字變橘，表格紅跌藍漲的意思會亂）。

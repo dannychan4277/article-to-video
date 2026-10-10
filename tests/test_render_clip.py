@@ -250,6 +250,65 @@ def test_vox_box_push_shows_exactly_the_frame_it_is_given(tmp_path, aspect):
     assert xs.max() - xs.min() > 0.7 * ws, "沒推近：標記擠在畫面中間"
 
 
+def _camera_still_runs(frames, times, thresh=0.6):
+    """相鄰兩幀平均差 < thresh 的連續時段（鏡頭停著，只有慢漂）：[(起, 訖)]。"""
+    import numpy as np
+
+    runs, start = [], None
+    for k in range(1, len(frames)):
+        still = float(np.abs(frames[k] - frames[k - 1]).mean()) < thresh
+        if still and start is None:
+            start = times[k - 1]
+        if not still and start is not None:
+            runs.append((start, times[k - 1]))
+            start = None
+    if start is not None:
+        runs.append((start, times[-1]))
+    return runs
+
+
+def test_vox_camera_holds_on_a_box_before_moving_to_the_next_item(tmp_path):
+    """框推近停住後，鏡頭至少停 1.2 秒才移向下一件素材（框到下一件隔 2.9 秒＝規則的最低限度）。
+    小畫面渲 1/15 秒一張：推近完（框出現後 0.9 秒）到離開之間，相鄰兩幀幾乎一樣的時段至少 1.1 秒。"""
+    import numpy as np
+    from PIL import Image
+
+    frame, rect = [0.3, 0.3, 0.3, 0.3 * 1.6 / (640 / 313)], [0.4, 0.38, 0.08, 0.06]
+    _framed_box_image(tmp_path / "表.png", frame, rect)
+    spec = {"grammar": "y2_vox", "duration": 5, "width": 640, "height": 360, "safe": {"bottom": 47},
+            "data": {"drift": 0.008, "frameFill": 0.94, "camera": {"pushAt": 0.1, "push": 0.8, "travel": 0.8, "itemTravel": 0.75}},
+            "cues": [{"at": 0, "kind": "image", "image": "表.png", "text": "圖1"},
+                     {"at": 1.0, "kind": "highlight", "data": {"rect": rect, "frame": frame, "travel": False}},
+                     {"at": 3.9, "kind": "point", "text": "下一張卡"}]}
+    times = [round(1.0 + k / 15, 4) for k in range(46)]  # 1.0～4.0
+    frames = [np.asarray(Image.open(p).convert("RGB")).astype(int)
+              for p in render_stills(spec, tmp_path / "s", times, base_dir=tmp_path).paths]
+    held = max((b - a for a, b in _camera_still_runs(frames, times) if a >= 1.8), default=0)
+    assert held >= 1.1, f"框推近後鏡頭只停了 {held:.2f} 秒：{_camera_still_runs(frames, times)}"
+
+
+def test_vox_camera_never_shows_an_empty_desk_while_moving_off_a_close_up(tmp_path):
+    """從推得很近的框（圖的最左邊）移到下一張圖（還沒貼上來，3.95 秒到位、4.0 秒貼上）：移動途中（3.15 秒起），
+    到位前 0.15 秒為止，每一幀都還看得到一成以上剛離開的那張圖——中途拉遠、不拖長尾，不會有一串只剩桌面的幀
+    （原版長尾移動加上高倍推近，3.5 秒起就只剩不到一成，之後一路是空桌面）。"""
+    import numpy as np
+    from PIL import Image
+
+    blue = Image.new("RGB", (1600, 1000), (120, 170, 235))
+    blue.save(tmp_path / "藍.png")
+    frame, rect = [0.02, 0.4, 0.12, 0.12 * 1.6 / (640 / 313)], [0.04, 0.45, 0.06, 0.05]
+    spec = {"grammar": "y2_vox", "duration": 5, "width": 640, "height": 360, "safe": {"bottom": 47},
+            "data": {"drift": 0.008, "frameFill": 0.94, "camera": {"pushAt": 0.1, "push": 0.8, "travel": 0.8, "itemTravel": 0.75}},
+            "cues": [{"at": 0, "kind": "image", "image": "藍.png", "text": "圖1"},
+                     {"at": 1.0, "kind": "highlight", "data": {"rect": rect, "frame": frame, "travel": False}},
+                     {"at": 4.0, "kind": "image", "image": "藍.png", "text": "圖2"}]}
+    times = [round(3.2 + k / 15, 4) for k in range(10)]  # 3.2～3.8
+    for t, p in zip(times, render_stills(spec, tmp_path / "s", times, base_dir=tmp_path).paths):
+        a = np.asarray(Image.open(p).convert("RGB")).astype(int)[: 360 - 47]  # 字幕帶以上
+        share = float(((a[..., 2] > a[..., 0] + 40)).mean())
+        assert share >= 0.10, f"{t:.2f} 秒畫面幾乎只剩桌面（剛離開的圖只占 {share:.1%}）"
+
+
 def _components(mask):
     """mask（二維 bool）的連通塊（8 鄰）：每塊一個 (ys, xs)。測試裡的小區域用，不追求快。"""
     import numpy as np

@@ -397,8 +397,29 @@ def vox_clip_spec(cues: list[dict[str, Any]], duration: float, fmt: Any) -> dict
     safe = base.get("safe", {})
     usable = ((base["width"] - safe.get("left", 0) - safe.get("right", 0))
               / (base["height"] - safe.get("top", 0) - safe.get("bottom", 0)))
-    return {"grammar": GRAMMAR_VOX, "duration": duration, **base, "data": {"drift": DRIFT, "frameFill": FRAME_FILL},
+    return {"grammar": GRAMMAR_VOX, "duration": duration, **base,
+            "data": {"drift": DRIFT, "frameFill": FRAME_FILL, "camera": dict(CAMERA)},
             "cues": _frame_boxes(cues, usable)}
+
+
+CAMERA = {"pushAt": 0.1, "push": 0.8, "travel": 0.8, "itemTravel": 0.75}
+"""框的鏡頭時間（秒；寫進 spec 的 data.camera，引擎照這個排，boxes.py 照這個算停多久）：
+框揭開後 pushAt 秒開始推近、推 push 秒（＝揭開後 0.9 秒停住）；要先移過去的框（data.travel），鏡頭在揭開前
+travel 秒出發、揭開前一幀到；框之後換下一件素材（圖、剪報、文字卡），鏡頭在它出現前 itemTravel＋ARRIVE 秒出發。"""
+ARRIVE = 0.05
+"""移到下一件素材時，在它出現前多久到位（引擎原本的規矩）。"""
+MIN_HOLD = 1.2
+"""框推近停住之後，鏡頭至少停這麼久才離開（真實試跑 #5：原本只停 0.4～1 秒，看不清楚就甩走）。"""
+
+
+def box_hold(gap: float, next_kind: str, travel: bool = False) -> tuple[float, float]:
+    """框揭開後 gap 秒換下一件時：(鏡頭推近停住後停了幾秒, 框到下一件至少要隔幾秒)。
+    next_kind："box"（下一個框；travel＝要先移過去）、"item"（下一張圖、剪報、文字卡）、"end"（片段結束、切走）。
+    跟引擎 y2_vox 排相機關鍵幀的方式一樣（CAMERA）：停住＝揭開後 pushAt＋push 秒；離開＝下一個框推近開始、
+    移向下一個框或下一件素材的出發時刻、或切走。"""
+    settle = CAMERA["pushAt"] + CAMERA["push"]
+    lead = {"box": CAMERA["travel"] if travel else -CAMERA["pushAt"], "item": CAMERA["itemTravel"] + ARRIVE}.get(next_kind, 0.0)
+    return gap - settle - lead, settle + MIN_HOLD + lead
 
 
 FRAMING = "_framing"

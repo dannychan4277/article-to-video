@@ -8,11 +8,14 @@
   3. 沒問題就 confirm-box <專案> <核對代號>…（代號 SH02:1@1a2b3c4d＝分鏡 SH02 第 1 個框＋框內容雜湊前 8 碼）。
      核對紀錄存在 <專案>/box_checks.json，依框的內容雜湊記：原圖（或剪報）的位元組、框的位置、錨點的詞、
      那句旁白——任何一樣改了，雜湊就變，要重新看、重新核對。拿舊代號核對改過的框會被拒絕。
-  4. 正式出片（build）前檢查（require_boxes_ready）：有框沒核對過、或框跟下一件素材隔不到 2 秒，就擋下，
+  4. 正式出片（build）前檢查（require_boxes_ready）：有框沒核對過、或框推近後鏡頭停不到 1.2 秒就離開，就擋下，
      訊息列出哪些分鏡的哪個框、靜態圖在哪。預覽永遠不擋。
 
-框跟下一件素材至少隔 MIN_GAP（2）秒：框出現後鏡頭要推近、停住讓觀眾看清楚，太快換下一件，推近只停一下就甩走
-（審片學到的規則）。下一件＝同一張桌面上下一張圖、剪報或文字卡，或這個片段結束（切到下一個分鏡）。
+框推近停住後鏡頭至少停 MIN_HOLD（1.2）秒（vox.box_hold，照引擎排相機的方式算）：框揭開後 0.9 秒推近停住，
+離開的時刻看下一件是什麼——同一張圖的下一個框（在畫面裡：它揭開後 0.1 秒原地推過去；不在畫面裡：鏡頭提早 0.8 秒移過去）、
+下一張圖／剪報／文字卡（鏡頭提早 0.8 秒出發），或這個片段結束（切到下一個分鏡）。所以框到下一件至少隔：
+下一個框在畫面裡 2.0 秒、要移過去 2.9 秒、下一件素材 2.9 秒、切走 2.1 秒。真實試跑 #5：舊規則（一律 2 秒）
+沒算推近和移動的時間，框實際只停 0.4～1 秒。
 """
 
 from __future__ import annotations
@@ -37,7 +40,7 @@ from article_to_video.commands import cli_command
 from article_to_video.project import ProjectError, ProjectPaths, load_project
 from article_to_video.progress import Log, quiet
 from article_to_video.textio import read_json_or_none
-from article_to_video.vox import VoxBox, resolve_vox
+from article_to_video.vox import MIN_HOLD, VoxBox, box_hold, resolve_vox
 
 if TYPE_CHECKING:
     from article_to_video.build import BuildPlan
@@ -45,7 +48,7 @@ if TYPE_CHECKING:
     from article_to_video.timeline import ClipPlan
 
 __all__ = [
-    "MIN_GAP",
+    "MIN_HOLD",
     "BoxStatus",
     "box_statuses",
     "boxes_contributor",
@@ -56,10 +59,8 @@ __all__ = [
     "require_boxes_ready",
 ]
 
-MIN_GAP = 2.0
-"""框跟下一件素材（或片段結束）至少隔幾秒。"""
 SETTLE = 1.25
-"""框出現後幾秒出畫面靜態圖：螢光筆掃完、紅圈畫完、鏡頭推近到位（引擎：推近 at+0.2～at+1.2）。"""
+"""框出現後幾秒出畫面靜態圖：螢光筆掃完（0.6）、紅圈畫完（1.1）、鏡頭推近到位（0.9，vox.CAMERA）。"""
 STILLS_VERSION = "1"
 CHECKS_VERSION = 1
 
@@ -141,7 +142,7 @@ class BoxStatus:
     frame: int
     """框出現在成片的第幾幀。"""
     gap: float
-    """框出現到下一件素材（或片段結束）的秒數。"""
+    """框出現到下一件（同一張圖的下一個框、下一張圖／剪報／文字卡，或片段結束）的秒數。"""
     next_what: str
     """下一件是什麼（給訊息用）。"""
     confirmed: bool
@@ -152,10 +153,14 @@ class BoxStatus:
     still_time: float
     """畫面靜態圖在片段裡的秒數。"""
     warnings: list[str] = field(default_factory=list)
+    hold: float = float("inf")
+    """鏡頭推近停住之後停了幾秒才離開（vox.box_hold）。"""
+    need: float = 0.0
+    """框到下一件至少要隔幾秒，鏡頭才停得滿 MIN_HOLD。"""
 
     @property
     def gap_ok(self) -> bool:
-        return self.gap >= MIN_GAP - 1e-6
+        return self.hold >= MIN_HOLD - 1e-6
 
     @property
     def ready(self) -> bool:
@@ -178,26 +183,40 @@ def box_statuses(plan: BuildPlan) -> list[BoxStatus]:
     shots_of_clip: dict[str, list[str]] = {}
     for st in plan.timeline.shots:
         shots_of_clip.setdefault(clip_of[st.shot.id].id, []).append(st.shot.id)
+    box_of = {b.where: b for b in boxes}
+    travel = {c["box"]: bool(c["data"].get("travel")) for cp in plan.clips for c in cp.spec.get("cues", [])
+              if c.get("kind") == "highlight" and "box" in c}  # 片段 spec 裡排好的：下一個框要不要先移過去
     out: list[BoxStatus] = []
     for box in boxes:
         cp = clip_of[box.shot_id]
         ct = cues[box.where]
         later = sorted(
-            (c.frame, c.kind) for st in plan.timeline.shots if st.shot.id in shots_of_clip[cp.id]
-            for c in st.cues if c.kind != "box" and c.frame > ct.frame
+            ((c.frame, c.kind, c.where) for st in plan.timeline.shots if st.shot.id in shots_of_clip[cp.id]
+             for c in st.cues if c.frame > ct.frame),
+            key=lambda x: x[0],
         )
-        nxt, what = later[0] if later else (cp.end_frame, "")
-        what = {"image": "下一張原圖", "excerpt": "下一張剪報", "title": "下一張標題卡", "point": "下一張索引卡"}.get(
-            what, "下一個分鏡（切走）")
+        if not later:
+            nxt, kind, what, moves = cp.end_frame, "end", "下一個分鏡（切走）", False
+        elif later[0][1] == "box":
+            nxt, _, where = later[0]
+            moves = travel.get(box_of[where].id, False) if where in box_of else False
+            kind, what = "box", "下一個框（要移過去）" if moves else "下一個框"
+        else:
+            nxt, k, _ = later[0]
+            kind, moves = "item", False
+            what = {"image": "下一張原圖", "excerpt": "下一張剪報", "title": "下一張標題卡", "point": "下一張索引卡"}.get(
+                k, "下一件素材")
+        gap = (nxt - ct.frame) / fps
+        hold, need = box_hold(gap, kind, moves)
         settle = min(ct.frame + round(SETTLE * fps), cp.end_frame - 1)
         warnings = _swatch_warning(box)
         out.append(BoxStatus(
-            box=box, clip=cp, frame=ct.frame, gap=(nxt - ct.frame) / fps, next_what=what,
+            box=box, clip=cp, frame=ct.frame, gap=gap, next_what=what,
             confirmed=box.hash in confirmed,
             screen=plan.paths.boxes / f"{_file_stem(box)}-畫面.png",
             overlay=plan.paths.boxes / f"{_file_stem(box)}-原圖.png",
             still_time=round((settle - cp.start_frame) / fps, 6),
-            warnings=warnings,
+            warnings=warnings, hold=hold, need=need,
         ))
     return out
 
@@ -305,6 +324,13 @@ def _draw_overlay(st: BoxStatus) -> None:
 # ---------------------------------------------------------------- 給人看的文字
 
 
+def _short(st: BoxStatus) -> str:
+    """框之後太快換下一件的說明。"""
+    stay = max(0.0, st.hold)
+    return (f"框出現後 {st.gap:.1f} 秒就換{st.next_what}：鏡頭推近停住後只停 {stay:.1f} 秒就離開，至少要停 {MIN_HOLD:g} 秒"
+            f"（框到{st.next_what}要隔 {st.need:.1f} 秒）")
+
+
 def _status_lines(st: BoxStatus) -> list[str]:
     b = st.box
     head = "✓ 已核對" if st.confirmed else "✗ 還沒核對"
@@ -313,8 +339,7 @@ def _status_lines(st: BoxStatus) -> list[str]:
              f"    畫面靜態圖：{st.screen}",
              f"    原圖對照：{st.overlay}"]
     if not st.gap_ok:
-        lines.append(f"    ✗ 框出現後 {st.gap:.1f} 秒就換{st.next_what}，至少要隔 {MIN_GAP:g} 秒（鏡頭推近要停住讓人看清楚）："
-                     "把下一件的錨點往後挪、框的錨點往前挪，或把這句旁白寫長一點")
+        lines.append(f"    ✗ {_short(st)}：把下一件的錨點往後挪、框的錨點往前挪，或把這句旁白寫長一點")
     for w in st.warnings:
         lines.append(f"    注意：{w}")
     return lines
@@ -380,7 +405,7 @@ def boxes_contributor(plan: BuildPlan) -> ReviewExtras:
                                    "block", "還沒核對"))
         if not st.gap_ok:
             items.append(CheckItem(f"框 {b.index} 之後 {st.gap:.1f} 秒就換{st.next_what}",
-                                   f"至少要隔 {MIN_GAP:g} 秒，鏡頭推近才停得住", "block"))
+                                   f"至少要隔 {st.need:.1f} 秒：鏡頭推近後要停 {MIN_HOLD:g} 秒讓人看清楚", "block"))
         for w in st.warnings:
             items.append(CheckItem(f"框 {b.index}", w, "warn"))
     return ReviewExtras(cards=cards)
