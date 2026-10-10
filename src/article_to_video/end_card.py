@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -55,38 +56,76 @@ def _format_references(items: list[str]) -> str:
     return "、".join(parts)
 
 
+_NOTE_SPLIT_RE = re.compile(r"[；;]")
+
+
+def _notes(rest: str) -> list[str]:
+    """括號後面的說明，一欄一項：「；月平均；2026-10-10 擷取」→ ["月平均", "2026-10-10 擷取"]。"""
+    return [x.strip(" ，,。") for x in _NOTE_SPLIT_RE.split(rest) if x.strip(" ，,。")]
+
+
+@dataclass
+class _Source:
+    """同一個出處（括號前面的名字）的所有寫法彙整起來。"""
+
+    name: str
+    refs: list[str]
+    notes: list[tuple[bool, str]] | None = None
+    """每一列都有的說明，(是不是括號裡的說明, 文字)；None＝還沒有哪一列帶說明或代號（只有光寫名字的）。"""
+    texts: list[str] = field(default_factory=list)
+    """原文寫法（去掉前綴、重複的），只有一種寫法時照原樣印。"""
+
+    def add(self, text: str, refs: list[str], notes: list[tuple[bool, str]], bare: bool) -> None:
+        if text not in self.texts:
+            self.texts.append(text)
+        if bare:
+            return
+        self.refs.extend(x for x in refs if x not in self.refs)
+        self.notes = list(notes) if self.notes is None else [n for n in self.notes if n in notes]
+
+    def text(self) -> str:
+        written = [t for t in self.texts if t != self.name] or self.texts
+        if len(written) == 1:
+            return written[0]
+        out = self.name + (f"（{_format_references(self.refs)}）" if self.refs else "")
+        for described, note in self.notes or []:
+            out += f"（{note}）" if described and not self.refs and out == self.name else f"；{note}"
+        return out
+
+
 def merge_sources(texts: Iterable[str]) -> list[str]:
-    """圖上的來源列 → 片尾卡的來源清單。
+    """圖上的來源列 → 片尾卡的來源清單：**同一個出處只列一行**。
 
     - 拿掉「來源：」「資料來源：」「資料：」這類前綴（卡上統一有「資料來源」小標）。一列就是一個出處
-      （公有數據自動寫的來源行用「；」分欄：「FRED，聯準會（DGS10）；月平均；2026-10-09 擷取」，不拆）。
-    - 一模一樣的只留一個，順序照第一次出現。
-    - 同一個出處、括號裡只列代號／圖號／段號的合併（括號後面的說明要一樣）：「FRED（DGS2）」＋「FRED（DGS10）」→
-      「FRED（DGS2、DGS10）」；Vox 的「作者原文（第 4 段）」「作者原文（圖1）」→「作者原文（圖1、第 4 段）」。
-    - 括號裡是說明文字的（圖表自己寫的「作者原文（FRED 日資料年平均）」）照原樣一列，不拆、不跟別人併。
+      （公有數據自動寫的來源行用「；」分欄：「FRED，聯準會（DGS10）；月平均；2026-10-09 擷取」，不拆成好幾個出處）。
+    - 出處＝括號前面的名字（「FRED，聯準會」「作者原文」）。同名的併成一行，順序照名字第一次出現：
+      - 括號裡的代號／圖號／段號全部併進去：「FRED（DGS2）」＋「FRED（DGS10）」→「FRED（DGS2、DGS10）」；
+        「作者原文（圖2）」＋「作者原文（第 4 段）」＋「作者原文（圖1）」→「作者原文（圖1、圖2、第 4 段）」。
+      - 說明（括號後面「；」分開的欄，或括號裡寫的是說明文字）只留每一列都有的：擷取日期一樣就留，
+        各張圖不同的算法（月平均、年平均、「十年期減兩年期＝…自算」）拿掉——圖上的來源行自己寫著。
+      - 光寫名字的（「作者原文」）併進同名的那一行，不另成一行。
+    - 一個出處只有一種寫法時照原樣（括號裡是說明文字的「財政部（10 年期、2 年期），月資料」不動）。
     """
-    entries: list[str] = []
+    sources: dict[str, _Source] = {}
     for raw in texts:
         if not isinstance(raw, str):
             continue
         t = " ".join(_PREFIX_RE.sub("", raw).split()).strip("，,。； ")
-        if t and t not in entries:
-            entries.append(t)
-    merged: list[Any] = []
-    groups: dict[tuple[str, str], list[str]] = {}
-    for t in entries:
-        m = _GROUP_RE.match(t)
-        items = [x.strip() for x in re.split(r"[、,，]", m["items"]) if x.strip()] if m else []
-        if not m or not _references(items):
-            merged.append(t)
+        if not t:
             continue
-        key = (m["name"].strip(), m["rest"])
-        if key in groups:
-            groups[key].extend(x for x in items if x not in groups[key])
+        m = _GROUP_RE.match(t)
+        if m is None:
+            name, refs, notes, bare = t, [], [], True
         else:
-            groups[key] = list(dict.fromkeys(items))
-            merged.append(key)
-    return [f"{k[0]}（{_format_references(groups[k])}）{k[1]}" if isinstance(k, tuple) else k for k in merged]
+            name = m["name"].strip()
+            items = [x.strip() for x in re.split(r"[、,，]", m["items"]) if x.strip()]
+            if _references(items):
+                refs, notes = items, [(False, n) for n in _notes(m["rest"])]
+            else:
+                refs, notes = [], [(True, m["items"].strip()), *((False, n) for n in _notes(m["rest"]))]
+            bare = False
+        sources.setdefault(name, _Source(name, [])).add(t, refs, notes, bare)
+    return [s.text() for s in sources.values()]
 
 
 def missing_channel_error(project_root: Path, data_dir: str | os.PathLike | None = None) -> ProjectError:

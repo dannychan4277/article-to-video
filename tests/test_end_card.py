@@ -65,7 +65,8 @@ def test_merge_sources_examples():
 
 def test_chart_source_notes_stay_whole_and_article_references_group_cleanly():
     """試跑的片尾卡：圖表自己寫的來源「作者原文（FRED 日資料年平均）」被當成段號，跟 Vox 的「作者原文（第 4 段）」
-    「作者原文（圖1）」併成一串。括號裡是說明的照原樣留著；圖號、段號才併，而且圖、段各自照順序排好。"""
+    「作者原文（圖1）」併成一串。括號裡的說明不能當成段號併進去；圖號、段號才併，而且圖、段各自照順序排好。
+    同一個出處只列一行（第三次示範）：說明文字不是每一列都有，就不上片尾卡（圖上的來源行自己寫著）。"""
     sources = [  # 照片段順序：公有數據圖、Vox、作者自算的圖、Vox、公有數據圖×2、Vox、作者自算的圖
         "FRED，聯準會（DGS10、DGS2）；十年期減兩年期＝DGS10 減 DGS2 自算，月平均；2026-10-09 擷取",
         "作者原文（第 4 段）",
@@ -77,19 +78,36 @@ def test_chart_source_notes_stay_whole_and_article_references_group_cleanly():
         "來源：作者原文（FRED 日資料月平均）",
     ]
     assert merge_sources(sources) == [
-        "FRED，聯準會（DGS10、DGS2）；十年期減兩年期＝DGS10 減 DGS2 自算，月平均；2026-10-09 擷取",
+        "FRED，聯準會（DGS10、DGS2、THREEFYTP10）；2026-10-09 擷取",
         "作者原文（圖1、圖2、第 4、16、19 段）",
-        "作者原文（FRED 日資料年平均）",
-        "FRED，聯準會（THREEFYTP10）；年平均；2026-10-09 擷取",
-        "FRED，聯準會（DGS10）；月平均；2026-10-09 擷取",
-        "作者原文（FRED 日資料月平均）",
     ]
+    assert merge_sources(sources[2:3]) == ["作者原文（FRED 日資料年平均）"]  # 只有一種寫法：照原樣
 
 
 def test_charts_redrawn_from_article_figures_are_credited_together():
     """文章的圖重畫成圖表（ADR 0001）：來源行寫「來源：作者原文（圖N）」，片尾卡併成一行；寫成「資料：」也一樣。"""
     assert merge_sources(["來源：作者原文（圖2）", "資料：作者原文（圖1）", "來源：FRED（DGS10）", "作者原文（圖2）"]) == [
         "作者原文（圖1、圖2）", "FRED（DGS10）"]
+
+
+def test_each_source_is_credited_once_even_with_different_notes():
+    """第三次示範的片尾卡：「作者原文（圖1、圖2）」和「作者原文」各一行、FRED 的利差圖（月平均、年平均兩種算法）
+    各一行，再加 THREEFYTP10、DGS10 一行。同一個出處只列一行：代號、圖號全部併進括號；每一行都有的說明（擷取日期）
+    留著，各張圖不一樣的算法說明拿掉（圖上的來源行自己有寫）。光寫「作者原文」不另成一行。"""
+    spread = "來源：FRED，聯準會（DGS10、DGS2）；十年期減兩年期＝DGS10 減 DGS2 自算，{}；2026-10-10 擷取"
+    sources = [  # 照分鏡順序，一個分鏡一行
+        spread.format("月平均"), "來源：作者原文（圖1）", "來源：作者原文（圖2）", spread.format("年平均"),
+        "來源：FRED，聯準會（THREEFYTP10）；月平均；2026-10-10 擷取", "來源：作者原文",
+        "來源：FRED，聯準會（DGS10）；月平均；2026-10-10 擷取", "來源：作者原文",
+    ]
+    assert merge_sources(sources) == [
+        "FRED，聯準會（DGS10、DGS2、THREEFYTP10）；2026-10-10 擷取",
+        "作者原文（圖1、圖2）",
+    ]
+    assert merge_sources(["作者原文", "FRED（DGS10）", "作者原文（第 3 段）"]) == ["作者原文（第 3 段）", "FRED（DGS10）"]
+    # 擷取日期不一樣（不同天抓的）：日期也不是每一行都有，就只留出處和代號
+    assert merge_sources(["FRED，聯準會（DGS10）；月平均；2026-10-09 擷取", "FRED，聯準會（DGS2）；月平均；2026-10-10 擷取"]) == [
+        "FRED，聯準會（DGS10、DGS2）；月平均"]
 
 
 def test_public_data_charts_show_up_on_the_end_card(tmp_path, fred):
