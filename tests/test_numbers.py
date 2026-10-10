@@ -382,6 +382,29 @@ def test_the_review_card_asks_the_author_to_check_figure_numbers_against_his_fig
     assert "原文圖表" in page.summary + page.note + page.title
 
 
+def test_years_on_a_redrawn_figures_axis_point_to_the_figure_reading(tmp_path):
+    """示範：重畫圖1 的柱狀圖，類目名（橫軸年份）2020 文章文字裡沒有 → 無出處。Claude 要知道它也是「圖上的字」，
+    該讀圖記進 figure_numbers.json 的圖1——提示要點名那張圖、說軸上的年份也算。"""
+    def edit(shots: dict) -> None:
+        redrawn_figure(shots)
+        shots["shots"][0]["chart"]["data"]["series"] = [{"label": "2019", "value": 5.12}, {"label": "2023", "value": 4.21}]
+
+    root = with_figure(make_project(tmp_path, edit), FIG1)
+    plan = plan_build(root, tts="fake")
+    [n] = reconcile(plan).unsourced  # 2023 文章裡有；2019 只在圖上
+    assert (n.where, n.shown) == ("類目名", "2019")
+    assert "圖1" in n.detail and "年份" in n.detail  # 審片頁卡片上：這張是重畫圖1，軸上的年份也是圖上的字
+    line = summary_line(plan)  # preview 印給 Claude 的那行
+    assert "2019" in line and "figure_numbers.json" in line and "「圖1」" in line
+    with pytest.raises(ProjectError) as e:
+        check_numbers(plan)
+    assert "2019" in str(e.value) and "「圖1」" in str(e.value) and "類目名" in str(e.value)
+
+    with_figure(root, {"figures": {"圖1": [*FIG1["figures"]["圖1"], {"value": "2019", "label": "橫軸年份（第一根柱）"}]}})
+    got = {x.shown: x for x in reconcile(plan_build(root, tts="fake")).shots["SH01"]}
+    assert got["2019"].kind == "figure"
+
+
 def test_a_difference_of_two_figure_numbers_can_be_declared(tmp_path):
     def edit(shots: dict) -> None:
         redrawn_figure(shots)

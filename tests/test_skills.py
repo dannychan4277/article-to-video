@@ -283,4 +283,4 @@ def test_json_formats_in_the_skill_docs_are_valid_projects(tmp_path):
     (tmp_path / "article" / "figure_numbers.json").write_text(json.dumps(figures, ensure_ascii=False), encoding="utf-8")
     project = load_project(tmp_path)
     assert [s.id for s in project.shots] == ["SH01", "SH02"]
-    assert [(f.figure, f.number.text) for f in project.figure_numbers] == [("圖1", "4.58"), ("圖1", "3.96")]
+    assert [(f.figure, f.number.text) for f in project.figure_numbers] == [("圖1", "4.58"), ("圖1", "3.96"), ("圖1", "2020")]
