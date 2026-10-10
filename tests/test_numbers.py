@@ -175,7 +175,7 @@ def test_unsourced_number_blocks_the_final_build_but_not_the_preview(built_proje
     """出過片的專案，改出一個無出處的數字：正式出片被擋（不渲染、成片不動），審片頁改回預覽的樣子並標出那個數字。"""
     root = tmp_path / "2026-10-09-殖利率曲線"
     shutil.copytree(built_project.dir, root)
-    assert read_review(root).attrs["data-stage"] == "final"
+    assert read_review(root).attrs["data-stage"] == "review"
     video_mtime = (root / "成片.mp4").stat().st_mtime_ns
     clip_mtime = (root / "build" / "16x9" / "clips" / "SH02.mp4").stat().st_mtime_ns
     edit_json(root / "shots.json", unsourced_highlight)
@@ -200,7 +200,7 @@ def test_unsourced_number_blocks_the_final_build_but_not_the_preview(built_proje
 def test_with_every_number_sourced_the_build_passes_and_each_card_shows_the_sources(built_project):
     """session 的測試專案（每個數字都在文章裡）照常出片；卡片上列出數字與出處。"""
     page = read_review(built_project.dir)
-    assert page.attrs["data-stage"] == "final"
+    assert page.attrs["data-stage"] == "review"
     sh01, sh02 = (c.slots["numbers"] for c in page.cards)
     for needle in ("2023", "4.58%", "3.96%", "原文", "原文第 1 段"):
         assert needle in sh01, f"分鏡 1 的數字對帳少了「{needle}」：{sh01}"

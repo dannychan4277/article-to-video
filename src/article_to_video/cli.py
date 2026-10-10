@@ -7,16 +7,18 @@
                                                   預覽：只出分鏡靜態圖＋審片頁（不渲整支片）
   build <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]
                                                   建置成片＋字幕檔，審片頁內嵌成片
-  open-review <專案資料夾> [--aspect …] [--tts …] [--data-dir D]
+  open-review <專案資料夾> [--aspect …] [--tts …] [--no-open] [--data-dir D]
                                                   更新審片頁（最新的檢查結果、還是最新的成片就內嵌）並在瀏覽器打開給作者看
+                                                  （--no-open：只更新、不打開）
   publish <專案資料夾> --version N [--aspect …] [--tts …] [--jobs N] [--no-open] [--data-dir D] [--out 資料夾]
                                                   出片：作者點頭（第 N 版）之後，建置成片、自動檢查，把成片和字幕檔放進
                                                   「影片／解說影片／日期-標題」（見 publish.py、videos.py）
   boxes <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--data-dir D]
                                                   列出 Vox 框、渲每個框的靜態圖（照這個比例）、印核對代號
-  confirm-box <專案資料夾> <核對代號>… [--note 文字]   記下 Claude 看過靜態圖、確認過的框（見 boxes.py）
+  confirm-box <專案資料夾> <核對代號>… [--note 文字] [--data-dir D]
+                                                  記下 Claude 看過靜態圖、確認過的框（見 boxes.py）
   checks <專案資料夾> [--aspect …] [--tts …] [--jobs N] [--data-dir D] [--json]
-                                                  自動檢查（出片之後）：每個片段跑 qa、白底片段查字幕帶，彙整到分鏡，
+                                                  自動檢查（build 之後、給作者看之前）：每個片段跑 qa、白底片段查字幕帶，彙整到分鏡，
                                                   寫 build/<比例>/checks.json、更新審片頁（見 auto_checks.py）
   review-prep <專案資料夾> [--aspect …] [--tts …] [--data-dir D]
                                                   獨立審片：從成片準備素材、印出派 agent 用的 prompt（見 independent_review.py）
@@ -24,7 +26,7 @@
                                                   （審片 agent 用）從成片抽全解析度幀
   review-record <專案資料夾> [--aspect …] [--file 檔|-] [--tts …] [--data-dir D]
                                                   記下審片 agent 的回答（預設讀素材資料夾的 review.json），更新審片頁
-  resolve <專案資料夾> <代號>… (--fixed 說明 | --accept 理由) [--by 作者|Claude]
+  resolve <專案資料夾> <代號>… (--fixed 說明 | --accept 理由) [--by 作者|Claude] [--data-dir D]
                                                   記下必修的處理：改好了（獨立審片）或接受不改；記了就不再擋出片
   lint <專案資料夾>                                 旁白規則檢查（narration.json；規則見 lint.py）；有要改的結束碼 1
   narrate <專案資料夾> [--tts edge|fake] [--data-dir D]
@@ -49,7 +51,7 @@
   test-video [--out 資料夾] [--tts edge|fake] [--no-open] [--data-dir D]
                                                      用外掛自帶的範例做一支約 10 秒的測試片並打開（安裝最後一步）
 
-preview、build 做完會用 macOS 的 open 在預設瀏覽器打開審片頁；--no-open 或環境變數
+preview、build、open-review 做完會用 macOS 的 open 在預設瀏覽器打開審片頁；--no-open 或環境變數
 ARTICLE_TO_VIDEO_NO_OPEN=1（測試、CI）就不打開。會渲染或改審片頁的子指令（preview、build、publish、open-review、
 narrate、boxes、checks、review-prep、review-record、test-video）的輸出與錯誤記在 <專案>/build/last-run.{log,json}
 （只留最後一次），回報問題時打包。
@@ -93,7 +95,8 @@ _SET_OPTIONS = {  # 選項 → 設定鍵
     "rate": "語速，例 +5%、-10%",
     "music": "配樂：calm（沉穩鋼琴）、pulse（新聞脈動）、minimal（極簡電子）、none",
     "aspect": "預設比例：16:9（橫式）或 9:16（直式）",
-    "independent_review": "出片後派 agent 獨立審片一輪：開（預設）或 關（全部影片共用，不能加 --project）",
+    "independent_review": "建好審片用的成片、作者看審片頁之前，派一個只看成片的 agent 獨立審片一輪：開（預設）或 關"
+                          "（全部影片共用，不能加 --project）",
 }
 VOICE_SAMPLE = "大家好，歡迎來到我的頻道。今天用三分鐘，帶你看懂殖利率曲線在說什麼。"
 _PROJECT = "專案資料夾"
@@ -150,11 +153,12 @@ def _parser() -> argparse.ArgumentParser:
              "tts", "jobs", "no_open", "data_dir", "aspect")
     pb.add_argument("--version", type=int, required=True, help="作者點頭的是審片頁第幾版（頁首寫的）")
     pb.add_argument("--out", help="成片放哪個資料夾（預設：這支片的「日期-標題」資料夾）")
-    add("open-review", "更新審片頁（帶上最新的檢查結果）並在瀏覽器打開給作者看", "tts", "data_dir", "aspect")
+    add("open-review", "更新審片頁（帶上最新的檢查結果）並在瀏覽器打開給作者看；--no-open 只更新、不打開",
+        "tts", "no_open", "data_dir", "aspect")
     add("narrate", "配音（寫分鏡之前）：每段旁白配好音，印出每段的起點、長度與每個詞開始唸的秒數", "tts", "data_dir",
         project="專案資料夾（裡面有 narration.json；還不用有 shots.json）")
     add("boxes", "列出 Vox 框、渲每個框的靜態圖、看哪些還沒核對", "tts", "jobs", "data_dir", "aspect")
-    add("checks", "自動檢查（出片之後跑）：每個片段跑 qa、白底片段查字幕帶，結果寫進審片頁",
+    add("checks", "自動檢查（build 之後、給作者看之前跑）：每個片段跑 qa、白底片段查字幕帶，結果寫進審片頁",
         "tts", "jobs", "data_dir", "aspect", "json")
     add("review-prep", "獨立審片：從成片準備審片素材（總覽圖、畫面事件圖、字幕檔），印出派 agent 的 prompt",
         "tts", "data_dir", "aspect")
@@ -166,13 +170,13 @@ def _parser() -> argparse.ArgumentParser:
     rf.add_argument("--step", type=float, default=0.25, help="連續幀的間隔秒數（預設 0.25）")
     rr = add("review-record", "記下獨立審片 agent 的回答（review.json），寫進審片頁", "tts", "data_dir", "aspect")
     rr.add_argument("--file", help="回答檔（預設：審片素材資料夾裡的 review.json；- ＝從標準輸入讀）")
-    rs = add("resolve", "記下必修／該修的處理：--fixed 改好了（獨立審片的問題）、--accept 看過、接受不改")
+    rs = add("resolve", "記下必修／該修的處理：--fixed 改好了（獨立審片的問題）、--accept 看過、接受不改", "data_dir")
     rs.add_argument("tokens", nargs="*", help="代號，例 R1-2（獨立審片）、qa:SH03:jump@1a2b3c4d（自動檢查），可以一次給好幾個")
     how = rs.add_mutually_exclusive_group(required=True)
     how.add_argument("--fixed", metavar="說明", help="改好了：寫怎麼改的（只用在獨立審片的問題）")
     how.add_argument("--accept", metavar="理由", help="接受不改：寫為什麼（作者決定的加 --by 作者）")
     rs.add_argument("--by", default="Claude", help="誰決定的：Claude（預設）或 作者")
-    cb = add("confirm-box", "記下 Claude 看過靜態圖、確認沒問題的框（核對代號從 boxes 指令來）")
+    cb = add("confirm-box", "記下 Claude 看過靜態圖、確認沒問題的框（核對代號從 boxes 指令來）", "data_dir")
     cb.add_argument("tokens", nargs="*", help="核對代號，例 SH02:1@1a2b3c4d（可以一次給好幾個）")
     cb.add_argument("--note", default="", help="備註（例：框在「十年期」那一列的 3.96 上）")
     nw = add("new", "開新專案：在「影片／解說影片」建「日期-標題/專案」資料夾，擷取文章（含截字檢查）", project=None)
@@ -347,7 +351,7 @@ def _preview(args: argparse.Namespace) -> int:
 
 
 def _after_build_hint(plan, data_dir) -> str:
-    """出片之後的下一步（給 Claude 看）：自動檢查有沒有跑過、獨立審片審過這版沒有。"""
+    """build 之後的下一步（給 Claude 看）：自動檢查有沒有跑過、獨立審片審過這版沒有。"""
     from article_to_video.auto_checks import load_check_report
     from article_to_video.independent_review import review_enabled, reviewed_current_video
 
@@ -416,7 +420,7 @@ def _open_review(args: argparse.Namespace) -> int:
     """更新審片頁並打開給作者看。會渲分鏡靜態圖，出錯要跟 build、preview 一樣記進 last-run。"""
     def body(log: Log) -> int:
         review = _refresh_review(_plan(args), args, log, what=None)
-        _show_review(review.page, no_open=False, version=review.version)
+        _show_review(review.page, no_open=args.no_open, version=review.version)
         return 0
 
     return _recorded(args, "審片頁打不開", body)
@@ -464,7 +468,9 @@ def _confirm_box(args: argparse.Namespace) -> int:
     if res.remaining:
         print("還沒核對：" + "、".join(b.id for b in res.remaining))
     else:
-        print("所有 Vox 框都核對過了，可以正式出片。")
+        print("所有 Vox 框都核對過了，build 不會再被框擋下。")
+        print("下一步（都在出片之前）：build 做審片用的成片 → checks 自動檢查 → 獨立審片 → open-review 給作者看；"
+              "作者點頭之後才 publish 出片。")
     return 0
 
 
@@ -477,9 +483,9 @@ def _checks(args: argparse.Namespace) -> int:
         if missing:
             raise ProjectError(
                 [f"片段 {cid} 還沒渲，或分鏡改過之後還沒重新出片" for cid in missing],
-                title="自動檢查要在出片之後跑",
+                title="自動檢查要在 build 之後跑",
                 hint=f"先跑 build（{cli_command('build', plan.project.root, *aspect_args(plan.format.name), '--no-open', data_dir=args.data_dir)}），"
-                     "出片成功再跑 checks。",
+                     "build 成功再跑 checks。",
             )
         report = run_checks(plan, jobs=args.jobs, log=log)
         log(format_report(plan, report))
@@ -736,7 +742,7 @@ def _describe(values: dict) -> str:
     ]
     if "independent_review" in values:  # 只有使用者設定有（不進設定快照）
         on = values["independent_review"]
-        lines.append(f"獨立審片：{'開（出片後派一個只看成片的 agent 審一輪）' if on else '關'}")
+        lines.append(f"獨立審片：{'開（作者看審片頁之前，派一個只看成片的 agent 審一輪）' if on else '關'}")
     return "\n".join("  " + ln for ln in lines)
 
 

@@ -394,18 +394,27 @@ def boxes_contributor(plan: BuildPlan) -> ReviewExtras:
 
     statuses = box_statuses(plan)
     render_box_stills(plan, statuses)
-    cards: dict[str, list[CardSection]] = {}
+    items_of: dict[str, list] = {}
     for st in statuses:
         b = st.box
-        items = cards.setdefault(b.shot_id, [CardSection("checks", "Vox 框核對", [])])[0].items
+        items = items_of.setdefault(b.shot_id, [])
         if st.confirmed:
-            items.append(CheckItem(f"框 {b.index}：{b.describe()}", "Claude 看過靜態圖，框在旁白講的數字上", "ok", "已核對"))
+            items.append(CheckItem(f"框 {b.index}：{b.describe()}", "Claude 看過靜態圖，框在旁白講的數字上", "ok", "已核對",
+                                   code=b.token))
         else:
-            items.append(CheckItem(f"框 {b.index}：{b.describe()}", f"靜態圖：{st.screen.name}（出片前 Claude 要看過、核對）",
-                                   "block", "還沒核對"))
+            items.append(CheckItem(f"框 {b.index}：{b.describe()}", "Claude 還要看過靜態圖、確認框的位置",
+                                   "block", "還沒核對", code=f"{b.token}　靜態圖：{st.screen}"))
         if not st.gap_ok:
             items.append(CheckItem(f"框 {b.index} 之後 {st.gap:.1f} 秒就換{st.next_what}",
-                                   f"至少要隔 {st.need:.1f} 秒：鏡頭推近後要停 {MIN_HOLD:g} 秒讓人看清楚", "block"))
+                                   f"至少要隔 {st.need:.1f} 秒：鏡頭推近後要停 {MIN_HOLD:g} 秒讓人看清楚", "block",
+                                   code=b.token))
         for w in st.warnings:
-            items.append(CheckItem(f"框 {b.index}", w, "warn"))
+            items.append(CheckItem(f"框 {b.index}", w, "warn", code=b.token))
+    cards: dict[str, list[CardSection]] = {}
+    for sid, items in items_of.items():
+        if all(it.status == "ok" for it in items):  # 都核對過、沒有要提醒的：安靜的一行，點開看框在哪
+            n = sum(1 for it in items if it.label == "已核對")
+            cards[sid] = [CardSection("checks", "Vox 框核對", items, summary=f"框的位置 Claude 都核對過了（{n} 個）")]
+        else:
+            cards[sid] = [CardSection("checks", "Vox 框核對", items)]
     return ReviewExtras(cards=cards)

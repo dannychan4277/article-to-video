@@ -63,6 +63,29 @@ def test_merge_sources_examples():
     ]) == ["FRED，聯準會（DGS10、DFII10）；月平均；2026-10-09 擷取"]
 
 
+def test_chart_source_notes_stay_whole_and_article_references_group_cleanly():
+    """試跑的片尾卡：圖表自己寫的來源「作者原文（FRED 日資料年平均）」被當成段號，跟 Vox 的「作者原文（第 4 段）」
+    「作者原文（圖1）」併成一串。括號裡是說明的照原樣留著；圖號、段號才併，而且圖、段各自照順序排好。"""
+    sources = [  # 照片段順序：公有數據圖、Vox、作者自算的圖、Vox、公有數據圖×2、Vox、作者自算的圖
+        "FRED，聯準會（DGS10、DGS2）；十年期減兩年期＝DGS10 減 DGS2 自算，月平均；2026-10-09 擷取",
+        "作者原文（第 4 段）",
+        "來源：作者原文（FRED 日資料年平均）",
+        "作者原文（圖1）", "作者原文（圖2）", "作者原文（第 19 段）",
+        "FRED，聯準會（THREEFYTP10）；年平均；2026-10-09 擷取",
+        "FRED，聯準會（DGS10）；月平均；2026-10-09 擷取",
+        "作者原文（第 16 段）", "作者原文（圖2）",
+        "來源：作者原文（FRED 日資料月平均）",
+    ]
+    assert merge_sources(sources) == [
+        "FRED，聯準會（DGS10、DGS2）；十年期減兩年期＝DGS10 減 DGS2 自算，月平均；2026-10-09 擷取",
+        "作者原文（圖1、圖2、第 4、16、19 段）",
+        "作者原文（FRED 日資料年平均）",
+        "FRED，聯準會（THREEFYTP10）；年平均；2026-10-09 擷取",
+        "FRED，聯準會（DGS10）；月平均；2026-10-09 擷取",
+        "作者原文（FRED 日資料月平均）",
+    ]
+
+
 def test_public_data_charts_show_up_on_the_end_card(tmp_path, fred):
     """公有數據自動寫的來源行也會進片尾卡；同出處、同算法的兩個系列併成一行。"""
     from datetime import date

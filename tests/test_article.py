@@ -95,6 +95,12 @@ INDENTED = [
     "第二段也是一樣，開頭空兩格。長天期利率反映市場對未來的預期，短天期利率跟著政策利率走，兩者的差距就是殖利率曲線的斜率。",
     "第三段短一點，也要換行才行：這是第三段的內容，寫到這裡應該已經超過一行的寬度了吧，再多寫幾個字比較保險。",
 ]
+JUSTIFIED = [  # 兩端對齊（text-align: justify）的窄欄：每一行的字距都被撐開
+    "自製測試段落：把 2023 年和 2024 年的年平均放在一起看（圖 2），兩年期從 4.58% 降到 4.37%，少了 0.21 個百分點；"
+    "十年期從 3.96% 升到 4.21%，多了 0.25 個百分點。數字來自 FRED 的 DGS10 與 DGS2，由 Federal Reserve Board 每天公布，"
+    "這一段故意寫長、而且左右對齊，讓每一行都被撐開。",
+    "第二段也左右對齊：短天期利率跟著政策利率走，長天期利率反映市場對未來的預期，兩者的差距就是殖利率曲線的斜率。",
+]
 WIDGET_URL = "https://example.com/p/一個很長很長很長的網址會被分享卡片的窄框藏起來"
 TRUNCATED_TEXT = ("這一段放在固定寬度的版面裡，版面比紙張能印的範圍還寬，所以每一行最後幾個字都會被切掉，"
                   "存成 PDF 之後那些字就不見了。") * 6
@@ -118,6 +124,7 @@ class SamplePdfs:
     scanned: Path  # 整頁只有一張圖、沒有文字層（像掃描檔）
     indented: Path  # 段落之間不空行、靠首行縮排分段（中文 Word 文件常見）
     widget: Path  # 頁面裡有個窄框把超出的網址藏起來（網頁的分享卡片），不是截字
+    justified: Path  # 兩端對齊的窄欄：字距被撐開，pdfminer 會以為字和字之間有空白
 
 
 @pytest.fixture(scope="session")
@@ -135,6 +142,8 @@ def sample_pdfs(tmp_path_factory) -> SamplePdfs:
         "indented": (_html("".join(f"<p style='margin:0; text-indent:2em'>{t}</p>" for t in INDENTED)), margin, False),
         "widget": (_html(f"<p>{P1}</p><div style='width:180px; overflow:hidden; white-space:nowrap; font-size:10pt'>"
                          f"{WIDGET_URL}</div><p>{END}</p>"), margin, False),
+        "justified": (_html("".join(f"<p style='text-align: justify; width: 330px'>{t}</p>" for t in JUSTIFIED)),
+                      margin, False),
     }
     paths = {}
     with sync_playwright() as p:
@@ -217,6 +226,30 @@ def test_pdf_with_text_cut_off_at_the_page_edge_is_rejected_with_how_to_resave(t
 def test_pdf_paragraphs_split_by_first_line_indent(tmp_path, sample_pdfs):
     extract_article(tmp_path / "專案", sample_pdfs.indented)
     assert [p["text"] for p in _manifest(tmp_path / "專案")["paragraphs"]] == INDENTED
+
+
+_CJK = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]")
+
+
+def test_justified_text_does_not_grow_spaces_between_chinese_characters(tmp_path, sample_pdfs):
+    """兩端對齊會把字距撐開（試跑的文章擷取出「兩 年 期 從   4.58%」）。字和字之間不能多出空白；
+    原文真的有的空白（數字、英文字前後）留著，只有剛好在換行處的可能不見（PDF 裡沒有那個空白）。"""
+    extract_article(tmp_path / "專案", sample_pdfs.justified)
+    got = [p["text"] for p in _manifest(tmp_path / "專案")["paragraphs"]]
+    assert len(got) == len(JUSTIFIED)
+    for text, want in zip(got, JUSTIFIED):
+        assert not re.search(f"{_CJK.pattern} +{_CJK.pattern}", text), text  # 中文字之間沒有空白
+        assert text.replace(" ", "") == want.replace(" ", "")  # 一個字都沒少
+        # 每個空白都是原文有的；原文的空白最多少掉換行處那幾個
+        i = 0
+        lost = 0
+        for ch in text:
+            while ch != " " and want[i] == " ":
+                i, lost = i + 1, lost + 1
+            assert want[i] == ch, f"多出空白：{text!r}"
+            i += 1
+        assert lost <= 3, f"原文的空白少了 {lost} 個：{text!r}"
+    assert "Federal Reserve Board" in got[0] and "（圖 2）" in got[0]
 
 
 def test_text_hidden_inside_a_narrow_box_is_not_called_truncation(tmp_path, sample_pdfs):

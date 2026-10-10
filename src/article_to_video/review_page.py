@@ -1,14 +1,15 @@
 """審片頁的 HTML（一個檔、樣式與程式內嵌、不連網，作者在 Finder 點兩下就能看）。
 
 頁面結構（測試與後面的票靠這些 class／id 找東西）：
-  <html data-stage="preview|final" data-version="N">
+  <html data-stage="preview|review|published" data-version="N">
+  .stage（頁首）：預覽／審片用的影片（還沒出片）／已出片（放在哪）
   article.card[data-shot-id][data-shot-number][data-changed]   每個分鏡一張
-    .timecode（出片後是 button.seek[data-start]）、img.still[data-t]（第一張＝完成狀態）、.narration
+    .timecode（有成片時是 button.seek[data-start]）、img.still[data-t]（第一張＝完成狀態）、.narration
     .slot[data-slot="numbers"]   數字對帳（#5 填）      .slot[data-slot="checks"]  自動檢查（#11 填）
     textarea.comment[data-shot-id]
   .page-slots .slot[data-slot=…]   整片層級的檢查結果（例：獨立審片）
   textarea#overall.overall、#menu（能加什麼）、#copy-btn／#copy-status／#copy-out（複製給 Claude）
-  <script id="review-data" type="application/json">  給 review.js 的資料（專案名、版本、分鏡編號與 id）
+  <script id="review-data" type="application/json">  給 review.js 的資料（片名、版本、分鏡編號與 id）
 
 後面的票往卡片加東西：做一個 CardSection（slot、標題、幾個 CheckItem），經 review.make_review(contributors=…) 傳進來，
 這裡負責排版與跳脫（不吃 HTML，只吃文字）。
@@ -48,6 +49,9 @@ class CheckItem:
     """ok／warn／block／info，決定前面那個小標籤的字和顏色。"""
     label: str | None = None
     """小標籤的字；不給就用 status 的預設（沒問題／要看一下／擋下出片／說明）。"""
+    code: str = ""
+    """給 Claude 的代號與技術說明（例「qa:SH03:jump@1a2b3c4d　跳變：…」）。不跟作者看的字放一起：
+    收在這一區最後、預設收起來的「給 Claude 的代號」裡。"""
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,9 @@ class CardSection:
     items: list[CheckItem] = field(default_factory=list)
     note: str = ""
     """標題下面的一句說明（選填）。"""
+    summary: str = ""
+    """有寫就整區縮成安靜的一行（例「自動檢查沒發現問題」）：沒有 items 就只有這一行；有 items 的話收在這一行底下，
+    點開才看得到。沒問題的檢查用它，作者不用一行一行讀。"""
 
 
 @dataclass(frozen=True)
@@ -86,11 +93,12 @@ class CardModel:
 
 @dataclass(frozen=True)
 class PageModel:
-    project: str
+    title: str
+    """片名（「日期-片名」資料夾去掉日期；專案資料夾自己一律叫「專案」）：頁面標題、頁首、複製給 Claude 的標頭都用它。"""
     storage_key: str
     version: int
     stage: str
-    """"preview"（只有靜態圖）或 "final"（已出片）。"""
+    """"preview"（只有靜態圖）、"review"（審片用的影片做好了，還沒出片）、"published"（這一版已經出片）。"""
     generated: str
     duration: float
     cards: list[CardModel]
@@ -100,6 +108,9 @@ class PageModel:
     page_sections: list[CardSection] = field(default_factory=list)
     aspect: str = "16x9"
     """畫面比例（timeline.VideoFormat.name）：9x16 時靜態圖、成片照直式排。"""
+    published_to: str = ""
+    """已出片時放在哪（給作者看的 Finder 路徑，例「影片 → 解說影片 → 2026-10-09-片名」）。"""
+    published_version: int | None = None
 
 
 # ---------------------------------------------------------------- 能加什麼（照外掛實際做得到的事寫）
@@ -167,6 +178,15 @@ _e = html.escape
 _SLOT_ORDER = {"numbers": 0, "checks": 1}
 
 
+def _codes(items: Sequence[CheckItem]) -> str:
+    """給 Claude 的代號：一區一個、預設收起來（作者不用看；Claude 讀頁面或 checks.json 都拿得到）。"""
+    codes = [it.code for it in items if it.code]
+    if not codes:
+        return ""
+    lis = "".join(f"<li><code>{_e(c)}</code></li>" for c in codes)
+    return f'<details class="codes"><summary>給 Claude 的代號</summary><ul>{lis}</ul></details>'
+
+
 def _section(sec: CardSection, heading: str = "h3") -> str:
     items = "".join(
         f'<li class="{_e(it.status)}"><span class="mark">{_e(it.label or STATUSES.get(it.status, it.status))}</span>'
@@ -176,8 +196,15 @@ def _section(sec: CardSection, heading: str = "h3") -> str:
         for it in sec.items
     )
     note = f'<p class="hint">{_e(sec.note)}</p>' if sec.note else ""
+    if sec.summary:  # 沒問題：安靜的一行，細節（有的話）點開才看
+        if not sec.items:
+            return (f'<section class="slot quiet" data-slot="{_e(sec.slot)}">'
+                    f'<p class="quiet-line">{_e(sec.summary)}</p></section>')
+        return (f'<section class="slot quiet" data-slot="{_e(sec.slot)}"><details class="fold">'
+                f'<summary class="quiet-line">{_e(sec.summary)}</summary>{note}<ul>{items}</ul></details>'
+                f'{_codes(sec.items)}</section>')
     return (f'<section class="slot" data-slot="{_e(sec.slot)}"><{heading}>{_e(sec.title)}</{heading}>{note}'
-            f'<ul>{items}</ul></section>')
+            f'<ul>{items}</ul>{_codes(sec.items)}</section>')
 
 
 def _slots(sections: Sequence[CardSection]) -> str:
@@ -257,10 +284,20 @@ def _changes(m: PageModel) -> str:
     return f'<section class="panel notice" id="changes">{"".join(parts)}</section>'
 
 
+def _stage(m: PageModel) -> str:
+    """頁首的階段：照實說作者現在看的是什麼。build 做的影片是給他審的，publish 之後才算出片。"""
+    if m.stage == "published":
+        v = f"（第 {m.published_version} 版）" if m.published_version else ""
+        where = f"：在 Finder 的「{m.published_to}」" if m.published_to else ""
+        return f'<span class="stage published">已出片{v}{_e(where)}</span>'
+    if m.stage == "review":
+        return '<span class="stage review">審片用的影片：還沒出片，你看過、點頭之後才出片</span>'
+    return '<span class="stage">預覽：只有靜態圖，還沒做成影片、還沒出片</span>'
+
+
 def render_review_html(m: PageModel) -> str:
     has_video = m.video_src is not None
-    stage = ('<span class="stage final">已出片</span>' if m.stage == "final"
-             else '<span class="stage">預覽：只有靜態圖，還沒出片</span>')
+    stage = _stage(m)
     film = ""
     if has_video:
         film = (
@@ -274,7 +311,7 @@ def render_review_html(m: PageModel) -> str:
                       + "".join(f'<div class="panel">{_section(s, "h2")}</div>' for s in m.page_sections)
                       + "</div>")
     data = {
-        "project": m.project,
+        "project": m.title,
         "storageKey": m.storage_key,
         "version": m.version,
         "stage": m.stage,
@@ -294,7 +331,7 @@ def render_review_html(m: PageModel) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>審片頁｜{_e(m.project)}（第 {m.version} 版）</title>
+<title>審片頁｜{_e(m.title)}（第 {m.version} 版）</title>
 <style>
 {_asset("review.css")}
 </style>
@@ -302,7 +339,7 @@ def render_review_html(m: PageModel) -> str:
 <body>
 <header class="top"><div class="wrap">
 <p class="eyebrow">審片頁 · 第 {m.version} 版 {stage}</p>
-<h1>{_e(m.project)}</h1>
+<h1>{_e(m.title)}</h1>
 <p class="meta">{len(m.cards)} 個分鏡 · 全長 {timecode(m.duration)} · {_e(m.generated)} 產生</p>
 </div></header>
 <main class="wrap">

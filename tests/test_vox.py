@@ -347,6 +347,14 @@ def test_checking_every_box_unblocks_the_final_build(scenario):
     assert scenario.video.is_file()
 
 
+def test_after_the_last_box_is_checked_claude_is_told_the_real_next_step(scenario):
+    """核完框還不能出片：接著是建置審片用的成片、自動檢查、獨立審片、給作者看；作者點頭才出片。"""
+    out = scenario.confirmed.stdout
+    assert "所有 Vox 框都核對過了" in out
+    assert "可以正式出片" not in out and "可以出片" not in out
+    assert "build" in out and "作者" in out and "publish" in out
+
+
 @pytest.mark.parametrize("excerpt_at", [0, 0.6])
 def test_box_followed_too_soon_by_the_next_item_blocks_the_final_build(tmp_path, excerpt_at):
     """框推近（0.9 秒）之後鏡頭至少停 1.2 秒，再花 0.8 秒移到下一件素材：框到下一件至少隔 2.9 秒。

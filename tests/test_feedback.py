@@ -30,6 +30,17 @@ def test_each_line_becomes_a_comment_on_that_shot_plus_the_overall_comment():
     assert fb.overall == "節奏有點快\n片尾想停久一點"
 
 
+def test_the_header_carries_the_video_title_and_old_headers_still_parse():
+    """新的審片頁標頭寫片名（可能有冒號、｜）；舊的寫專案資料夾名（「專案」或「日期-片名」），照樣解析。"""
+    for header, title in (("審片留言｜倒掛之後：殖利率曲線怎麼轉正｜第 3 版", "倒掛之後：殖利率曲線怎麼轉正"),
+                          ("審片留言｜A｜B 兩種走法｜第 3 版", "A｜B 兩種走法"),
+                          ("審片留言｜專案｜第 3 版", "專案"),
+                          ("審片留言｜2026-10-09-殖利率曲線｜第 3 版", "2026-10-09-殖利率曲線")):
+        fb = parse_feedback(header + "\n分鏡 1（SH01）：標題改短\n")
+        assert (fb.project, fb.version) == (title, 3)
+        assert fb.shots == [ShotComment(1, "SH01", "標題改短")]
+
+
 def test_hand_typed_variants_are_understood():
     fb = parse_feedback("分鏡3:字太小\n分鏡 4 ：數字錯了\n\n整體意見:OK\n")
     assert fb.project is None and fb.version is None

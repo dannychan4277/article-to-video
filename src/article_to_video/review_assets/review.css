@@ -93,7 +93,8 @@ a { color: inherit; }
 .meta { color: var(--muted); font-size: 15px; margin-top: 6px; }
 .stage { display: inline-block; font-size: 14px; font-weight: 600; padding: 2px 10px; border-radius: 999px;
   border: 1px solid var(--line-strong); color: var(--ink); background: var(--surface); margin-left: 6px; vertical-align: 2px; }
-.stage.final { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
+.stage.published { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
+.stage.review { border-color: var(--warn); color: var(--warn); background: var(--warn-soft); }
 
 /* 說明、通知 */
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 22px; margin: 0 0 18px; }
@@ -157,6 +158,20 @@ html[data-aspect="9x16"] .film video { width: auto; max-width: 100%; height: 70v
 .slot .block .mark { color: var(--block); background: var(--block-soft); }
 .slot .info .mark { color: var(--muted); background: var(--bg); }
 .slot .detail { grid-column: 2; color: var(--muted); font-size: 14px; word-break: break-word; }
+/* 沒問題的檢查：安靜的一行（點開才看細節） */
+.slot.quiet { padding-top: 8px; }
+.page-slots .slot { border-top: 0; padding-top: 0; }
+.page-slots .slot + .slot { margin-top: 12px; }
+.quiet-line { color: var(--muted); font-size: 14px; margin: 0; }
+.quiet-line::before { content: "\2713  "; color: var(--ok); font-weight: 700; }
+details.fold > summary { cursor: pointer; }
+details.fold[open] > summary { margin-bottom: 6px; }
+/* 給 Claude 的代號：預設收起來 */
+details.codes { margin-top: 6px; font-size: 13px; color: var(--muted); }
+details.codes > summary { cursor: pointer; }
+details.codes ul { margin-top: 4px; gap: 2px; }
+details.codes li { display: block; font-size: 13px; }
+details.codes code { font-size: 12px; word-break: break-all; }
 
 label.field { font-weight: 600; font-size: 16px; }
 textarea {

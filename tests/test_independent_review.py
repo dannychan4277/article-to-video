@@ -141,13 +141,18 @@ def test_recorded_findings_show_on_the_review_page(project):
         ("R1-1", "必修", 2), ("R1-2", "該修", 1), ("R1-3", "可改", None)]  # 只寫時間的對到分鏡 1
 
     page = read_review(project)
-    assert page.attrs["data-stage"] == "final" and page.videos
+    assert page.attrs["data-stage"] == "review" and page.videos
     top = page.page_slots["review"]
     assert "第 1 輪" in top and "7 分" in top and "片尾卡停久了一點" in top and "必修" in top
     cards = {c.id: c for c in page.cards}
     assert "標註壓到柱上的數值" in cards["SH02"].slots["review"]
+    assert "標註往上移" in cards["SH02"].slots["review"]  # 建議怎麼改：作者看得懂
     assert "第一根柱子比旁白早出現" in cards["SH01"].slots["review"]
     assert "標註壓到柱上的數值" not in cards["SH01"].slots.get("review", "")
+    # 代號（R1-1）和證據等級（實測／推論）是給 Claude 的：收起來，作者看到的地方沒有
+    for where in (cards["SH02"].slots["review"], top):
+        assert "R1-" not in where and "實測" not in where and "推論" not in where, where
+    assert "R1-1" in cards["SH02"].codes and "R1-3" in page.page_codes
 
 
 def test_an_answer_piped_in_is_read_as_utf8_whatever_the_macs_language_setting(project):
@@ -186,6 +191,13 @@ def test_an_unhandled_must_fix_blocks_the_final_build_until_fixed_or_accepted(pr
     fixed = run_cli("resolve", str(project), "R1-1", "--fixed", "標註改放柱子上方")
     assert fixed.returncode == 0, fixed.stderr
     assert run_cli("build", str(project), "--tts", "fake").returncode == 0
+    from test_review_page import read_review
+
+    page = read_review(project)  # 處理過的收起來（點開才看），還沒處理的照樣攤開
+    sh02 = next(c for c in page.cards if c.id == "SH02")
+    assert "標註壓到柱上的數值" in sh02.folded and "標註改放柱子上方" in sh02.folded
+    assert "第一根柱子比旁白早出現" in page.page_slots["review"] and "第一根柱子比旁白早出現" not in page.page_folded
+    assert "標註壓到柱上的數值" in page.page_folded
 
     # 下一輪審片說沒修好：重新打開，又擋；作者決定不改就記下接受
     assert run_cli("review-prep", str(project), "--tts", "fake").returncode == 0

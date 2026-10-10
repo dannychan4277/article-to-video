@@ -38,12 +38,19 @@ class Card:
     stills: list[tuple[str, float]] = field(default_factory=list)
     """(圖檔 src, 片中秒數)；第一張是完成狀態。"""
     slots: dict[str, str] = field(default_factory=dict)
-    """data-slot → 裡面的文字（數字對帳、自動檢查）。"""
+    """data-slot → 裡面作者看得到的文字（數字對帳、自動檢查）；收起來給 Claude 的代號不算（在 codes）。"""
+    codes: str = ""
+    """收起來的「給 Claude 的代號」區（.codes）裡的文字。"""
+    folded: str = ""
+    """點開才看得到的細節（details.fold）裡的文字；這些字也算在 slots 裡。"""
 
 
 @dataclass
 class ReviewPage:
     title: str = ""
+    h1: str = ""
+    stage_text: str = ""
+    """頁首那行「預覽／審片用的影片／已出片」的字。"""
     cards: list[Card] = field(default_factory=list)
     videos: list[str] = field(default_factory=list)
     overall_boxes: int = 0
@@ -51,6 +58,8 @@ class ReviewPage:
     changes_text: str = ""
     """「這版改了哪些分鏡」那一區的文字。"""
     page_slots: dict[str, str] = field(default_factory=dict)
+    page_codes: str = ""
+    page_folded: str = ""
     attrs: dict[str, str] = field(default_factory=dict)
 
 
@@ -72,6 +81,10 @@ class _Parser(HTMLParser):
             self.page.attrs = a
         if tag == "title":
             self.in_title = True
+        if tag == "h1":
+            self.capture.append(("h1", len(self.stack) + 1))
+        if "stage" in cls:
+            self.capture.append(("stage", len(self.stack) + 1))
         if "card" in cls and tag == "article":
             self.page.cards.append(Card(id=a["data-shot-id"], number=int(a["data-shot-number"]),
                                         changed=a.get("data-changed") == "true"))
@@ -95,6 +108,10 @@ class _Parser(HTMLParser):
                 self.capture.append(("slot:" + a.get("data-slot", ""), len(self.stack)))
             if a.get("id") == "changes":
                 self.capture.append(("changes", len(self.stack)))
+            if "codes" in cls:
+                self.capture.append(("codes", len(self.stack)))
+            if "fold" in cls:
+                self.capture.append(("fold", len(self.stack)))
 
     def _in_card(self) -> bool:
         return any(tag == "article" and "card" in c for tag, c, _ in self.stack)
@@ -111,10 +128,25 @@ class _Parser(HTMLParser):
     def handle_data(self, data):
         if self.in_title:
             self.page.title += data
+        if any(target == "codes" for target, _ in self.capture):  # 收起來給 Claude 的代號：不算作者看得到的字
+            if self._in_card() and self.page.cards:
+                self.page.cards[-1].codes += data
+            else:
+                self.page.page_codes += data
+            return
         for target, _ in self.capture:
             card = self.page.cards[-1] if self.page.cards else None
-            if target == "menu":
+            if target == "fold":
+                if self._in_card() and card is not None:
+                    card.folded += data
+                else:
+                    self.page.page_folded += data
+            elif target == "menu":
                 self.page.menu_text += data
+            elif target == "h1":
+                self.page.h1 += data
+            elif target == "stage":
+                self.page.stage_text += data
             elif target == "changes":
                 self.page.changes_text += data
             elif target.startswith("slot:"):
@@ -127,10 +159,14 @@ class _Parser(HTMLParser):
                 setattr(card, target, getattr(card, target) + data)
 
 
-def read_review(project_dir: Path) -> ReviewPage:
+def parse_review(html: str) -> ReviewPage:
     p = _Parser()
-    p.feed((project_dir / REVIEW_PAGE).read_text(encoding="utf-8"))
+    p.feed(html)
     return p.page
+
+
+def read_review(project_dir: Path) -> ReviewPage:
+    return parse_review((project_dir / REVIEW_PAGE).read_text(encoding="utf-8"))
 
 
 def local_file(project_dir: Path, src: str) -> Path:
@@ -153,6 +189,8 @@ def test_preview_writes_one_card_per_shot_each_with_its_narration(previewed_proj
 
 def test_preview_renders_stills_only_not_the_video(previewed_project):
     root = previewed_project.dir
+    page = read_review(root)
+    assert page.attrs["data-stage"] == "preview" and "還沒出片" in page.stage_text
     assert not (root / "成片.mp4").exists()
     assert not (root / "字幕.srt").exists()
     clips = root / "build" / "16x9" / "clips"
@@ -225,7 +263,9 @@ def test_each_card_shows_where_the_shot_sits_in_the_video(previewed_project):
 
 def test_after_the_final_build_the_page_embeds_the_video(built_project):
     page = read_review(built_project.dir)
-    assert page.attrs.get("data-stage") == "final"
+    assert page.attrs.get("data-stage") == "review"
+    # build 做的是給作者審的影片，還沒放進影片資料夾：頁首不能說「已出片」
+    assert "已出片" not in page.stage_text and "還沒出片" in page.stage_text, page.stage_text
     assert len(page.videos) == 1
     assert local_file(built_project.dir, page.videos[0]).resolve() == built_project.video.resolve()
     assert [(c.number, c.id) for c in page.cards] == [(1, "SH01"), (2, "SH02")]
@@ -276,9 +316,9 @@ def test_rebuilt_page_marks_the_shots_that_changed_since_the_last_version(copy_o
     assert stills_after["SH01"] == stills_before["SH01"]  # 沒改的分鏡不重渲靜態圖
     assert stills_after["SH02"] != stills_before["SH02"]
 
-    run_cli("build", root)  # 沒再改：出片後還是第 2 版，標記留著
+    run_cli("build", root)  # 沒再改：建置之後還是第 2 版，標記留著
     page = read_review(root)
-    assert page.attrs["data-stage"] == "final"
+    assert page.attrs["data-stage"] == "review"
     assert page.attrs["data-version"] == "2"
     assert changed_ids(page) == ["SH02"]
 
@@ -319,16 +359,18 @@ def test_cli_opens_the_review_page_in_the_browser_unless_told_not_to(previewed_p
     fake_open.chmod(0o755)
     from conftest import run_cli as run
 
-    def preview(*extra: str, **more_env: str) -> None:
-        proc = run("preview", root, "--tts", "fake", *extra, unset=("ARTICLE_TO_VIDEO_NO_OPEN", "CI"),
+    def preview(*extra: str, command: str = "preview", **more_env: str) -> None:
+        proc = run(command, root, "--tts", "fake", *extra, unset=("ARTICLE_TO_VIDEO_NO_OPEN", "CI"),
                    env={"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}", **more_env})
         assert proc.returncode == 0, proc.stderr
+        assert str(root / REVIEW_PAGE) in proc.stdout  # 沒打開也印出審片頁在哪
 
     preview()
     assert record.read_text(encoding="utf-8").splitlines() == [str(root / REVIEW_PAGE)]
     record.unlink()
     preview("--no-open")
     preview(ARTICLE_TO_VIDEO_NO_OPEN="1")
+    preview("--no-open", command="open-review")  # 只更新審片頁（例如先給 Claude 看）也可以不打開
     assert not record.exists()
 
 

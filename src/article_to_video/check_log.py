@@ -99,7 +99,7 @@ def record_resolutions(project_dir: str | os.PathLike, tokens: list[str], *, sta
         if t not in known:
             problems.append(f"不認得的代號 {t}（重跑 checks 看現在的代號；分鏡改過的話代號會變）")
         elif status == "fixed" and t.startswith(AUTO_PREFIXES):
-            problems.append(f"{t} 是自動檢查的問題，不用標改好：改了分鏡、重新出片再跑 checks，就會重查")
+            problems.append(f"{t} 是自動檢查的問題，不用標改好：改了分鏡、重新 build 再跑 checks，就會重查")
     if problems:
         raise ProjectError(problems, title="沒有記下任何一項")
     log = load_log(root)

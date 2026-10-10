@@ -1,4 +1,4 @@
-"""獨立審片：出片之後，Claude Code 另外派一個 agent，只看成片審一輪。Python 不派 agent，這裡只做三件事：
+"""獨立審片：build 好審片用的成片之後、作者看審片頁之前（出片之前），Claude Code 另外派一個 agent，只看成片審一輪。Python 不派 agent，這裡只做三件事：
 
   prepare_review_kit(plan)     從成片準備審片素材（指令列 review-prep）：build/<比例>/independent-review/
                                  material.json   目錄：成片長度、每個分鏡的編號與時段、字幕帶位置、畫面事件時刻、
@@ -568,31 +568,42 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
         rounds = book["rounds"]
         if not rounds:
             if review_enabled(data_dir):
-                item = CheckItem("還沒審", detail="出片之後 Claude 會另外派一個只看成片的 agent 審一輪，結果會出現在這裡。",
+                item = CheckItem("還沒審", detail="做好審片用的影片之後、給你看之前，Claude 會另外派一個只看影片的 agent 審一輪，結果會出現在這裡。",
                                  status="info")
             else:
                 item = CheckItem("已關掉（使用者設定）", detail="要打開跟 Claude 說「獨立審片打開」。", status="info")
             return ReviewExtras(page=[CardSection("review", "獨立審片", [item])])
 
         def check_item(it: dict[str, Any]) -> CheckItem:
+            """作者看到：問題、怎麼了、建議怎麼改。代號（R1-2）、證據等級（實測／推論／猜測）收在給 Claude 的那一區。"""
             res = resolution(book, it["id"])
-            text = f"{it['title']}（{it['id']}）"
-            parts = (it.get("detail"), f"建議：{it['fix']}" if it.get("fix") else "",
-                     f"證據：{it['evidence']}" if it.get("evidence") else "")
+            text = it["title"]
+            parts = (it.get("detail"), f"建議：{it['fix']}" if it.get("fix") else "")
             detail = "；".join(x.rstrip("。；") for x in parts if x)
+            code = it["id"] + (f"（證據：{it['evidence']}）" if it.get("evidence") else "") + f"　{it['title']}"
             if res is not None:
                 label = "已修好" if res["status"] == "fixed" else "已接受"
-                return CheckItem(text, detail=f"{label}（{res.get('by', '')}）：{res.get('note', '')}",
-                                 status="ok" if res["status"] == "fixed" else "info", label=label)
+                who = "" if res.get("by", "").startswith("獨立審片") else f"（{res.get('by', '')}）"
+                return CheckItem(text, detail=f"{label}{who}：{res.get('note', '')}",
+                                 status="ok" if res["status"] == "fixed" else "info", label=label, code=code)
             status = {"必修": "block", "該修": "warn"}.get(it["severity"], "info")
-            return CheckItem(text, detail=detail, status=status, label=it["severity"])
+            return CheckItem(text, detail=detail, status=status, label=it["severity"], code=code)
+
+        def sections(items: list, title: str, note: str = "") -> list:
+            """還沒處理的攤開；已經處理（改好、接受）的收成一行「已處理 N 項」，點開才看。"""
+            open_ = [ci for ci in items if ci.label not in ("已修好", "已接受")]
+            done = [ci for ci in items if ci.label in ("已修好", "已接受")]
+            out = [CardSection("review", title, open_, note=note)] if open_ or note else []
+            if done:
+                out.append(CardSection("review", title, done, summary=f"{title}：已處理 {len(done)} 項（點開看）"))
+            return out
 
         cards: dict[str, list] = {}
         page_items = []
         for rnd in rounds:
             for it in rnd.get("items") or []:
                 ci = check_item(it)
-                page_items.append(CheckItem(f"{item_where(it)}　{ci.text}", ci.detail, ci.status, ci.label))
+                page_items.append(CheckItem(f"{item_where(it)}　{ci.text}", ci.detail, ci.status, ci.label, ci.code))
                 if it.get("shotId"):
                     cards.setdefault(it["shotId"], []).append(ci)
         last = rounds[-1]
@@ -601,14 +612,15 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
         counts = "、".join(f"{s} {sum(1 for it in last['items'] if it['severity'] == s)}" for s in SEVERITIES)
         note = f"第 {last['round']} 輪：{counts}。" + (f"{last['summary']}" if last.get("summary") else "")
         if must:
-            note += f" 還有 {len(must)} 項必修沒處理，正式出片會被擋下。"
+            note += f" 還有 {len(must)} 項必修還沒處理，處理完才能出片。"
         if last.get("videoKey") and last["videoKey"] != _final_key(plan):
             note += " 這一輪審的是之前的成片，之後改過的地方還沒審。"
-        if not page_items:
-            page_items = [CheckItem("沒有找到問題", status="ok")]
         score = f"，{last['score']:g} 分" if isinstance(last.get("score"), (int, float)) else ""
-        page = [CardSection("review", f"獨立審片（第 {last['round']} 輪{score}）", page_items, note=note)]
-        return ReviewExtras(cards={sid: [CardSection("review", "獨立審片", items)] for sid, items in cards.items()},
-                            page=page)
+        title = f"獨立審片（第 {last['round']} 輪{score}）"
+        if not page_items:
+            page = [CardSection("review", title, [], summary=f"{title}：沒有找到問題。{last.get('summary') or ''}".strip())]
+        else:
+            page = sections(page_items, title, note)
+        return ReviewExtras(cards={sid: sections(items, "獨立審片") for sid, items in cards.items()}, page=page)
 
     return contribute

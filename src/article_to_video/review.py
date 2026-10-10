@@ -2,13 +2,14 @@
 
 兩種時機都會寫同一頁（專案資料夾裡的「審片頁.html」，9:16 是「審片頁-9x16.html」）：
   preview_project()               預覽模式：plan_build() → 只渲靜態圖（不渲片段、不出成片）→ 審片頁。
-  make_review(plan, video=成片)   出片之後（CLI build 在 build_project 之後呼叫）：同一頁再內嵌成片。
+  make_review(plan, video=成片)   build 之後（CLI build 在 build_project 之後呼叫）：同一頁再內嵌審片用的成片。
 
-分鏡靜態圖（_still_frames）：每個分鏡一張完成狀態（分鏡最後一幀），加上這個分鏡每個畫面事件出現前一幀
-（跟上一個事件隔 ≥ MOMENT_GAP 秒才算，最多 MAX_MOMENTS 張）。快取在 build/<比例>/stills/<片段>/，
+分鏡靜態圖（_still_frames）：每個分鏡一張完成狀態（分鏡最後一幀；Vox 接續分鏡取鏡頭移走之前），加上這個分鏡
+每個畫面事件出現前一幀（跟上一個事件隔 ≥ MOMENT_GAP 秒才算，最多 MAX_MOMENTS 張）。快取在 build/<比例>/stills/<片段>/，
 鍵＝片段雜湊（spec＋引擎檔＋圖片）＋要渲的時刻，內容沒變就不重渲；並行渲。
 
-版本（build/<比例>/review.json）：每次寫審片頁都比對每個分鏡的內容雜湊（片段雜湊＋在片段裡的位置與長度＋它唸的旁白）。
+版本（build/<比例>/review.json）：每次寫審片頁都比對每個分鏡的內容雜湊（它自己畫面上的東西＋長度＋它唸的旁白，
+見 _shot_hashes；照分鏡算，不照片段算）。
 跟上次一樣就沿用版本號與「這版改過」的標記；不一樣就加一版，標出改過／新加的分鏡、列出拿掉的分鏡。
 瀏覽器裡的留言照版本存：新的一版開頭會問要不要放回上一版還沒複製出去的留言（見 review_assets/review.js）。
 
@@ -34,13 +35,14 @@ from pathlib import Path
 from urllib.parse import quote
 
 from article_to_video.build import BuildPlan, plan_build
-from article_to_video.clip_cache import clip_hash
-from article_to_video.clips import ClipRenderError, default_jobs, render_stills, run_parallel
+from article_to_video.clip_cache import clip_hash, content_fields, engine_fingerprint
+from article_to_video.clips import GRAMMAR_VOX, ClipRenderError, default_jobs, render_stills, run_parallel
 from article_to_video.macos import open_path
 from article_to_video.progress import Log, quiet
 from article_to_video.textio import read_json_or_none
 from article_to_video.review_page import CardModel, CardSection, CheckItem, PageModel, StillModel, render_review_html
 from article_to_video.timeline import ClipPlan, Timeline, VideoFormat
+from article_to_video.videos import video_title
 
 __all__ = [
     "NO_OPEN_ENV",
@@ -66,6 +68,10 @@ MOMENT_GAP = 0.8
 """畫面事件跟上一個事件至少隔這麼多秒，才另外出一張「這個事件之前」的靜態圖。"""
 MAX_MOMENTS = 3
 """每個分鏡最多幾張過程靜態圖（不含完成狀態那張）。"""
+VOX_LEAVE = 1.0
+"""Vox 鏡頭最早在下一件素材出現前多久開始移過去（引擎 y2_vox：素材 at 前 0.95 秒；框之後換下一件素材、
+畫面外的框，在它出現前 0.8 秒——vox.CAMERA；畫面裡的框是出現後才推過去）。分鏡靜態圖取在這之前，拍的是鏡頭還停在素材上
+的樣子；框推近停住後至少停 1.2 秒（vox.MIN_HOLD），所以這一刻框已經推近停好。"""
 
 NO_OPEN_ENV = "ARTICLE_TO_VIDEO_NO_OPEN"
 """設成 1 就不自動打開審片頁（測試、CI 用）；指令列也可以加 --no-open。"""
@@ -162,25 +168,51 @@ class Still:
     """這個分鏡的完成狀態（分鏡最後一幀）。"""
 
 
+def _next_cue_frames(plan: BuildPlan) -> dict[str, int]:
+    """Vox 分鏡 → 同一個片段裡、它後面第一個畫面事件（下一件素材或框）的幀。片段在它之後就結束的不列。"""
+    clip_of = _clip_of(plan)
+    shots = plan.timeline.shots
+    out: dict[str, int] = {}
+    for i, st in enumerate(shots):
+        cp = clip_of[st.shot.id]
+        later = [c.frame for nxt in shots[i + 1:] if clip_of[nxt.shot.id] is cp for c in nxt.cues if not c.carried]
+        if later:
+            out[st.shot.id] = min(later)
+    return out
+
+
 def _still_frames(plan: BuildPlan) -> dict[str, list[tuple[int, bool]]]:
     """每個分鏡要渲的成片幀號（, 是否完成狀態）。
 
     - 完成狀態：分鏡最後一幀（下一個分鏡切進來之前，作者最後看到的畫面）。
-    - 過程：這個分鏡自己的每個畫面事件（cue）出現的前一幀＝上一句講完、畫面停在那裡的樣子；
-      跟上一個事件隔不到 MOMENT_GAP 秒的不算（上一個動畫還沒跑完，看了也沒意義）。
-      接續分鏡的第一個事件也算（前一幀＝沿用的圖）。最多 MAX_MOMENTS 張。
+      Vox 接續分鏡例外：同一張桌面上，鏡頭在下一件素材（或框）出現前 VOX_LEAVE 秒內就開始移過去、
+      到了才有素材滑進來，最後一幀拍到的是空桌面或動態模糊（試跑實測）。所以取鏡頭還停在這個分鏡最後一件素材上的
+      最後一刻：下一個畫面事件前 VOX_LEAVE 秒；但不早於自己最後一件素材出現的下一幀。
+    - 過程：這個分鏡自己的每個畫面事件（cue）出現的前一幀＝上一句講完、畫面停在那裡的樣子（Vox 一樣改成
+      事件前 VOX_LEAVE 秒，鏡頭還沒離開的時候）；跟上一個事件隔不到 MOMENT_GAP 秒的不算（上一個動畫還沒跑完，
+      看了也沒意義）。接續分鏡的第一個事件也算（前一幀＝沿用的圖）。最多 MAX_MOMENTS 張。
     """
     fps = plan.timeline.fps
     gap = round(MOMENT_GAP * fps)
+    clip_of = _clip_of(plan)
+    next_cue = _next_cue_frames(plan)
     out: dict[str, list[tuple[int, bool]]] = {}
     for st in plan.timeline.shots:
+        vox = clip_of[st.shot.id].grammar == GRAMMAR_VOX
+        lead = round(VOX_LEAVE * fps) if vox else 1
         final = st.end_frame - 1
         own = sorted({c.frame for c in st.cues if not c.carried})
+        if vox and st.shot.id in next_cue:
+            final = min(final, next_cue[st.shot.id] - lead)
+            if own:
+                final = max(final, min(own[-1] + 1, st.end_frame - 1))
+            final = max(final, st.start_frame)
         prev = st.start_frame if st.shot.continues else None
         moments: list[int] = []
         for f in own:
-            if prev is not None and f - prev >= gap and st.start_frame < f - 1 < final:
-                moments.append(f - 1)
+            m = f - lead
+            if prev is not None and (m if vox else f) - prev >= gap and st.start_frame < m < final:
+                moments.append(m)
             prev = f
         out[st.shot.id] = [(final, True)] + [(f, False) for f in moments[:MAX_MOMENTS]]
     return out
@@ -290,17 +322,50 @@ class _Version:
     removed: list[tuple[str, int]]
 
 
+_VOX_MATERIAL = ("image", "excerpt", "title", "point")
+"""Vox 桌面上的素材（cue 的 kind）；框（box）畫在它前面最近的那件原圖或剪報上。"""
+
+
+def _chart_picture(cp: ClipPlan) -> list:
+    """財經圖表分鏡（一個分鏡一個片段）畫面上的東西：整份 spec（接續分鏡沿用的 data、cue 都在裡面）＋引擎檔。
+    慢推（push、pushFrom）不算：同一串前面的分鏡變長，後面的推近量跟著變，但作者看不出差別。"""
+    data = {k: v for k, v in (cp.spec.get("data") or {}).items() if k not in ("push", "pushFrom")}
+    spec = {**{k: v for k, v in cp.spec.items() if k not in ("duration", "data", "cues")},
+            "data": content_fields(data), "cues": [content_fields(c) for c in cp.spec.get("cues") or []]}
+    return [engine_fingerprint(cp.grammar), spec]
+
+
+def _vox_picture(plan: BuildPlan, index: int, cp: ClipPlan) -> list:
+    """Vox 分鏡（一串接續分鏡共用一個片段）畫面上的東西：只算這個分鏡自己的素材與框（給引擎的欄位、圖片內容、
+    在這個分鏡裡的時間），加上它開場時桌上那件素材——如果它沒有一開場就換上自己的素材（例：只有框的接續分鏡，
+    框的是上一個分鏡貼的圖，連同那張圖上已經畫好的框）。同一串其他分鏡改了，這個分鏡的畫面沒變就不算改過。"""
+    shots = plan.timeline.shots
+    st = shots[index]
+    fps = plan.timeline.fps
+    own = [[c.kind, content_fields(c.fields), c.frame - st.start_frame] for c in st.cues]
+    opens_with_own = bool(st.cues) and st.cues[0].kind in _VOX_MATERIAL and \
+        st.cues[0].frame - st.start_frame <= round(VOX_LEAVE * fps)
+    context: list = []
+    if not opens_with_own:
+        earlier = [c for prev in shots[:index] if prev.shot.id in cp.shot_ids for c in prev.cues]
+        last = max((i for i, c in enumerate(earlier) if c.kind in _VOX_MATERIAL), default=None)
+        if last is not None:
+            context = [content_fields(c.fields) for c in earlier[last:]]  # 那件素材＋之後畫在它上面的框
+    base = {k: v for k, v in cp.spec.items() if k not in ("duration", "cues")}
+    return [engine_fingerprint(cp.grammar), base, own, context]
+
+
 def _shot_hashes(plan: BuildPlan, narration: dict[str, list[NarrationPiece]]) -> dict[str, str]:
-    """每個分鏡的內容雜湊＝它的片段雜湊（spec＋引擎檔＋圖片）＋在片段裡的位置與長度＋它唸的旁白。
+    """每個分鏡的內容雜湊＝它自己畫面上的東西（_chart_picture／_vox_picture）＋長度＋它唸的旁白。
+    照分鏡算、不照片段算：一串接續的 Vox 分鏡共用一個片段，只改其中一個，只有它（和畫面真的跟著變的）算改過。
     在成片裡的絕對時間不算：前面的分鏡變長，後面的分鏡往後挪，但畫面沒變就不算改過。"""
     clip_of = _clip_of(plan)
-    clip_hashes = {cp.id: clip_hash(cp) for cp in plan.clips}
     out: dict[str, str] = {}
-    for st in plan.timeline.shots:
+    for i, st in enumerate(plan.timeline.shots):
         cp = clip_of[st.shot.id]
-        payload = [clip_hashes[cp.id], st.start_frame - cp.start_frame, st.frames,
-                   [[p.segment, p.text] for p in narration[st.shot.id]]]
-        out[st.shot.id] = hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
+        picture = _vox_picture(plan, i, cp) if cp.grammar == GRAMMAR_VOX else _chart_picture(cp)
+        payload = [picture, st.frames, [[p.segment, p.text] for p in narration[st.shot.id]]]
+        out[st.shot.id] = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     return out
 
 
@@ -359,9 +424,31 @@ def _storage_key(plan: BuildPlan) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def _published(plan: BuildPlan) -> dict | None:
+    """這個比例最近一次出片的紀錄（publish 寫的 output.json），而且出的就是現在這份成片；不然 None。"""
+    from article_to_video.videos import load_outputs
+
+    rec = load_outputs(plan.project.root).get(plan.format.name)
+    stamp = plan.paths.final_stamp
+    current = stamp.read_text(encoding="utf-8") if stamp.is_file() else None
+    return rec if rec and current and rec.get("videoKey") == current else None
+
+
+def _finder_path(video: str) -> str:
+    """成片所在資料夾，用作者在 Finder 看到的說法（~/Movies 叫「影片」）。"""
+    folder = Path(video).parent
+    try:
+        rel = folder.relative_to(Path.home() / "Movies")
+        parts = ["影片", *rel.parts]
+    except ValueError:
+        parts = [folder.parent.name, folder.name]
+    return " → ".join(p for p in parts if p)
+
+
 def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], video: Path | None,
                 narration: dict[str, list[NarrationPiece]], version: _Version, extras: ReviewExtras) -> PageModel:
     fps = plan.timeline.fps
+    published = _published(plan) if video else None
     cards = [
         CardModel(
             id=st.shot.id,
@@ -377,10 +464,10 @@ def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], vid
         for st in plan.timeline.shots
     ]
     return PageModel(
-        project=plan.project.root.name,
+        title=video_title(plan.project.root),
         storage_key=_storage_key(plan),
         version=version.number,
-        stage="final" if video else "preview",
+        stage="published" if published else "review" if video else "preview",
         generated=datetime.now().strftime("%Y-%m-%d %H:%M"),
         duration=plan.timeline.duration,
         cards=cards,
@@ -388,6 +475,8 @@ def _page_model(plan: BuildPlan, page: Path, stills: dict[str, list[Still]], vid
         removed=version.removed,
         page_sections=list(extras.page),
         aspect=plan.format.name,
+        published_to=_finder_path(published["video"]) if published and published.get("video") else "",
+        published_version=published.get("reviewVersion") if published else None,
     )
 
 
@@ -399,7 +488,7 @@ def make_review(
     jobs: int | None = None,
     log: Log = quiet,
 ) -> ReviewResult:
-    """渲靜態圖（有快取）、寫審片頁。video＝成片（出片後才有）；contributors＝要加在卡片上的檢查結果。"""
+    """渲靜態圖（有快取）、寫審片頁。video＝審片用的成片（build 之後才有）；contributors＝要加在卡片上的檢查結果。"""
     extras = ReviewExtras()
     for contribute in contributors:
         more = contribute(plan)

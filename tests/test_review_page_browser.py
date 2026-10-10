@@ -15,7 +15,8 @@ from playwright.sync_api import Page, sync_playwright
 
 from article_to_video.feedback import ShotComment, parse_feedback
 
-PROJECT_NAME = "2026-10-09-殖利率曲線"
+PROJECT_NAME = "殖利率曲線"
+"""「複製給 Claude」標頭寫的是片名：專案資料夾「2026-10-09-殖利率曲線」去掉日期。"""
 
 
 @pytest.fixture(scope="module")

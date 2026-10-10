@@ -70,6 +70,8 @@ class Walk:
     steps: dict[str, Step] = field(default_factory=dict)
     mtimes: dict[str, dict[str, float]] = field(default_factory=dict)
     opened: list[str] = field(default_factory=list)
+    pages: dict[str, str] = field(default_factory=dict)
+    """那一步做完時的審片頁（HTML），或版本紀錄（review.json，名字結尾 -state）。"""
 
 
 def _files(d: Path) -> dict[str, float]:
@@ -113,6 +115,7 @@ def walk(tmp_path_factory, videos_dir) -> Walk:
     # 4. Claude 照秒數寫分鏡 → 預覽：分鏡靜態圖＋數字對帳（配音用第 3 步的），先不給作者看
     (p / "shots.json").write_text(json.dumps(SHOTS, ensure_ascii=False), encoding="utf-8")
     run("preview", "preview", str(p), "--no-open", "--data-dir", str(data))
+    w.pages["preview"] = (p / "審片頁.html").read_text(encoding="utf-8")
     # 4. 檢查都做完了，打開審片頁給作者看
     run("open-review", "open-review", str(p), "--data-dir", str(data), env=opening)
     w.mtimes["before"] = {**{f"stills/{k}": v for k, v in _files(p / "build" / "16x9" / "stills").items()},
@@ -126,6 +129,7 @@ def walk(tmp_path_factory, videos_dir) -> Walk:
                                       encoding="utf-8")
     run("lint2", "lint", str(p))
     run("preview2", "preview", str(p), "--no-open", "--data-dir", str(data))
+    w.pages["preview2-state"] = (p / "build" / "16x9" / "review.json").read_text(encoding="utf-8")
     w.mtimes["after"] = {**{f"stills/{k}": v for k, v in _files(p / "build" / "16x9" / "stills").items()},
                          **{f"narration/{k}": v for k, v in _files(p / "build" / "narration").items()}}
     # 6. 作者點頭之前不能出片：版本對不上、這支片還沒做過獨立審片（預設開著的使用者設定）
@@ -133,11 +137,15 @@ def walk(tmp_path_factory, videos_dir) -> Walk:
     run("publish-no-review", "publish", str(p), "--version", "2")
     # 7. 作者看了第 2 版說可以 → 出片
     run("publish", "publish", str(p), "--version", "2", "--data-dir", str(data), env=opening)
+    w.pages["publish"] = (p / "審片頁.html").read_text(encoding="utf-8")
     run("projects", "projects", "--json")
     # 8. 出片之後又動了分鏡（沒給作者看）→ 不能直接再出片
     shots["shots"][0]["chart"]["data"]["highlight"]["text"] = "短天期高"
     (p / "shots.json").write_text(json.dumps(shots, ensure_ascii=False), encoding="utf-8")
     run("publish-unseen", "publish", str(p), "--version", "2", "--data-dir", str(data))
+    # 9. 改過的給作者看：審片頁回到預覽，頁首不再說已出片（影片資料夾裡的是上一版）
+    run("preview3", "preview", str(p), "--no-open", "--data-dir", str(data))
+    w.pages["preview3"] = (p / "審片頁.html").read_text(encoding="utf-8")
     w.opened = opened_log.read_text(encoding="utf-8").splitlines() if opened_log.is_file() else []
     return w
 
@@ -187,7 +195,7 @@ def test_second_preview_redraws_only_the_changed_shot_and_revoices_only_the_chan
     pv = walk.steps["preview2"]
     assert pv.code == 0, pv.err
     assert "第 2 版" in pv.out and "（SH02）：" in pv.out and "（SH01）：" not in pv.out
-    state = json.loads((walk.project / "build" / "16x9" / "review.json").read_text(encoding="utf-8"))
+    state = json.loads(walk.pages["preview2-state"])
     assert state["version"] == 2 and state["changed"] == ["SH02"]
     before, after = walk.mtimes["before"], walk.mtimes["after"]
     sh01 = [k for k in before if k.startswith("stills/SH01/")]
@@ -237,3 +245,30 @@ def test_old_projects_list_shows_it_was_published(walk):
     me = next(p for p in listed if p["project"] == str(walk.project))
     assert me["stage"] == "已出片" and me["outputs"]["16x9"]["reviewVersion"] == 2
     assert listed[0]["project"] == str(walk.project)
+
+
+def test_the_review_page_is_titled_with_the_video_not_the_project_folder(walk):
+    """專案資料夾一律叫「專案」，片名在上一層「日期-片名」：審片頁的標題、頁首、複製給 Claude 的標頭都寫片名。"""
+    from test_review_page import parse_review
+
+    html = walk.pages["preview"]
+    page = parse_review(html)
+    assert page.h1.strip() == TITLE
+    assert TITLE in page.title and "專案" not in page.title
+    data = json.loads(html.split('<script id="review-data" type="application/json">')[1].split("</script>")[0])
+    assert data["project"] == TITLE  # review.js 拿它寫「審片留言｜片名｜第 N 版」
+
+
+def test_the_review_page_says_published_only_after_publishing_and_where_it_went(walk):
+    """頁首照實說：預覽、審片用的影片（還沒出片）、已出片（放在哪）。出片之後又改過，就不再說已出片。"""
+    from test_review_page import parse_review
+
+    before = parse_review(walk.pages["preview"])
+    assert before.attrs["data-stage"] == "preview" and "已出片" not in before.stage_text
+    after = parse_review(walk.pages["publish"])
+    assert after.attrs["data-stage"] == "published"
+    assert "已出片" in after.stage_text and walk.folder.name in after.stage_text, after.stage_text
+    changed = parse_review(walk.pages["preview3"])
+    assert walk.steps["preview3"].code == 0, walk.steps["preview3"].err
+    assert changed.attrs["data-stage"] == "preview" and "已出片" not in changed.stage_text
+    assert "出片之後又改過" in walk.pages["preview3"]
