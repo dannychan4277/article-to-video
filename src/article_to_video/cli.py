@@ -47,7 +47,7 @@
                [--data-dir D] [--project P]
                                                                      改使用者設定；加 --project 只改那支片的快照
   samples music --out 資料夾 [--seconds 20] [--data-dir D]           每首配樂一個試聽檔 music-<名字>.wav
-  samples voice --out 資料夾 [--rate +5%] [--text …] [--tts 配音層] [--voice 代號]…
+  samples voice --out 資料夾 [--rate +5%] [--text …] [--tts 配音層] [--voice 曉臻|Wavenet-B|代號]…
                                                      每個聲音一個試聽檔 voice-<代號>.wav（要連網；印出送出幾個字）
   check-env [--json] [--try-voice] [--data-dir D]    檢查環境：逐項列出狀態與修法；有問題結束碼 1
                                                      （--try-voice：付費配音真的試唸兩個字，確認 API key 能用）
@@ -57,7 +57,8 @@
                                                      用外掛自帶的範例做一支約 10 秒的測試片並打開（安裝最後一步）
 
 preview、build、open-review 做完會用 macOS 的 open 在預設瀏覽器打開審片頁；--no-open 或環境變數
-ARTICLE_TO_VIDEO_NO_OPEN=1（測試、CI）就不打開。會渲染或改審片頁的子指令（preview、build、publish、open-review、
+ARTICLE_TO_VIDEO_NO_OPEN=1（測試、CI）就不打開。沒加 --no-open＝給作者看，審片頁才算一版（見 review.py「版本」；
+環境變數只是不彈視窗，照樣算）。會渲染或改審片頁的子指令（preview、build、publish、open-review、
 narrate、boxes、checks、review-prep、review-record、test-video）的輸出與錯誤記在 <專案>/build/last-run.{log,json}
 （只留最後一次），回報問題時打包。
 
@@ -239,7 +240,7 @@ def _parser() -> argparse.ArgumentParser:
     voice.add_argument("--tts", choices=sorted(TTS_ENGINES), default="edge",
                        help="配音層（預設 edge，要連網）；google 給六個台灣口音的聲音，elevenlabs 給設定的聲音")
     voice.add_argument("--voice", action="append", default=[],
-                       help="只試這幾個聲音（可重複；ElevenLabs 填聲音代號，挑聲庫的台灣口音聲音用）")
+                       help="只試這幾個聲音（可重複；寫法跟 settings set 一樣：曉臻、雲哲、Wavenet-B；ElevenLabs 填聲音代號）")
 
     ce = add("check-env", "檢查環境：逐項列出做片要用的工具狀態與修法（含 edge-tts 連線、付費配音有沒有 API key）",
              "json", "data_dir", project=None)
@@ -310,23 +311,28 @@ def _plan(args: argparse.Namespace, log: Log | None = None):
     return plan_build(args.project, tts=args.tts, fmt=args.aspect, data_dir=args.data_dir, **kw)
 
 
-def _refresh_review(plan, args: argparse.Namespace, log: Log, *, what: str | None = "審片頁已更新"):
-    """審片頁照這份計畫重寫（帶上最新的檢查結果）：成片還是這份分鏡做的就照樣內嵌，不然是預覽的樣子。"""
+def _refresh_review(plan, args: argparse.Namespace, log: Log, *, what: str | None = "審片頁已更新", shown: bool = False):
+    """審片頁照這份計畫重寫（帶上最新的檢查結果）：成片還是這份分鏡做的就照樣內嵌，不然是預覽的樣子。
+    shown：這次要打開給作者看（算一版）；檢查、記錄類的更新不算。"""
     from article_to_video.auto_checks import current_video
     from article_to_video.review import default_contributors, make_review
 
     review = make_review(plan, video=current_video(plan), contributors=default_contributors(args.data_dir),
-                         jobs=getattr(args, "jobs", None), log=log)
+                         jobs=getattr(args, "jobs", None), shown=shown, log=log)
     if what:
         log(f"{what}：{review.page}")
     return review
 
 
 def _show_review(page, *, no_open: bool, version: int | None = None) -> None:
+    """印審片頁在哪、第幾版；沒加 --no-open 就打開給作者看（這時才算一版，見 review.py「版本」）。"""
     from article_to_video.review import auto_open_allowed, open_in_browser
 
+    if no_open:
+        print(f"審片頁：{page}" + (f"（給作者看時是第 {version} 版；--no-open 還沒算給他看）" if version else ""))
+        return
     print(f"審片頁：{page}" + (f"（第 {version} 版）" if version else ""))
-    if no_open or not auto_open_allowed():
+    if not auto_open_allowed():
         return
     if not open_in_browser(page):
         print("沒能自動打開審片頁，請在 Finder 找到上面這個檔案，點兩下打開。")
@@ -336,14 +342,14 @@ def _show_review(page, *, no_open: bool, version: int | None = None) -> None:
 
 
 def _list_stills(review) -> str:
-    """給 Claude 逐張看的分鏡靜態圖（完成狀態那張）：第 1 版列全部，之後只列這版改過的分鏡。"""
+    """給 Claude 逐張看的分鏡靜態圖（完成狀態那張）：第一次寫審片頁列全部，之後只列跟上一次比改過的分鏡。"""
     shots = review.plan.timeline.shots if review.plan is not None else []
-    if review.version == 1:
-        pick, head = shots, f"第 1 版：{len(shots)} 個分鏡的靜態圖（完成狀態）"
+    if review.redrawn is None:
+        pick, head = shots, f"第 {review.version} 版：{len(shots)} 個分鏡的靜態圖（完成狀態）"
     else:
-        changed = set(review.changed)
+        changed = set(review.redrawn)
         pick = [st for st in shots if st.shot.id in changed]
-        head = f"第 {review.version} 版：改了 {len(pick)} 個分鏡" + ("，靜態圖（完成狀態）" if pick else "")
+        head = f"第 {review.version} 版：跟上次預覽比改了 {len(pick)} 個分鏡" + ("，靜態圖（完成狀態）" if pick else "")
     lines = [head]
     for st in pick:
         finals = [x.path for x in review.stills.get(st.shot.id, []) if x.final]
@@ -361,7 +367,7 @@ def _preview(args: argparse.Namespace) -> int:
 
     def body(log: Log) -> int:
         review = preview_project(args.project, tts=args.tts, contributors=default_contributors(args.data_dir),
-                                 jobs=args.jobs, data_dir=args.data_dir, fmt=args.aspect, log=log)
+                                 jobs=args.jobs, data_dir=args.data_dir, fmt=args.aspect, shown=not args.no_open, log=log)
         if review.plan is not None:
             log(summary_line(review.plan))
             log(_list_stills(review))
@@ -390,10 +396,22 @@ def _after_build_hint(plan, data_dir) -> str:
             " 打開審片頁給作者看；作者點頭之後 publish --version <他看的那一版> 才是出片。")
 
 
+def _open_must_fixes(plan, data_dir) -> str:
+    """build 之後：還沒處理的必修（自動檢查 fail＋獨立審片必修）。build 不擋（改了要重建來驗證），出片（publish）才擋。"""
+    from article_to_video.auto_checks import blocking_problems, resolve_hint
+
+    bad = blocking_problems(plan)
+    if not bad:
+        return ""
+    return (f"注意：還有 {len(bad)} 項必修還沒處理——這份成片可以拿來驗證改得對不對，但出片（publish）會被擋下：\n"
+            + "\n".join(f"  {line}" for _, line in bad) + "\n"
+            + resolve_hint(plan.project.root, [t for t, _ in bad], data_dir=data_dir))
+
+
 def _build(args: argparse.Namespace) -> int:
-    """建置審片用的成片（還不是出片）。正式出片前先數字對帳；自動檢查、獨立審片查出的必修還沒處理（沒改掉、也沒明確
-    接受）也擋。被擋下時審片頁照這一版重寫（沒有成片、被擋的原因標在卡上），作者打開看到的就是現況。"""
-    from article_to_video.auto_checks import require_checks_cleared
+    """建置審片用的成片（還不是出片）。先數字對帳（對不上就擋，審片頁照這一版重寫、被擋的原因標在卡上）。
+    自動檢查、獨立審片查出的必修還沒處理時照樣建置——改了分鏡要重建才驗證得了——只把它們清楚列出來；
+    擋的是出片（publish）。"""
     from article_to_video.build import build_project
     from article_to_video.numbers import check_numbers
     from article_to_video.review import default_contributors, make_review
@@ -402,12 +420,14 @@ def _build(args: argparse.Namespace) -> int:
 
     def body(log: Log) -> int:
         res = build_project(args.project, tts=args.tts, jobs=args.jobs, fmt=args.aspect, data_dir=args.data_dir,
-                            preflight=[check_numbers, require_checks_cleared], log=log)
+                            preflight=[check_numbers], log=log)
         print(f"完成：{res.video}（{res.duration:.2f} 秒）")
         print(f"字幕檔：{res.srt}")
         failed[0] = "成片做好了，但審片頁沒更新"
         review = make_review(res.plan, video=res.video, contributors=default_contributors(args.data_dir),
-                             jobs=args.jobs, log=log)
+                             jobs=args.jobs, shown=not args.no_open, log=log)
+        if must := _open_must_fixes(res.plan, args.data_dir):
+            print(must)
         print(_after_build_hint(res.plan, args.data_dir))
         _show_review(review.page, no_open=args.no_open, version=review.version)
         return 0
@@ -440,7 +460,7 @@ def _publish(args: argparse.Namespace) -> int:
 def _open_review(args: argparse.Namespace) -> int:
     """更新審片頁並打開給作者看。會渲分鏡靜態圖，出錯要跟 build、preview 一樣記進 last-run。"""
     def body(log: Log) -> int:
-        review = _refresh_review(_plan(args), args, log, what=None)
+        review = _refresh_review(_plan(args), args, log, what=None, shown=not args.no_open)
         _show_review(review.page, no_open=args.no_open, version=review.version)
         return 0
 
@@ -861,8 +881,10 @@ def _samples(args: argparse.Namespace) -> int:
         rate = normalize_value("rate", args.rate) if args.rate else us.rate
         cache = resolve_data_dir(args.data_dir) / "previews" / "voice-cache"
         voices = {"google": GOOGLE_TW_VOICES, "elevenlabs": {us.elevenlabs_voice: "設定的聲音"}}.get(args.tts, ZH_TW_VOICES)
-        if args.voice:
-            voices = {v: GOOGLE_TW_VOICES.get(v) or ZH_TW_VOICES.get(v) or "指定的聲音" for v in args.voice}
+        if args.voice:  # 跟 settings set 收一樣的寫法（曉臻、Wavenet-B…），換成代號再交給配音層
+            key = {"google": "google_voice", "elevenlabs": "elevenlabs_voice"}.get(args.tts, "voice")
+            picked = [normalize_value(key, v) for v in args.voice]
+            voices = {v: GOOGLE_TW_VOICES.get(v) or ZH_TW_VOICES.get(v) or "指定的聲音" for v in picked}
         engine = get_tts_engine(args.tts, model=us.elevenlabs_model if args.tts == "elevenlabs" else "",
                                 data_dir=args.data_dir)
         sent = 0

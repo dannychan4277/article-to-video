@@ -174,7 +174,7 @@ class ProjectInfo:
     """分鏡數；還沒有分鏡設定是 None。"""
     has_narration: bool
     review_versions: dict[str, int]
-    """比例 → 審片頁第幾版。"""
+    """比例 → 作者看過的審片頁第幾版（還沒給作者看過的比例不列）。"""
     outputs: dict[str, dict[str, Any]]
     """比例 → 最近一次出片（output.json）。"""
 
@@ -185,7 +185,7 @@ class ProjectInfo:
         if self.review_versions:
             return "審片中"
         if self.shots is not None:
-            return "寫好分鏡，還沒預覽"
+            return "寫好分鏡，還沒給作者看"
         if self.has_narration:
             return "寫好旁白，還沒寫分鏡"
         return "還沒寫旁白"
@@ -221,7 +221,7 @@ def _info(folder: Path) -> ProjectInfo | None:
     versions: dict[str, int] = {}
     for review in sorted(paths.build.glob("*/review.json")):
         v = _load(review)
-        if isinstance(v, dict) and isinstance(v.get("version"), int):
+        if isinstance(v, dict) and isinstance(v.get("version"), int) and v["version"] >= 1:  # 0＝還沒給作者看過
             versions[review.parent.name] = v["version"]
     mtimes = [p.stat().st_mtime for p in project.rglob("*") if p.is_file()] or [project.stat().st_mtime]
     return ProjectInfo(

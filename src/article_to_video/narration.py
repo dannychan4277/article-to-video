@@ -12,6 +12,13 @@
 快取鍵＝「配音層｜模型｜聲音｜語速｜文字」，同樣的段落不會重打（付費的就不會重複花錢）；換配音層全部重配一次，
 換回來直接用舊的快取。所有音檔一律轉成 48 kHz、單聲道、16-bit WAV，長度直接從 WAV 讀（不用 ffprobe），
 混音時逐樣本對齊。
+
+頭尾靜音（節奏）：配音服務每段頭尾都帶空白（edge-tts 開頭約 0.2 秒、結尾約 0.8 秒），段與段之間加上 gap 會停
+1.2 秒以上。narrate() 把每段頭尾修成固定的一小段（LEAD_PAD、TAIL_PAD），詞的時間跟著往前挪，錨點照樣落在詞上；
+段落中間的停頓不動。修剪的位置看「聽得到聲音」（10 毫秒一格、RMS 高過 SILENCE_DB）和詞的時間點，取比較寬的，
+不會切到字。原始音檔照舊快取（<鍵>.wav，快取鍵不變：舊專案不用重配、付費的不重花錢）；修剪的位置記在 <鍵>.json
+的 "trim"、修好的音檔是 <鍵>.trim.wav。整段聽不到聲音（假配音層、回報問題重現時補的靜音）就不修——重現時照
+json 記下的位置修，時間跟作者那台一樣。舊專案重建時會套用（片子變短、分鏡時間跟著重算）。
 """
 
 from __future__ import annotations
@@ -48,6 +55,16 @@ __all__ = [
 SAMPLE_RATE = 48000
 _CACHE_VERSION = "1"
 
+TRIM_VERSION = "1"
+"""修剪規則的版本：改了 LEAD_PAD／TAIL_PAD／SILENCE_DB 就加一，舊的修剪位置會照新規則重算（原始音檔不用重配）。"""
+LEAD_PAD = 0.06
+"""每段第一個聲音（或第一個詞，取早的）前面留多少秒。"""
+TAIL_PAD = 0.15
+"""每段最後一個聲音（或最後一個詞唸完，取晚的）後面留多少秒。"""
+SILENCE_DB = -50.0
+"""比這個小聲（dBFS，10 毫秒一格的 RMS）算沒聲音。edge-tts 的空白是數位靜音（全 0），說話的地方遠高於這個。"""
+_FADE = 0.005
+
 
 class NarrationError(RuntimeError):
     """配音失敗（繁中訊息）。"""
@@ -70,7 +87,7 @@ class SegmentAudio:
     audio: Path
     """48 kHz 單聲道 16-bit WAV。"""
     duration: float
-    """音檔長度（秒），含頭尾靜音。"""
+    """音檔長度（秒），含頭尾留白（已修成 LEAD_PAD／TAIL_PAD，見檔頭「頭尾靜音」）。"""
     words: tuple[WordTiming, ...]
     sent_chars: int = 0
     """這次執行為了這段送給配音服務的字數（付費配音照這個計費）；用快取、或跟別段同一句共用時是 0。"""
@@ -293,6 +310,11 @@ def _wav_params_ok(path: Path) -> bool:
         return False
 
 
+def _wav_frames(path: Path) -> int:
+    with wave.open(str(path), "rb") as w:
+        return w.getnframes()
+
+
 def _wav_duration(path: Path) -> float:
     with wave.open(str(path), "rb") as w:
         return w.getnframes() / w.getframerate()
@@ -315,6 +337,78 @@ def _to_wav(src: Path, dst: Path, ffmpeg: Path | None) -> None:
         raise NarrationError(f"配音音檔轉檔失敗：{proc.stderr.strip()[-500:]}")
     if src != dst:
         src.unlink(missing_ok=True)
+
+
+def _sound_bounds(wav: Path) -> tuple[float, float] | None:
+    """聽得到聲音的範圍（秒）：第一格到最後一格 RMS 高過 SILENCE_DB 的 10 毫秒；整段都聽不到就 None。"""
+    import numpy as np
+
+    with wave.open(str(wav), "rb") as w:
+        sr = w.getframerate()
+        x = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float64)
+    n = max(1, round(sr * 0.01))
+    full = len(x) // n * n
+    if full == 0:
+        return None
+    rms = np.sqrt(np.mean(x[:full].reshape(-1, n) ** 2, axis=1))
+    loud = np.nonzero(rms > 32768 * 10 ** (SILENCE_DB / 20))[0]
+    if len(loud) == 0:
+        return None
+    return loud[0] * n / sr, min(len(x), (loud[-1] + 1) * n) / sr
+
+
+def _trim_window(wav: Path, duration: float, words: Sequence[WordTiming]) -> tuple[float, float]:
+    """要留下的範圍 [開始, 結束)（秒）：聽得到的聲音和詞的時間點取比較寬的，前後各留 LEAD_PAD／TAIL_PAD。
+    整段聽不到聲音就整段留著。"""
+    bounds = _sound_bounds(wav)
+    if bounds is None:
+        return 0.0, duration
+    first, last = bounds
+    if words:
+        first, last = min(first, words[0].start), max(last, words[-1].end)
+    return round(max(0.0, first - LEAD_PAD), 6), round(min(duration, last + TAIL_PAD), 6)
+
+
+def _write_trimmed(src: Path, dst: Path, start: float, end: float) -> None:
+    """src 的 [start, end) 寫成 dst，頭尾各淡入淡出 _FADE 秒（切在留白裡，避免爆音）。"""
+    import numpy as np
+
+    with wave.open(str(src), "rb") as r:
+        sr = r.getframerate()
+        r.setpos(min(r.getnframes(), round(start * sr)))
+        x = np.frombuffer(r.readframes(max(0, round(end * sr) - round(start * sr))), dtype="<i2").astype(np.float64)
+    k = min(len(x) // 2, round(_FADE * sr))
+    if k:
+        ramp = np.linspace(0.0, 1.0, k, endpoint=False)
+        x[:k] *= ramp
+        x[len(x) - k:] *= ramp[::-1]
+    tmp = dst.with_name(dst.stem + "-part.wav")  # 中斷留下的暫存檔：_prune 清 *-part.*
+    with wave.open(str(tmp), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(np.round(x).astype("<i2").tobytes())
+    os.replace(tmp, dst)
+
+
+def _trimmed(audio: SegmentAudio, meta: Path) -> SegmentAudio:
+    """頭尾靜音修成固定的留白（見檔頭）。修剪位置記在 meta 的 "trim"（同一版規則就照記下的，不重新聽）。"""
+    info = json.loads(meta.read_text(encoding="utf-8"))
+    trim = info.get("trim")
+    if not (isinstance(trim, dict) and trim.get("version") == TRIM_VERSION):
+        start, end = _trim_window(audio.audio, audio.duration, audio.words)
+        info["trim"] = {"version": TRIM_VERSION, "start": start, "end": end}
+        meta.write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
+    start, end = float(info["trim"]["start"]), min(float(info["trim"]["end"]), audio.duration)
+    if start <= 0 and end >= audio.duration:
+        return audio
+    out = meta.with_name(meta.stem + ".trim.wav")
+    expected = round(end * SAMPLE_RATE) - round(start * SAMPLE_RATE)
+    if not (_wav_params_ok(out) and _wav_frames(out) == expected):
+        _write_trimmed(audio.audio, out, start, end)
+    words = tuple(WordTiming(w.start_char, w.end_char, round(w.start - start, 6), round(w.end - start, 6))
+                  for w in audio.words)
+    return replace(audio, audio=out, duration=_wav_duration(out), words=words)
 
 
 def narrate(
@@ -356,7 +450,7 @@ def narrate(
     def one(seg: str) -> tuple[SegmentAudio, bool]:
         hit = from_cache(seg)
         if hit is not None:
-            return hit, True
+            return _trimmed(hit, cache / f"{keys[seg]}.json"), True
         text, ck = segments[seg], keys[seg]
         wav, meta = cache / f"{ck}.wav", cache / f"{ck}.json"
         try:
@@ -371,7 +465,8 @@ def narrate(
         }
         meta.write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
         sent = len(text) if syn.chars is None else syn.chars
-        return SegmentAudio(seg, text, wav, duration, tuple(syn.words), sent_chars=sent), False
+        audio = SegmentAudio(seg, text, wav, duration, tuple(syn.words), sent_chars=sent)
+        return _trimmed(audio, meta), False
 
     # 一字不差的兩段旁白共用同一個快取鍵：只配一次（並行配同一個鍵會搶同一個暫存檔），其他段沿用那份音檔
     first: dict[str, str] = {}
@@ -408,6 +503,7 @@ def _prune(cache: Path, current: tuple[str, str, str, str], keep: set[str]) -> N
         if same:
             meta.unlink(missing_ok=True)
             meta.with_suffix(".wav").unlink(missing_ok=True)
+            meta.with_name(meta.stem + ".trim.wav").unlink(missing_ok=True)
     for part in cache.glob("*-part.*"):
         part.unlink(missing_ok=True)
 

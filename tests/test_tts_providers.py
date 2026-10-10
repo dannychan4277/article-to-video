@@ -319,6 +319,47 @@ def test_a_project_made_before_paid_voices_keeps_its_edge_voice(tmp_path, capsys
     assert snap["voice"] == "zh-TW-HsiaoYuNeural"
 
 
+def test_new_videos_talk_a_little_faster_with_every_voice(tmp_path, tts_server, monkeypatch, capsys):
+    """節奏（Danny：快一些些）：新片預設語速 +15%，三家一樣快——edge 的 rate、ElevenLabs 的 speed、Google 的
+    speakingRate；段與段之間的留白 0.25 秒。舊片的設定快照記著當時的語速，重建不會變快（留白和頭尾修剪會套用）。"""
+    import edge_tts
+
+    from test_narration import _mp3_bytes
+
+    audio, rates = _mp3_bytes(tmp_path, 1.0), []
+
+    class EdgeLike:
+        def __init__(self, text, voice, *, rate, **kw):
+            rates.append(rate)
+            self.text = text
+
+        async def stream(self):
+            yield {"type": "audio", "data": audio}
+            yield {"type": "WordBoundary", "offset": 1_000_000, "duration": 2_000_000, "text": self.text[:1]}
+
+    monkeypatch.setattr(edge_tts, "Communicate", EdgeLike)
+    monkeypatch.setenv("ELEVENLABS_API_KEY", FAKE_KEY)
+    monkeypatch.setenv("GOOGLE_TTS_API_KEY", FAKE_GOOGLE_KEY)
+    data = tmp_path / "plugin-data"
+    _cli(capsys, "settings", "set", "--data-dir", data, "--channel", "小明")
+    new = _project(tmp_path)
+    for tts in ("edge", "elevenlabs", "google"):
+        _cli(capsys, "narrate", new, "--data-dir", data, "--tts", tts)
+    assert json.loads((new / "settings.json").read_text(encoding="utf-8"))["rate"] == "+15%"
+    assert set(rates) == {"+15%"}
+    assert [r["body"]["voice_settings"]["speed"] for r in tts_server.synth("elevenlabs")] == pytest.approx([1.15] * 2)
+    assert [r["body"]["audioConfig"]["speakingRate"] for r in tts_server.synth("google")] == pytest.approx([1.15] * 2)
+    # 假配音層 s01＝0.1＋12 字×0.2＋2 個標點×0.25＋0.3＝3.3 秒（整段靜音，不修剪）；s02 從 3.3＋0.25 起
+    assert "s02（3.55 秒起" in _cli(capsys, "narrate", new, "--data-dir", data, "--tts", "fake")
+
+    old = tmp_path / "舊片"
+    old.mkdir()
+    (old / "narration.json").write_text((new / "narration.json").read_text(encoding="utf-8"), encoding="utf-8")
+    (old / "settings.json").write_text(json.dumps({"channel": "小明", "rate": "+5%", "tts": "google"}), encoding="utf-8")
+    _cli(capsys, "narrate", old, "--data-dir", data)
+    assert tts_server.synth("google")[-1]["body"]["audioConfig"]["speakingRate"] == pytest.approx(1.05)
+
+
 # ---------------------------------------------------------------- key 不外流
 
 
@@ -392,6 +433,48 @@ def test_voice_samples_for_paid_providers_use_their_own_voices(tmp_path, tts_ser
     assert (out / "voice-TryVoiceA1234567890a.wav").is_file() and (out / "voice-TryVoiceB1234567890b.wav").is_file()
     assert [r["path"].split("/")[3] for r in tts_server.synth("elevenlabs")] == [
         "SetVoice1234567890ab", "TryVoiceA1234567890a", "TryVoiceB1234567890b"]
+
+
+def test_voice_samples_take_the_same_voice_names_as_settings(tmp_path, tts_server, monkeypatch, capsys):
+    """示範時 `samples voice --voice 曉臻` 直接把「曉臻」交給 edge-tts → Invalid voice。試聽的 --voice 收的寫法要跟
+    settings set 一樣：edge 收中文名、Google 收 Wavenet-B 這種簡寫；寫錯的用繁中說有哪些可以挑。"""
+    import edge_tts
+
+    from test_narration import _mp3_bytes
+
+    audio = _mp3_bytes(tmp_path, 1.0)
+    asked: list[str] = []
+
+    class EdgeLike:  # 跟 edge-tts 一樣：聲音不是代號就在建構時丟 ValueError
+        def __init__(self, text, voice, **kw):
+            if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}-\w+Neural", voice):
+                raise ValueError(f"Invalid voice '{voice}'.")
+            asked.append(voice)
+            self.text = text
+
+        async def stream(self):
+            yield {"type": "audio", "data": audio}
+            yield {"type": "WordBoundary", "offset": 1_000_000, "duration": 2_000_000, "text": self.text[:1]}
+
+    monkeypatch.setattr(edge_tts, "Communicate", EdgeLike)
+    monkeypatch.setenv("GOOGLE_TTS_API_KEY", FAKE_GOOGLE_KEY)
+    data, out = tmp_path / "plugin-data", tmp_path / "試聽"
+
+    printed = _cli(capsys, "samples", "voice", "--out", out, "--text", "試聽。", "--data-dir", data,
+                   "--voice", "曉臻", "--voice", "雲哲")
+    assert asked == ["zh-TW-HsiaoChenNeural", "zh-TW-YunJheNeural"]
+    assert (out / "voice-zh-TW-HsiaoChenNeural.wav").is_file() and "曉臻（zh-TW-HsiaoChenNeural）" in printed
+
+    _cli(capsys, "samples", "voice", "--tts", "google", "--out", out, "--text", "試聽。", "--data-dir", data,
+         "--voice", "wavenet-b")
+    assert [r["body"]["voice"]["name"] for r in tts_server.synth("google")] == ["cmn-TW-Wavenet-B"]
+
+    from article_to_video import cli
+
+    capsys.readouterr()
+    assert cli.main(["samples", "voice", "--out", str(out), "--data-dir", str(data), "--voice", "小美"]) == 1
+    err = capsys.readouterr().err
+    assert "小美" in err and "曉臻" in err and "Traceback" not in err
 
 
 # ---------------------------------------------------------------- 檢查環境

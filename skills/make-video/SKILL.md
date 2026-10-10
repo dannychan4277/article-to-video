@@ -78,6 +78,8 @@ Read `<專案>/article/text.txt`（全文）和 `<專案>/article/article.json`�
 
 - 只記圖上**清楚寫出來**的數字（柱上的數值、表格的格子、標出來的點），照圖上的寫法（圖上 4.50 就寫 "4.50"）；
   `label` 寫它在圖上是什麼（哪一列、哪一年、哪個系列），作者要拿它對照原圖。
+- **軸上、類目上的數字也要記**：重畫時會照抄到畫面的橫軸年份（2020）、月份、類目名裡的數字，文字裡沒有的一樣記
+  （`label` 寫「橫軸年份」「第二根柱的類目名」）。數字對帳把類目名、單位行的數字也當成畫面上的數字，沒記就是無出處。
 - 沒標數值的線、要用尺量的高度：**不要估**。改用文章文字裡的數字、公有數據（見 formats.md），或只畫圖上有標的那幾點。
 - 圖太糊、看不清楚：不要猜，請他給清楚一點的檔（PDF 原檔、Word 檔）。
 - 數字對帳會把這些數字標成「原文圖表」，審片頁請作者對照原圖——所以讀錯會被他看到，寧可少記。
@@ -111,14 +113,15 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video narrate "<專�
 文章的圖怎麼重畫…）寫 `<專案>/shots.json`，格式見 `formats.md`。每個分鏡都是財經圖表（`chart`）。
 用公有數據畫走勢時第一次要連網。
 
-## 6. 預覽：分鏡靜態圖、數字對帳（先不給作者看）
+## 6. 預覽：分鏡靜態圖、數字對帳（先不給作者看：一定加 `--no-open`，不算一版）
 
 ```
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video preview "<專案>" --no-open --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
 - 設定寫錯會一次列出全部問題（哪個分鏡、哪個欄位），照著改再跑。配音用第 4 步配好的，不會重配。
-- 看「數字對帳」那行：有「找不到出處」的數字，改成文章裡的數字；數字在文章的圖上，就照第 2 步記進 figure_numbers.json；
+- 看「數字對帳」那行：有「找不到出處」的數字，改成文章裡的數字；數字在文章的圖上（含重畫的圖的橫軸年份、類目名），
+  就照第 2 步記進 figure_numbers.json——那行會寫「重畫圖N：…記進 figure_numbers.json 的「圖N」」；
   算出來的在那個分鏡宣告算式（`derived`）。
   對帳的規則：正負號要跟文章一樣；四捨五入只能少寫幾位、至少留兩位有效數字（4.58 寫成 4.6 可以，寫成 5 不行）；
   詞裡的中文數字（十年期、兩年期）不算數字，對不到它。差值、變號、換單位都是推算，要宣告算式。
@@ -159,14 +162,15 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-prep "<
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-record "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-必修改好之後記下來。你覺得不用改的要留給作者決定（第 8 步問他）；還有沒處理的必修時 build 會被擋，
-這時先做第 8 步（審片頁用靜態圖給他看），他決定了再回來 build：
+必修：改分鏡（改了旁白就回到第 4 步配音、看秒數、調錨點；只改分鏡就回到第 6 步預覽、看改到的靜態圖）→ 再 build、checks，
+**看過改好了才記下來**。必修還開著時 build 照樣會跑（最後會列出「還有 N 項必修還沒處理」）——擋的只有出片，
+所以不要為了重建先把它記成改好了。
 
 ```
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video resolve "<專案>" R1-2 --fixed "怎麼改的" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-改了旁白就回到第 4 步（配音，看秒數、調錨點），只改分鏡就回到第 6 步（預覽、看改到的靜態圖），再 build、checks；改得多再審一輪。
+你覺得不用改的要留給作者決定（第 8 步問他，他說不改才 `--accept "…" --by 作者`）。改得多再審一輪。
 
 ## 8. 打開審片頁給作者看
 
@@ -174,8 +178,9 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video resolve "<專�
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video open-review "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-它會在瀏覽器打開審片頁、印出這是**第幾版**（記住，出片時要用）。你自己檢查時改過幾輪，頁首就不是第 1 版、
-卡片上也會標「這版改過」：跟他說那是你自己檢查時改的，從這一版開始看就好。用口語跟作者說：
+它會在瀏覽器打開審片頁、印出這是**第幾版**（記住，出片時要用）。版本跟著作者看到的走：只有打開給他看
+（`open-review`，或 preview／build 沒加 `--no-open`）才算一版，你前面加了 `--no-open` 的預覽、建置不算，
+所以他第一次打開就是第 1 版、卡片上沒有「這版改過」。用口語跟作者說：
 
 - 每張卡是一個分鏡：編號、畫面、那句旁白、畫面上數字的出處。上面可以看整支片。
 - 有重畫他文章的圖的話：那幾張卡的數字標「原文圖表」，是你看他的圖讀出來的，**請他對照自己的原圖**，讀錯了就在那張卡寫正確的數字。

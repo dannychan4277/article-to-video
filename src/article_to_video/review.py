@@ -8,9 +8,15 @@
 每個畫面事件出現前一幀（跟上一個事件隔 ≥ MOMENT_GAP 秒才算，最多 MAX_MOMENTS 張）。快取在 build/<比例>/stills/<片段>/，
 鍵＝片段雜湊（spec＋引擎檔＋圖片）＋要渲的時刻，內容沒變就不重渲；並行渲。
 
-版本（build/<比例>/review.json）：每次寫審片頁都比對每個分鏡的內容雜湊（它自己畫面上的東西＋長度＋它唸的旁白，
+版本（build/<比例>/review.json）：**跟著作者看到的走**。每個分鏡有內容雜湊（它自己畫面上的東西＋長度＋它唸的旁白，
 見 _shot_hashes；照分鏡算，不照片段算）。
-跟上次一樣就沿用版本號與「這版改過」的標記；不一樣就加一版，標出改過／新加的分鏡、列出拿掉的分鏡。
+- 打開給作者看（make_review(shown=True)：open-review，或 preview／build 沒加 --no-open）才算一版：
+  內容跟作者上次看到的一樣就沿用版本號與標記；不一樣就是下一版，標出比作者上次看到的改過／新加的分鏡、列出拿掉的。
+  第一次給作者看是第 1 版，沒有標記。
+- Claude 自己的預覽、建置、檢查（--no-open、checks、review-record…）不加版：頁首寫的是「給作者看時會是第幾版」，
+  標記一樣比作者上次看到的那一版。所以 Claude 自己改幾輪，作者第一次打開還是第 1 版。
+- ReviewResult.redrawn：跟上一次寫審片頁比改了哪些分鏡（Claude 逐張看改到的靜態圖用）。
+- 出片（publish --version N）要求 N 是作者看過的那一版、而且之後沒再改（seen_version）。
 瀏覽器裡的留言照版本存：新的一版開頭會問要不要放回上一版還沒複製出去的留言（見 review_assets/review.js）。
 
 其他檢查（數字對帳 #5、自動檢查 #11）的結果：寫一個 Contributor（BuildPlan → ReviewExtras），
@@ -302,11 +308,15 @@ def render_review_stills(plan: BuildPlan, *, jobs: int | None = None, log: Log =
 class ReviewResult:
     page: Path
     version: int
-    """審片頁第幾版：分鏡內容（畫面或旁白）有變才加一。"""
+    """審片頁第幾版（給作者看時的版號）：比作者上次看到的那一版，分鏡內容（畫面或旁白）有變才加一。"""
     changed: list[str]
-    """這版跟上一版比，內容改過的分鏡 id（新加的也算）。"""
+    """比作者上次看到的那一版，內容改過的分鏡 id（新加的也算）；作者還沒看過任何一版時是空的。"""
     removed: list[str]
-    """上一版有、這版拿掉的分鏡 id。"""
+    """作者上次看到的那一版有、這版拿掉的分鏡 id。"""
+    redrawn: list[str] | None = None
+    """跟上一次寫審片頁比，內容改過的分鏡 id（Claude 逐張看改到的靜態圖用）；第一次寫審片頁是 None（全部都要看）。"""
+    shown: bool = False
+    """這次是打開給作者看（算一版）。"""
     stills: dict[str, list[Still]] = field(default_factory=dict)
     plan: BuildPlan | None = None
     """寫這一頁用的建置計畫（指令列拿它印數字對帳的摘要）。"""
@@ -320,6 +330,7 @@ class _Version:
     number: int
     changed: list[str]
     removed: list[tuple[str, int]]
+    redrawn: list[str] | None = None
 
 
 _VOX_MATERIAL = ("image", "excerpt", "title", "point")
@@ -369,48 +380,67 @@ def _shot_hashes(plan: BuildPlan, narration: dict[str, list[NarrationPiece]]) ->
     return out
 
 
-def _update_version(state_path: Path, plan: BuildPlan, hashes: dict[str, str]) -> _Version:
-    """跟上一次寫審片頁時比：一樣就沿用版本號與標記（重跑不會把標記洗掉），不一樣就加一版、重算標記。"""
-    shots = [{"id": st.shot.id, "number": st.shot.number, "hash": hashes[st.shot.id]} for st in plan.timeline.shots]
-    prev = None
-    if state_path.is_file():
-        try:
-            prev = json.loads(state_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            prev = None
+def _read_state(state_path: Path) -> dict | None:
+    """版本紀錄；沒有或壞掉是 None。舊的紀錄（每次寫審片頁都加版、沒有 page 欄）照樣讀：當成作者看過那一版。"""
+    try:
+        prev = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
     if not isinstance(prev, dict) or not isinstance(prev.get("shots"), list) or not isinstance(prev.get("version"), int):
+        return None
+    return prev
+
+
+def _pairs(shots: list) -> list[tuple]:
+    return [(s.get("id"), s.get("hash")) for s in shots if isinstance(s, dict)]
+
+
+def _diff(old_shots: list, shots: list[dict]) -> tuple[list[str], list[tuple[str, int]]]:
+    """(改過或新加的分鏡 id, 拿掉的 (id, 舊編號))。"""
+    old = {s.get("id"): s for s in old_shots if isinstance(s, dict)}
+    changed = [s["id"] for s in shots if s["id"] not in old or old[s["id"]].get("hash") != s["hash"]]
+    now = {s["id"] for s in shots}
+    removed = [(s.get("id"), s.get("number")) for s in old_shots if isinstance(s, dict) and s.get("id") not in now]
+    return changed, removed
+
+
+def _update_version(state_path: Path, plan: BuildPlan, hashes: dict[str, str], *, shown: bool = False) -> _Version:
+    """版本跟著作者看到的走（見檔頭）。review.json：version／shots／changed／removed＝作者上次看到的那一版
+    （version 0＝還沒給作者看過）；page＝上一次寫審片頁時的分鏡雜湊（Claude 看改到的靜態圖用）。"""
+    shots = [{"id": st.shot.id, "number": st.shot.number, "hash": hashes[st.shot.id]} for st in plan.timeline.shots]
+    prev = _read_state(state_path) or {"version": 0, "shots": []}
+    seen_number, seen_shots = prev["version"], prev["shots"]
+    page = prev.get("page") if isinstance(prev.get("page"), dict) else None
+    last_page = page.get("shots") if page and isinstance(page.get("shots"), list) else (seen_shots or None)
+    if seen_number < 1:
         version = _Version(1, [], [])
-    elif [(s.get("id"), s.get("hash")) for s in prev["shots"]] == [(s["id"], s["hash"]) for s in shots]:
-        version = _Version(prev["version"], list(prev.get("changed", [])),
+    elif _pairs(seen_shots) == _pairs(shots):
+        version = _Version(seen_number, list(prev.get("changed", [])),
                            [(r[0], r[1]) for r in prev.get("removed", [])])
     else:
-        old = {s.get("id"): s for s in prev["shots"]}
-        changed = [s["id"] for s in shots if s["id"] not in old or old[s["id"]].get("hash") != s["hash"]]
-        now = {s["id"] for s in shots}
-        removed = [(s.get("id"), s.get("number")) for s in prev["shots"] if s.get("id") not in now]
-        version = _Version(prev["version"] + 1, changed, removed)
+        version = _Version(seen_number + 1, *_diff(seen_shots, shots))
+    redrawn = None if last_page is None else _diff(last_page, shots)[0]
+    version = _Version(version.number, version.changed, version.removed, redrawn)
+    if shown:
+        seen = {"version": version.number, "shots": shots, "changed": version.changed,
+                "removed": [list(r) for r in version.removed]}
+    else:
+        seen = {"version": seen_number, "shots": seen_shots, "changed": prev.get("changed", []),
+                "removed": prev.get("removed", [])}
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps({
-        "version": version.number,
-        "shots": shots,
-        "changed": version.changed,
-        "removed": [list(r) for r in version.removed],
-    }, ensure_ascii=False, indent=1), encoding="utf-8")
+    state_path.write_text(json.dumps({**seen, "page": {"version": version.number, "shots": shots}},
+                                     ensure_ascii=False, indent=1), encoding="utf-8")
     return version
 
 
 def seen_version(plan: BuildPlan) -> tuple[int | None, bool]:
-    """上次寫的審片頁是第幾版，以及現在的分鏡與旁白還是不是那一版（出片前確認作者看過的就是要出的）。
-    還沒寫過審片頁＝(None, False)。不寫任何檔案。"""
-    try:
-        prev = json.loads(plan.paths.review_state.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None, False
-    if not isinstance(prev, dict) or not isinstance(prev.get("version"), int) or not isinstance(prev.get("shots"), list):
+    """作者上次打開看到的審片頁是第幾版，以及現在的分鏡與旁白還是不是那一版（出片前確認作者看過的就是要出的）。
+    還沒給作者看過＝(None, False)。不寫任何檔案。"""
+    prev = _read_state(plan.paths.review_state)
+    if prev is None or prev["version"] < 1:
         return None, False
     hashes = _shot_hashes(plan, shot_narration(plan.timeline))
-    same = [(s.get("id"), s.get("hash")) for s in prev["shots"] if isinstance(s, dict)] == [
-        (st.shot.id, hashes[st.shot.id]) for st in plan.timeline.shots]
+    same = _pairs(prev["shots"]) == [(st.shot.id, hashes[st.shot.id]) for st in plan.timeline.shots]
     return prev["version"], same
 
 
@@ -486,9 +516,11 @@ def make_review(
     video: Path | None = None,
     contributors: Sequence[Contributor] = (),
     jobs: int | None = None,
+    shown: bool = False,
     log: Log = quiet,
 ) -> ReviewResult:
-    """渲靜態圖（有快取）、寫審片頁。video＝審片用的成片（build 之後才有）；contributors＝要加在卡片上的檢查結果。"""
+    """渲靜態圖（有快取）、寫審片頁。video＝審片用的成片（build 之後才有）；contributors＝要加在卡片上的檢查結果。
+    shown＝這次要打開給作者看（算一版，見檔頭「版本」）；Claude 自己檢查時是 False。"""
     extras = ReviewExtras()
     for contribute in contributors:
         more = contribute(plan)
@@ -497,15 +529,16 @@ def make_review(
         extras.page.extend(more.page)
     stills = render_review_stills(plan, jobs=jobs, log=log)
     narration = shot_narration(plan.timeline)
-    version = _update_version(plan.paths.review_state, plan, _shot_hashes(plan, narration))
+    version = _update_version(plan.paths.review_state, plan, _shot_hashes(plan, narration), shown=shown)
     page = plan.project.paths.review_page(plan.format.name)
     model = _page_model(plan, page, stills, video, narration, version, extras)
     page.write_text(render_review_html(model), encoding="utf-8")
     if version.changed or version.removed:
-        log(f"審片頁第 {version.number} 版：改了 {len(version.changed)} 個分鏡"
+        log(f"審片頁第 {version.number} 版（比作者看過的第 {version.number - 1} 版）：改了 {len(version.changed)} 個分鏡"
             + (f"、拿掉 {len(version.removed)} 個" if version.removed else ""))
     return ReviewResult(page=page, version=version.number, changed=list(version.changed),
-                        removed=[r[0] for r in version.removed], stills=stills, plan=plan)
+                        removed=[r[0] for r in version.removed], redrawn=version.redrawn, shown=shown,
+                        stills=stills, plan=plan)
 
 
 def preview_project(
@@ -516,12 +549,13 @@ def preview_project(
     jobs: int | None = None,
     data_dir: str | os.PathLike | None = None,
     fmt: VideoFormat | None = None,
+    shown: bool = False,
     log: Log = quiet,
 ) -> ReviewResult:
     """預覽模式：配音＋時間軸＋分鏡靜態圖＋審片頁，不渲片段、不出成片。data_dir：使用者資料位置（設定快照用）。
-    fmt：畫面比例（不給就照設定快照的預設比例，見 plan_build）。"""
+    fmt：畫面比例（不給就照設定快照的預設比例，見 plan_build）。shown：這次要打開給作者看（算一版）。"""
     plan = plan_build(project_dir, tts=tts, fmt=fmt, data_dir=data_dir, log=log)
-    return make_review(plan, contributors=contributors, jobs=jobs, log=log)
+    return make_review(plan, contributors=contributors, jobs=jobs, shown=shown, log=log)
 
 
 # ---------------------------------------------------------------- 在瀏覽器打開

@@ -331,6 +331,54 @@ def test_rebuilt_page_marks_the_shots_that_changed_since_the_last_version(copy_o
     assert changed_ids(page) == ["SH02"]
 
 
+def test_versions_count_what_the_author_sees_not_claudes_own_previews(tmp_path):
+    """示範：Claude 自己檢查時預覽了六次，作者第一次打開就是「第 7 版」、卡片上一堆「這版改過」。
+    版本跟著作者走：打開給作者看（open-review，或 preview／build 沒加 --no-open）才算一版；Claude 自己的預覽
+    （--no-open）不加版。「這版改過」比的是作者上次看到的那一版；出片要的是作者看過、點頭的那一版。"""
+    from conftest import MINI_PROJECT
+    from conftest import run_cli as run
+
+    root = tmp_path / "2026-10-10-殖利率曲線"
+    shutil.copytree(MINI_PROJECT, root)
+
+    def cli(*args: str) -> subprocess.CompletedProcess:
+        return run(*args[:1], root, "--tts", "fake", *args[1:])
+
+    def label(text: str) -> None:
+        edit_json(root / "shots.json", lambda d: d["shots"][1]["chart"]["data"]["highlight"].update(text=text))
+
+    first = cli("preview", "--no-open")
+    assert first.returncode == 0, first.stderr
+    assert read_review(root).attrs["data-version"] == "1"
+    label("長天期偏低")  # Claude 自己看靜態圖、改了一次
+    again = cli("preview", "--no-open")
+    page = read_review(root)
+    assert page.attrs["data-version"] == "1" and changed_ids(page) == []  # 作者什麼都還沒看過：沒有「這版改過」
+    assert "（SH02）：" in again.stdout and "（SH01）：" not in again.stdout  # Claude 還是只看改到的靜態圖
+    unseen = cli("publish", "--version", "1")
+    assert unseen.returncode == 1 and "open-review" in unseen.stderr and "Traceback" not in unseen.stderr
+
+    shown = cli("open-review")  # 給作者看：第 1 版
+    assert shown.returncode == 0 and "第 1 版" in shown.stdout
+    approved = cli("publish", "--version", "1")  # 版本對得上：往下走到「還沒做過獨立審片」才擋
+    assert approved.returncode == 1 and "獨立審片" in approved.stderr and "作者還沒看過" not in approved.stderr
+
+    label("長天期較低，倒掛")  # 作者留言之後改：Claude 自己預覽兩次
+    cli("preview", "--no-open")
+    page = read_review(root)
+    assert page.attrs["data-version"] == "2" and changed_ids(page) == ["SH02"]
+    label("倒掛")
+    cli("preview", "--no-open")
+    page = read_review(root)
+    assert page.attrs["data-version"] == "2" and changed_ids(page) == ["SH02"]  # 比的是作者看過的第 1 版
+    blocked = cli("publish", "--version", "1")
+    assert blocked.returncode == 1 and "第 1 版之後" in blocked.stderr and "open-review" in blocked.stderr
+    assert cli("open-review").returncode == 0
+    assert read_review(root).attrs["data-version"] == "2"
+    approved = cli("publish", "--version", "2")
+    assert approved.returncode == 1 and "獨立審片" in approved.stderr
+
+
 def test_narration_edits_count_as_changes_to_the_shots_that_say_them(copy_of_built):
     root = copy_of_built
     edit_json(root / "narration.json", lambda d: d["segments"].update(s02="十年期僅有三點九六，曲線倒掛。"))

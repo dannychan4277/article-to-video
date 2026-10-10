@@ -129,21 +129,23 @@ def walk(tmp_path_factory, videos_dir) -> Walk:
                                       encoding="utf-8")
     run("lint2", "lint", str(p))
     run("preview2", "preview", str(p), "--no-open", "--data-dir", str(data))
-    w.pages["preview2-state"] = (p / "build" / "16x9" / "review.json").read_text(encoding="utf-8")
+    w.pages["preview2"] = (p / "審片頁.html").read_text(encoding="utf-8")
     w.mtimes["after"] = {**{f"stills/{k}": v for k, v in _files(p / "build" / "16x9" / "stills").items()},
                          **{f"narration/{k}": v for k, v in _files(p / "build" / "narration").items()}}
-    # 6. 作者點頭之前不能出片：版本對不上、這支片還沒做過獨立審片（預設開著的使用者設定）
+    # 6. 改好的給作者看（第 2 版）
+    run("open-review2", "open-review", str(p), "--data-dir", str(data), env=opening)
+    # 7. 作者點頭之前不能出片：版本對不上、這支片還沒做過獨立審片（預設開著的使用者設定）
     run("publish-wrong-version", "publish", str(p), "--version", "1", "--data-dir", str(data))
     run("publish-no-review", "publish", str(p), "--version", "2")
-    # 7. 作者看了第 2 版說可以 → 出片
+    # 8. 作者看了第 2 版說可以 → 出片
     run("publish", "publish", str(p), "--version", "2", "--data-dir", str(data), env=opening)
     w.pages["publish"] = (p / "審片頁.html").read_text(encoding="utf-8")
     run("projects", "projects", "--json")
-    # 8. 出片之後又動了分鏡（沒給作者看）→ 不能直接再出片
+    # 9. 出片之後又動了分鏡（沒給作者看）→ 不能直接再出片
     shots["shots"][0]["chart"]["data"]["highlight"]["text"] = "短天期高"
     (p / "shots.json").write_text(json.dumps(shots, ensure_ascii=False), encoding="utf-8")
     run("publish-unseen", "publish", str(p), "--version", "2", "--data-dir", str(data))
-    # 9. 改過的給作者看：審片頁回到預覽，頁首不再說已出片（影片資料夾裡的是上一版）
+    # 10. Claude 預覽改過的：審片頁回到預覽，頁首不再說已出片（影片資料夾裡的是上一版）
     run("preview3", "preview", str(p), "--no-open", "--data-dir", str(data))
     w.pages["preview3"] = (p / "審片頁.html").read_text(encoding="utf-8")
     w.opened = opened_log.read_text(encoding="utf-8").splitlines() if opened_log.is_file() else []
@@ -177,7 +179,7 @@ def test_first_preview_is_checked_before_the_author_sees_it(walk):
     for sid in ("SH01", "SH02"):  # 每個分鏡的靜態圖路徑都印出來，Claude 逐張看
         assert f"（{sid}）：" in pv.out
     review = str(walk.project / "審片頁.html")
-    assert walk.opened.count(review) == 1, walk.opened  # 只有 open-review 打開給作者看；preview 加了 --no-open
+    assert walk.opened.count(review) == 2, walk.opened  # 只有兩次 open-review 打開給作者看；preview 加了 --no-open
 
 
 def test_pasted_comments_point_at_the_shot_and_its_narration_segment(walk):
@@ -195,8 +197,10 @@ def test_second_preview_redraws_only_the_changed_shot_and_revoices_only_the_chan
     pv = walk.steps["preview2"]
     assert pv.code == 0, pv.err
     assert "第 2 版" in pv.out and "（SH02）：" in pv.out and "（SH01）：" not in pv.out
-    state = json.loads(walk.pages["preview2-state"])
-    assert state["version"] == 2 and state["changed"] == ["SH02"]
+    from test_review_page import parse_review
+
+    page = parse_review(walk.pages["preview2"])
+    assert page.attrs["data-version"] == "2" and [c.id for c in page.cards if c.changed] == ["SH02"]
     before, after = walk.mtimes["before"], walk.mtimes["after"]
     sh01 = [k for k in before if k.startswith("stills/SH01/")]
     assert sh01 and all(after.get(k) == before[k] for k in sh01)  # SH01 的靜態圖沒重渲
@@ -212,7 +216,7 @@ def test_publishing_waits_for_the_version_the_author_approved(walk):
     st = walk.steps["publish-wrong-version"]
     assert st.code == 1 and "第 2 版" in st.err and "Traceback" not in st.err
     st = walk.steps["publish-unseen"]
-    assert st.code == 1 and "preview" in st.err and "Traceback" not in st.err
+    assert st.code == 1 and "open-review" in st.err and "Traceback" not in st.err
 
 
 def test_publishing_needs_one_round_of_independent_review_when_it_is_turned_on(walk):

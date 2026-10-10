@@ -719,6 +719,8 @@ class NumberSource:
     """出處說明（原文第幾段＋前後文、公有數據的系列與日期、算式）或找不到的原因。"""
     figure: str = ""
     """原文圖表：讀自哪張圖（「圖1」）；其他種類是空字串。"""
+    redraws: str = ""
+    """這個分鏡重畫的是文章的哪幾張圖（來源行寫的「作者原文（圖1）」→「圖1」）；無出處時提示 Claude 讀那張圖。"""
 
     @property
     def label(self) -> str:
@@ -853,6 +855,7 @@ def reconcile(plan: BuildPlan, *, sources: Sequence[ScreenTextSource] | None = N
     notes: dict[str, list[str]] = {}
     for st in plan.timeline.shots:
         shot = st.shot
+        redraws = _redrawn_figures(plan, st)
         decls: tuple[Derivation, ...] = tuple(shot.derived)
         used: set[int] = set()
         items: list[NumberSource] = []
@@ -874,8 +877,9 @@ def reconcile(plan: BuildPlan, *, sources: Sequence[ScreenTextSource] | None = N
                     if ok[1]:
                         notes.setdefault(shot.id, []).append(f"{shown}：{ok[1]}（文章的圖上有這個數字，以原圖為準）")
                 else:
-                    detail = ok[1] or _why_unsourced(article)
-                items.append(NumberSource(shot.id, shot.number, t.where, t.of, t.text, shown, kind, detail, figure))
+                    detail = ok[1] or _why_unsourced(article, redraws, t.where)
+                items.append(NumberSource(shot.id, shot.number, t.where, t.of, t.text, shown, kind, detail, figure,
+                                          redraws if kind == "none" else ""))
                 if t.whole:
                     break
         for k, d in enumerate(decls):
@@ -886,17 +890,49 @@ def reconcile(plan: BuildPlan, *, sources: Sequence[ScreenTextSource] | None = N
     return NumberReport(shots=shots, article=article, notes=notes)
 
 
-def _why_unsourced(article: Article) -> str:
+_FIGURE_REF_RE = re.compile(r"圖\s*(\d+)")
+AXIS_PLACES = ("類目名", "副標")
+"""圖上軸與類目的字：橫軸的年份、類目名（類目名），縱軸說明、單位行（副標）。重畫文章的圖時這些也是照圖抄的。"""
+
+
+def _redrawn_figures(plan: BuildPlan, st: ShotTiming) -> str:
+    """這個分鏡重畫文章的哪幾張圖：圖表來源行（接續分鏡沿用上一個的）裡的圖號，例「圖1、圖2」；不是重畫的空字串。"""
+    if st.shot.chart is None:
+        return ""
+    data, _ = effective_chart(plan.project.shots, st.shot.number - 1)
+    source = data.get("source")
+    if not isinstance(source, str):
+        return ""
+    return "、".join(dict.fromkeys(f"圖{m[1]}" for m in _FIGURE_REF_RE.finditer(source)))
+
+
+def _why_unsourced(article: Article, redraws: str = "", where: str = "") -> str:
     if article.path is None:
         return "專案裡還沒有文章文字（article/text.txt），對不到原文；也不是公有數據或宣告過的推算"
+    if redraws and where in AXIS_PLACES:
+        return (f"文章文字裡沒有這個數字。這個分鏡重畫你文章的{redraws}：軸上的年份、類目名也是圖上的字，"
+                f"Claude 讀{redraws}記下來就有出處（原文圖表）")
+    if redraws:
+        return (f"文章文字裡沒有這個數字。這個分鏡重畫你文章的{redraws}：如果它是圖上寫的（數值、軸上的年份、類目名），"
+                "Claude 讀圖記下來就有出處（原文圖表）")
     return "文章裡找不到這個數字，也不是讀圖記下的數字、公有數據或宣告過的推算"
+
+
+def _figure_hint(n: NumberSource) -> str:
+    """給 Claude 的一句（預覽摘要、出片被擋的訊息）：無出處的數字在重畫的圖上 → 讀哪張圖、記在哪。"""
+    if not n.redraws:
+        return ""
+    first = n.redraws.split("、")[0]
+    what = "軸上的年份、類目名也算" if n.where in AXIS_PLACES else "數值、軸上的年份、類目名都算"
+    return f"（重畫{n.redraws}：圖上寫的就 Read 那張圖、記進 article/figure_numbers.json 的「{first}」，{what}）"
 
 
 # ---------------------------------------------------------------- 擋出片（build 的 preflight）
 
 
 FIX_HINT = (
-    "修法：改成文章裡寫的數字；數字只在文章的圖上（文字裡沒有）：Read 那張圖（article/images/圖N.*），把讀到的數字記在 "
+    "修法：改成文章裡寫的數字；數字只在文章的圖上（文字裡沒有；重畫的圖的橫軸年份、類目名也算）："
+    "Read 那張圖（article/images/圖N.*），把讀到的數字記在 "
     'article/figure_numbers.json，例 {"figures": {"圖1": [{"value": "4.58", "label": "兩年期殖利率，2023 年平均"}]}}；'
     "推算出來的數字（差值、一年前的值…），在那個分鏡加 "
     '"derived": [{"value": "0.62", "formula": "4.58 - 3.96"}] 宣告算式（算式裡的數字要找得到出處）。'
@@ -913,7 +949,8 @@ def summary_line(plan: BuildPlan) -> str:
     line = f"數字對帳：畫面上 {len(items)} 個數字" + (f"（{counts}）" if counts else "")
     bad = rep.unsourced
     if bad:
-        line += "；找不到出處、正式出片會被擋下：" + "；".join(f"{n.shot_label}的{n.place}：{n.shown}" for n in bad)
+        line += "；找不到出處、正式出片會被擋下：" + "；".join(
+            f"{n.shot_label}的{n.place}：{n.shown}{_figure_hint(n)}" for n in bad)
     return line
 
 
@@ -927,7 +964,7 @@ def check_numbers(plan: BuildPlan) -> None:
     if rep.article.path is None:
         hint = "專案裡還沒有文章文字（article/text.txt）：先用 extract 擷取文章，數字才對得到原文。\n" + hint
     raise ProjectError(
-        [f"{n.shot_label}的{n.place}：{n.shown} 找不到出處" for n in bad],
+        [f"{n.shot_label}的{n.place}：{n.shown} 找不到出處{_figure_hint(n)}" for n in bad],
         title=f"數字對帳沒過，不能出片：畫面上有 {len(bad)} 個數字找不到出處",
         hint=hint,
     )

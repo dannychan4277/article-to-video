@@ -3,7 +3,7 @@
   run_checks(plan)            每個片段跑 qa、白底片段跑字幕帶檢查（有快取、並行），彙整成 CheckReport，
                               寫 build/<比例>/checks.json。指令列：python -m article_to_video checks <專案>。
   load_check_report(plan)     只讀快取（不跑）：審片頁（checks_contributor）與出片前的檢查用。
-  require_checks_cleared(plan) build 的 preflight：自動檢查的 fail、獨立審片的必修，沒處理就擋正式出片。
+  require_checks_cleared(plan) publish 的 preflight：自動檢查的 fail、獨立審片的必修，沒處理就擋出片（build 只列出來）。
 
 qa（內嵌引擎的 engine/qa.py，原樣使用）：在 Chromium 裡把片段的 spec 逐幀重渲一次（30 fps 取樣），量確定性、動態、
 跳變、框景（半截字、疊字、字進字幕帶、近空白）。qa 自己只在頁面報錯時失敗，門檻在這裡判。
@@ -87,6 +87,7 @@ __all__ = [
     "load_check_report",
     "report_json",
     "require_checks_cleared",
+    "resolve_hint",
     "run_checks",
 ]
 
@@ -808,13 +809,15 @@ def format_report(plan: BuildPlan, report: CheckReport) -> str:
 # ---------------------------------------------------------------- 擋出片
 
 
-def _resolve_hint(root: Path, tokens: Sequence[str]) -> str:
+def resolve_hint(root: Path, tokens: Sequence[str], data_dir: str | os.PathLike | None = None) -> str:
+    """還沒處理的必修怎麼處理：改（build 重建驗證；獨立審片的改好之後記下來）或接受不改。"""
     review = [t for t in tokens if not t.startswith(("qa:", "band:", "hold:"))]
-    lines = ["要改：改分鏡設定再出片（自動檢查的問題，改過的片段會自動重查）。"]
+    lines = ["要改：改分鏡設定再 build 驗證（自動檢查的問題：改過的片段 checks 會重查，不用記）。"]
     if review:
-        lines.append("  獨立審片的問題改好之後記下來：" + cli_command("resolve", root, *review, "--fixed", '"怎麼改的"'))
+        lines.append("  獨立審片的問題改好、重建看過之後記下來："
+                     + cli_command("resolve", root, *review, "--fixed", '"怎麼改的"', data_dir=data_dir))
     lines.append("不改：看過畫面、確定要保留，記下理由（作者決定不改的加 --by 作者）：")
-    lines.append("  " + cli_command("resolve", root, *tokens, "--accept", '"理由"'))
+    lines.append("  " + cli_command("resolve", root, *tokens, "--accept", '"理由"', data_dir=data_dir))
     return "\n".join(lines)
 
 
@@ -829,14 +832,15 @@ def blocking_problems(plan: BuildPlan) -> list[tuple[str, str]]:
 
 
 def require_checks_cleared(plan: BuildPlan) -> None:
-    """正式出片前（build 的 preflight）：還有必修沒處理（沒改掉、也沒明確接受）就丟 ProjectError，不渲、不出片。"""
+    """出片前（publish 的 preflight）：還有必修沒處理（沒改掉、也沒明確接受）就丟 ProjectError，不渲、不出片。
+    build（審片用的成片）不擋：改了分鏡要重建才驗證得了，build 只把它們列出來。"""
     bad = blocking_problems(plan)
     if not bad:
         return
     raise ProjectError(
         [line for _, line in bad],
         title=f"還有 {len(bad)} 項必修沒處理，先不出片",
-        hint=_resolve_hint(plan.project.root, [t for t, _ in bad]),
+        hint=resolve_hint(plan.project.root, [t for t, _ in bad]),
     )
 
 

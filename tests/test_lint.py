@@ -99,9 +99,10 @@ def test_soft_rules_only_warn(tmp_path, capsys, word):
 
 
 def test_total_length_is_estimated_against_two_to_four_minutes(tmp_path, capsys):
-    """全長用每秒 4 字估：太短只提醒（不擋），讓 Claude 知道離 2–4 分鐘還差多少。"""
+    """全長用每秒 4.4 字估（預設語速 +15%、頭尾空白修掉之後，示範片實測 500 字 114 秒）：太短只提醒（不擋），
+    讓 Claude 知道離 2–4 分鐘還差多少。"""
     code, out = lint(tmp_path, capsys, s01=GOOD, s02=GOOD2)
-    assert "合計 56 字，估計約 14 秒" in out
+    assert "合計 56 字，估計約 13 秒" in out
     assert "2–4 分鐘" in out
     assert code == 0
 
