@@ -140,8 +140,30 @@ def test_main_flow_skills_point_at_files_that_exist(name):
     assert refs
     for ref in refs:
         assert (ROOT / ref).exists(), ref
-    for ref in ("narration-rules.md", "storyboard-rules.md", "formats.md", "vox-rules.md", "checks-and-review.md"):
+    for ref in ("narration-rules.md", "storyboard-rules.md", "formats.md", "checks-and-review.md"):
         assert ref in body or name == "edit-video", ref
+
+
+VOX_WORDS = ("Vox", "vox", "剪報", "框核對", "confirm-box", "boxes", "牛皮紙", "桌面")
+"""只用財經圖表（docs/adr/0001-只用財經圖表風格.md）：作者的流程裡不該出現的 Vox 用語與指令。"""
+INTERNAL_ONLY = {"boxes", "confirm-box"}
+"""Vox 框的指令：程式還在（boxes.py 會印 confirm-box），但只有內部開關打開才碰得到，skill 不叫、不預先核准。"""
+
+
+@pytest.mark.parametrize("name", ["make-video", "edit-video"])
+def test_the_main_flow_only_makes_finance_charts(name):
+    """主流程兩支 skill 和它們讀的說明檔：不叫 Vox 的指令、不教 Claude 寫 Vox 分鏡；文章裡的圖重畫成圖表。"""
+    meta, rules, body = parse_skill(name)
+    refs = ROOT / "skills" / "make-video" / "references"
+    texts = {"description": meta["description"], "SKILL.md": body,
+             **{f.name: f.read_text(encoding="utf-8") for f in sorted(refs.glob("*.md"))}}
+    for where, text in texts.items():
+        for word in VOX_WORDS:
+            assert word not in text, f"{name} 的 {where} 還有「{word}」"
+    assert not (refs / "vox-rules.md").exists()
+    for sub in INTERNAL_ONLY:
+        assert not any(f"article_to_video {sub} " in r for r in rules), f"{name} 還預先核准 {sub}"
+    assert "重畫" in texts["storyboard-rules.md"] and "figure_numbers.json" in texts["storyboard-rules.md"]
 
 
 @pytest.mark.parametrize("name", SKILLS)
@@ -182,7 +204,8 @@ def _calls_to(tree, func: str) -> list:
 
 def test_printed_commands_all_come_from_one_place_and_are_preapproved():
     """程式裡印給 Claude 的指令只從 commands.cli_command 組（前綴只有一份），每個子指令都有主流程 skill 預先核准
-    （publish 的提示只在改片那支跑 publish 時出現；兩支都會跑的指令，下面的測試照實際印出來的逐支檢查）。"""
+    （publish 的提示只在改片那支跑 publish 時出現；兩支都會跑的指令，下面的測試照實際印出來的逐支檢查）。
+    例外：Vox 框的指令（INTERNAL_ONLY）只在內部開關打開時才會印，作者的流程碰不到。"""
     import ast
 
     src = ROOT / "src" / "article_to_video"
@@ -201,9 +224,9 @@ def test_printed_commands_all_come_from_one_place_and_are_preapproved():
         for call in _calls_to(tree, "cli_command"):
             assert call.args and isinstance(call.args[0], ast.Constant), f"{path.name}:{call.lineno} 子指令要直接寫"
             subs.add(call.args[0].value.split()[0])
-    assert {"checks", "review-prep", "review-frames", "confirm-box", "resolve"} <= subs
+    assert {"checks", "review-prep", "review-frames", "resolve"} <= subs
     rules = [r for name in MAIN_FLOW for r in parse_skill(name)[1]]
-    for sub in sorted(subs):
+    for sub in sorted(subs - INTERNAL_ONLY):
         assert any(f"article_to_video {sub} *" in r for r in rules), f"做片、改片的 skill 都沒有預先核准 {sub}"
 
 
@@ -252,5 +275,12 @@ def test_json_formats_in_the_skill_docs_are_valid_projects(tmp_path):
     shots = next(b for b in blocks if "shots" in b)
     (tmp_path / "narration.json").write_text(json.dumps(narration, ensure_ascii=False), encoding="utf-8")
     (tmp_path / "shots.json").write_text(json.dumps(shots, ensure_ascii=False), encoding="utf-8")
+    # 讀圖記下的數字（原文圖表）：照抄範例、文章有那張圖，就讀得進來
+    figures = next(b for b in blocks if "figures" in b)
+    (tmp_path / "article").mkdir()
+    (tmp_path / "article" / "article.json").write_text(json.dumps(
+        {"paragraphs": [], "images": [{"n": 1, "label": "圖1", "file": "images/圖1.png"}]}), encoding="utf-8")
+    (tmp_path / "article" / "figure_numbers.json").write_text(json.dumps(figures, ensure_ascii=False), encoding="utf-8")
     project = load_project(tmp_path)
     assert [s.id for s in project.shots] == ["SH01", "SH02"]
+    assert [(f.figure, f.number.text) for f in project.figure_numbers] == [("圖1", "4.58"), ("圖1", "3.96")]
