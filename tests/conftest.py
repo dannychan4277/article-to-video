@@ -68,12 +68,21 @@ def _block_network():
     # 公有數據（FRED）預設指到本機沒人聽的埠：子行程（CLI 建置）不受上面的 socket 擋網管，靠這個保證不會真的連 FRED。
     # 要假 FRED 的測試用 test_public_data.py 的 fred fixture 蓋掉。
     # 環境檢查的 edge-tts 連線測試（回報問題、檢查環境的子行程都會跑）同理：proxy 指到死埠，只會得到「連不上」。
+    # 付費配音（ElevenLabs、Google）同理：網址指到死埠；要假伺服器的測試用 test_tts_providers.py 的 tts_server 蓋掉。
     dead_ends = {
         "ARTICLE_TO_VIDEO_FRED_URL": "http://127.0.0.1:9/graph/fredgraph.csv",
         "ARTICLE_TO_VIDEO_EDGE_TTS_PROXY": "http://127.0.0.1:9",
+        "ARTICLE_TO_VIDEO_ELEVENLABS_URL": "http://127.0.0.1:9",
+        "ARTICLE_TO_VIDEO_GOOGLE_TTS_URL": "http://127.0.0.1:9",
     }
-    saved = {k: os.environ.get(k) for k in dead_ends}
+    # 付費配音的 API key：測試絕不讀到 Danny 真的 key（環境變數、~/.config/article-to-video/*.key）。
+    # XDG_CONFIG_HOME 指到不存在的資料夾＝~/.config 那一層找不到東西；子行程也吃得到。
+    hidden = ("ELEVENLABS_API_KEY", "GOOGLE_TTS_API_KEY")
+    saved = {k: os.environ.get(k) for k in (*dead_ends, *hidden, "XDG_CONFIG_HOME")}
     os.environ.update(dead_ends)
+    for k in hidden:
+        os.environ.pop(k, None)
+    os.environ["XDG_CONFIG_HOME"] = str(Path(__file__).parent / "fixtures" / "沒有這個資料夾")
     try:
         yield
     finally:

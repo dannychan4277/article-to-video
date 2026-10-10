@@ -4,11 +4,14 @@
 寫一個符合 `TTSEngine` 的類別、登記到 `TTS_ENGINES`，在 settings.json 寫 `"tts": "<名字>"`
 （或 CLI `--tts <名字>`）就好，建置流程不用改。
 
-- `edge`：edge-tts（微軟線上語音，zh-TW 曉臻／曉雨／雲哲），要連網。
+- `edge`：edge-tts（微軟線上語音，zh-TW 曉臻／曉雨／雲哲），要連網，免費（預設）。
+- `elevenlabs`：ElevenLabs（付費，要 API key），見 tts_providers.py。
+- `google`：Google Cloud Text-to-Speech（付費、有免費額度，要 API key），見 tts_providers.py。
 - `fake`：假配音層，給測試用：靜音＋寫死規則的時間點（見 FakeTTS），不連網、結果固定。
 
-快取鍵＝「配音層｜聲音｜語速｜文字」，同樣的段落不會重打。所有音檔一律轉成 48 kHz、單聲道、16-bit WAV，
-長度直接從 WAV 讀（不用 ffprobe），混音時逐樣本對齊。
+快取鍵＝「配音層｜模型｜聲音｜語速｜文字」，同樣的段落不會重打（付費的就不會重複花錢）；換配音層全部重配一次，
+換回來直接用舊的快取。所有音檔一律轉成 48 kHz、單聲道、16-bit WAV，長度直接從 WAV 讀（不用 ffprobe），
+混音時逐樣本對齊。
 """
 
 from __future__ import annotations
@@ -69,6 +72,8 @@ class SegmentAudio:
     duration: float
     """音檔長度（秒），含頭尾靜音。"""
     words: tuple[WordTiming, ...]
+    sent_chars: int = 0
+    """這次執行為了這段送給配音服務的字數（付費配音照這個計費）；用快取、或跟別段同一句共用時是 0。"""
 
     def char_start(self, i: int) -> float:
         """第 i 個字「開始唸」的秒數：包含它的那個詞的開頭；它不在任何詞裡（標點）就取下一個詞的開頭。"""
@@ -105,10 +110,14 @@ class Synthesis:
     audio: Path
     """配音層寫出的音檔（任何 ffmpeg 讀得懂的格式；不是 48k 單聲道 WAV 的話會再轉一次）。"""
     words: list[WordTiming]
+    chars: int | None = None
+    """送給配音服務的計費字數；None＝就是文字的字數（Google 的 SSML 外殼也算錢，它自己報）。"""
 
 
 class TTSEngine(Protocol):
     name: str
+    """配音層名字（TTS_ENGINES 的鍵）。可以另外有 `model: str`（例 ElevenLabs 的模型），會算進快取鍵；
+    也可以有 `prepare()`：有段落真的要配音時先叫一次（例：找 API key，找不到就丟 NarrationError），全部用快取就不叫。"""
 
     def synthesize(self, text: str, *, voice: str, rate: str, out_stem: Path) -> Synthesis:
         """把 text 唸成音檔，寫在 out_stem 加副檔名的位置；回傳音檔路徑和詞級時間點。"""
@@ -230,26 +239,50 @@ class EdgeTTS:
         return map_word_boundaries(text, boundaries)
 
 
-TTS_ENGINES: dict[str, Callable[[], TTSEngine]] = {"edge": EdgeTTS, "fake": FakeTTS}
+def _elevenlabs(*, model: str = "", data_dir: str | os.PathLike | None = None) -> TTSEngine:
+    from article_to_video.tts_providers import ElevenLabsTTS
+
+    return ElevenLabsTTS(model=model or None, data_dir=data_dir)
 
 
-def get_tts_engine(name: str) -> TTSEngine:
+def _google(*, model: str = "", data_dir: str | os.PathLike | None = None) -> TTSEngine:
+    from article_to_video.tts_providers import GoogleTTS
+
+    return GoogleTTS(data_dir=data_dir)
+
+
+TTS_ENGINES: dict[str, Callable[..., TTSEngine]] = {
+    "edge": lambda **_: EdgeTTS(),
+    "elevenlabs": _elevenlabs,
+    "google": _google,
+    "fake": lambda **_: FakeTTS(),
+}
+"""配音層名字 → 工廠（關鍵字參數 model、data_dir；用不到的忽略）。"""
+
+
+def get_tts_engine(name: str, *, model: str = "", data_dir: str | os.PathLike | None = None) -> TTSEngine:
+    """model：ElevenLabs 的模型（空字串＝預設）；data_dir：使用者資料位置（付費配音在 <資料位置>/keys/ 找 API key）。
+    建立時不找 key：全部段落都有快取就不需要 key（例：維護者重現回報的問題）。"""
     try:
-        return TTS_ENGINES[name]()
+        factory = TTS_ENGINES[name]
     except KeyError:
         raise NarrationError(f"沒有叫「{name}」的配音層（可用：{'、'.join(TTS_ENGINES)}）") from None
+    return factory(model=model, data_dir=data_dir)
 
 
 # ---------------------------------------------------------------- 快取＋統一格式
 
 
-def _cache_key(engine: str, voice: str, rate: str, text: str) -> str:
-    return hashlib.sha256(f"{_CACHE_VERSION}|{engine}|{voice}|{rate}|{text}".encode()).hexdigest()[:24]
+def _cache_key(engine: str, voice: str, rate: str, text: str, model: str = "") -> str:
+    # 沒有模型的配音層（edge、fake、google）鍵的寫法跟以前一樣：舊專案的快取照樣命中
+    who = f"{engine}|{model}" if model else engine
+    return hashlib.sha256(f"{_CACHE_VERSION}|{who}|{voice}|{rate}|{text}".encode()).hexdigest()[:24]
 
 
-def cached_timing_file(cache_dir: str | os.PathLike, engine: str, voice: str, rate: str, text: str) -> Path:
+def cached_timing_file(cache_dir: str | os.PathLike, engine: str, voice: str, rate: str, text: str,
+                       model: str = "") -> Path:
     """這段旁白在配音快取裡的時間點檔（<鍵>.json；同名的 .wav 是音檔）。檔案在不在要自己看。"""
-    return Path(cache_dir) / f"{_cache_key(engine, voice, rate, text)}.json"
+    return Path(cache_dir) / f"{_cache_key(engine, voice, rate, text, model)}.json"
 
 
 def _wav_params_ok(path: Path) -> bool:
@@ -297,15 +330,17 @@ def narrate(
 ) -> dict[str, SegmentAudio]:
     """把每段旁白配成音（有快取就直接用），回傳 {段落鍵: SegmentAudio}，順序同 segments。
 
-    快取在 cache_dir：<鍵>.wav＋<鍵>.json。同一個配音層、現在用不到的快取會被清掉。
-    on_segment(段落鍵, 是否用快取)：每段完成時呼叫（印進度用）。
+    快取在 cache_dir：<鍵>.wav＋<鍵>.json。同一個配音層、模型、聲音、語速底下現在用不到的快取（改過的舊旁白）
+    會被清掉；別的配音層／聲音／語速的留著，換回去不用重配（付費的不用再花錢）。
+    on_segment(段落鍵, 是否用快取)：每段完成時呼叫（印進度用）。每段送出去的字數看 SegmentAudio.sent_chars。
     """
     cache = Path(cache_dir)
     cache.mkdir(parents=True, exist_ok=True)
     ff = Path(ffmpeg) if ffmpeg is not None else None
-    keys = {k: _cache_key(engine.name, voice, rate, t) for k, t in segments.items()}
+    model = getattr(engine, "model", "") or ""
+    keys = {k: _cache_key(engine.name, voice, rate, t, model) for k, t in segments.items()}
 
-    def one(seg: str) -> tuple[SegmentAudio, bool]:
+    def from_cache(seg: str) -> SegmentAudio | None:
         text, ck = segments[seg], keys[seg]
         wav, meta = cache / f"{ck}.wav", cache / f"{ck}.json"
         if wav.is_file() and meta.is_file():
@@ -313,9 +348,17 @@ def narrate(
                 info = json.loads(meta.read_text(encoding="utf-8"))
                 if info.get("text") == text:
                     words = tuple(WordTiming(*w) for w in info["words"])
-                    return SegmentAudio(seg, text, wav, info["duration"], words), True
+                    return SegmentAudio(seg, text, wav, info["duration"], words)
             except (ValueError, KeyError, TypeError):
                 pass
+        return None
+
+    def one(seg: str) -> tuple[SegmentAudio, bool]:
+        hit = from_cache(seg)
+        if hit is not None:
+            return hit, True
+        text, ck = segments[seg], keys[seg]
+        wav, meta = cache / f"{ck}.wav", cache / f"{ck}.json"
         try:
             syn = engine.synthesize(text, voice=voice, rate=rate, out_stem=cache / f"{ck}-part")
             _to_wav(syn.audio, wav, ff)
@@ -323,39 +366,46 @@ def narrate(
             raise NarrationError(f"旁白段 {seg} 配音失敗：{e}") from e
         duration = _wav_duration(wav)
         info = {
-            "engine": engine.name, "voice": voice, "rate": rate, "text": text, "duration": duration,
+            "engine": engine.name, "model": model, "voice": voice, "rate": rate, "text": text, "duration": duration,
             "words": [[w.start_char, w.end_char, w.start, w.end] for w in syn.words],
         }
         meta.write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
-        return SegmentAudio(seg, text, wav, duration, tuple(syn.words)), False
+        sent = len(text) if syn.chars is None else syn.chars
+        return SegmentAudio(seg, text, wav, duration, tuple(syn.words), sent_chars=sent), False
 
     # 一字不差的兩段旁白共用同一個快取鍵：只配一次（並行配同一個鍵會搶同一個暫存檔），其他段沿用那份音檔
     first: dict[str, str] = {}
     for seg, ck in keys.items():
         first.setdefault(ck, seg)
+    prepare = getattr(engine, "prepare", None)
+    if prepare is not None and any(from_cache(seg) is None for seg in first.values()):
+        prepare()  # 例：付費配音先找 API key，找不到就一次講清楚，不要每段各報一次
     results: dict[str, SegmentAudio] = {}
-    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+    workers = max(1, min(jobs, getattr(engine, "parallel", jobs)))  # 付費服務有同時請求數的上限
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         done = dict(zip(first.values(), pool.map(one, list(first.values()))))
     for seg in segments:
         lead = first[keys[seg]]
         audio, cached = done[lead]
-        results[seg] = audio if seg == lead else replace(audio, key=seg)
+        results[seg] = audio if seg == lead else replace(audio, key=seg, sent_chars=0)
         if on_segment:
             on_segment(seg, cached or seg != lead)
 
-    _prune(cache, engine.name, set(keys.values()))
+    _prune(cache, (engine.name, model, voice, rate), set(keys.values()))
     return results
 
 
-def _prune(cache: Path, engine: str, keep: set[str]) -> None:
+def _prune(cache: Path, current: tuple[str, str, str, str], keep: set[str]) -> None:
+    """清掉同一個（配音層, 模型, 聲音, 語速）底下、現在用不到的快取（旁白改過之後的舊版本）。"""
     for meta in cache.glob("*.json"):
-        if meta.stem in keep:
+        if meta.stem in keep or meta.name == "timing.json":
             continue
         try:
-            same_engine = json.loads(meta.read_text(encoding="utf-8")).get("engine") == engine
-        except ValueError:
-            same_engine = True
-        if same_engine:
+            info = json.loads(meta.read_text(encoding="utf-8"))
+            same = (info.get("engine"), info.get("model", ""), info.get("voice"), info.get("rate")) == current
+        except (ValueError, AttributeError):
+            same = True
+        if same:
             meta.unlink(missing_ok=True)
             meta.with_suffix(".wav").unlink(missing_ok=True)
     for part in cache.glob("*-part.*"):
