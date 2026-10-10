@@ -47,7 +47,7 @@
                [--data-dir D] [--project P]
                                                                      改使用者設定；加 --project 只改那支片的快照
   samples music --out 資料夾 [--seconds 20] [--data-dir D]           每首配樂一個試聽檔 music-<名字>.wav
-  samples voice --out 資料夾 [--rate +5%] [--text …] [--tts 配音層] [--voice 代號]…
+  samples voice --out 資料夾 [--rate +5%] [--text …] [--tts 配音層] [--voice 曉臻|Wavenet-B|代號]…
                                                      每個聲音一個試聽檔 voice-<代號>.wav（要連網；印出送出幾個字）
   check-env [--json] [--try-voice] [--data-dir D]    檢查環境：逐項列出狀態與修法；有問題結束碼 1
                                                      （--try-voice：付費配音真的試唸兩個字，確認 API key 能用）
@@ -239,7 +239,7 @@ def _parser() -> argparse.ArgumentParser:
     voice.add_argument("--tts", choices=sorted(TTS_ENGINES), default="edge",
                        help="配音層（預設 edge，要連網）；google 給六個台灣口音的聲音，elevenlabs 給設定的聲音")
     voice.add_argument("--voice", action="append", default=[],
-                       help="只試這幾個聲音（可重複；ElevenLabs 填聲音代號，挑聲庫的台灣口音聲音用）")
+                       help="只試這幾個聲音（可重複；寫法跟 settings set 一樣：曉臻、雲哲、Wavenet-B；ElevenLabs 填聲音代號）")
 
     ce = add("check-env", "檢查環境：逐項列出做片要用的工具狀態與修法（含 edge-tts 連線、付費配音有沒有 API key）",
              "json", "data_dir", project=None)
@@ -861,8 +861,10 @@ def _samples(args: argparse.Namespace) -> int:
         rate = normalize_value("rate", args.rate) if args.rate else us.rate
         cache = resolve_data_dir(args.data_dir) / "previews" / "voice-cache"
         voices = {"google": GOOGLE_TW_VOICES, "elevenlabs": {us.elevenlabs_voice: "設定的聲音"}}.get(args.tts, ZH_TW_VOICES)
-        if args.voice:
-            voices = {v: GOOGLE_TW_VOICES.get(v) or ZH_TW_VOICES.get(v) or "指定的聲音" for v in args.voice}
+        if args.voice:  # 跟 settings set 收一樣的寫法（曉臻、Wavenet-B…），換成代號再交給配音層
+            key = {"google": "google_voice", "elevenlabs": "elevenlabs_voice"}.get(args.tts, "voice")
+            picked = [normalize_value(key, v) for v in args.voice]
+            voices = {v: GOOGLE_TW_VOICES.get(v) or ZH_TW_VOICES.get(v) or "指定的聲音" for v in picked}
         engine = get_tts_engine(args.tts, model=us.elevenlabs_model if args.tts == "elevenlabs" else "",
                                 data_dir=args.data_dir)
         sent = 0

@@ -394,6 +394,48 @@ def test_voice_samples_for_paid_providers_use_their_own_voices(tmp_path, tts_ser
         "SetVoice1234567890ab", "TryVoiceA1234567890a", "TryVoiceB1234567890b"]
 
 
+def test_voice_samples_take_the_same_voice_names_as_settings(tmp_path, tts_server, monkeypatch, capsys):
+    """示範時 `samples voice --voice 曉臻` 直接把「曉臻」交給 edge-tts → Invalid voice。試聽的 --voice 收的寫法要跟
+    settings set 一樣：edge 收中文名、Google 收 Wavenet-B 這種簡寫；寫錯的用繁中說有哪些可以挑。"""
+    import edge_tts
+
+    from test_narration import _mp3_bytes
+
+    audio = _mp3_bytes(tmp_path, 1.0)
+    asked: list[str] = []
+
+    class EdgeLike:  # 跟 edge-tts 一樣：聲音不是代號就在建構時丟 ValueError
+        def __init__(self, text, voice, **kw):
+            if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}-\w+Neural", voice):
+                raise ValueError(f"Invalid voice '{voice}'.")
+            asked.append(voice)
+            self.text = text
+
+        async def stream(self):
+            yield {"type": "audio", "data": audio}
+            yield {"type": "WordBoundary", "offset": 1_000_000, "duration": 2_000_000, "text": self.text[:1]}
+
+    monkeypatch.setattr(edge_tts, "Communicate", EdgeLike)
+    monkeypatch.setenv("GOOGLE_TTS_API_KEY", FAKE_GOOGLE_KEY)
+    data, out = tmp_path / "plugin-data", tmp_path / "試聽"
+
+    printed = _cli(capsys, "samples", "voice", "--out", out, "--text", "試聽。", "--data-dir", data,
+                   "--voice", "曉臻", "--voice", "雲哲")
+    assert asked == ["zh-TW-HsiaoChenNeural", "zh-TW-YunJheNeural"]
+    assert (out / "voice-zh-TW-HsiaoChenNeural.wav").is_file() and "曉臻（zh-TW-HsiaoChenNeural）" in printed
+
+    _cli(capsys, "samples", "voice", "--tts", "google", "--out", out, "--text", "試聽。", "--data-dir", data,
+         "--voice", "wavenet-b")
+    assert [r["body"]["voice"]["name"] for r in tts_server.synth("google")] == ["cmn-TW-Wavenet-B"]
+
+    from article_to_video import cli
+
+    capsys.readouterr()
+    assert cli.main(["samples", "voice", "--out", str(out), "--data-dir", str(data), "--voice", "小美"]) == 1
+    err = capsys.readouterr().err
+    assert "小美" in err and "曉臻" in err and "Traceback" not in err
+
+
 # ---------------------------------------------------------------- 檢查環境
 
 
