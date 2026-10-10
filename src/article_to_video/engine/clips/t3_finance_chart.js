@@ -174,7 +174,8 @@ return {
       tops = S.map((r, i) => {
         const q = own[i], p = q ? ctx.p(t, q.at, q.dur || 0.7) : MO.lagged(i, n, dp, Math.min(0.22, 2 / n));
         const base = r.color || L.col.main, col = i === curI ? (perBar ? base : L.col.accent) : base;
-        return CH.bars(c, [{ x: xs[i], v: r.value }], yS, bw, p, { ...opt, ...(perBar && r.text != null ? { fmt: () => r.text } : {}), lag: 0, col, hi: dimA[i] > 0 ? 1 : -1, hiP: dimA[i] })[0];   // [Danny 本机改] series 项可写 text 覆盖柱上数值（如「＞50%」；只在逐根长出的路径生效：有 data.index 的 bar cue 或 color）
+        const dim = r.color ? 0 : dimA[i];   // [article-to-video 內嵌修改] 自己寫了 color 的柱不淡掉：顏色是作者指定的（跟片裡別處同一個量的配色對上），不是強調；原版標註一出現就跟著淡成灰
+        return CH.bars(c, [{ x: xs[i], v: r.value }], yS, bw, p, { ...opt, ...(perBar && r.text != null ? { fmt: () => r.text } : {}), lag: 0, col, hi: dim > 0 ? 1 : -1, hiP: dim })[0];   // [Danny 本机改] series 项可写 text 覆盖柱上数值（如「＞50%」；只在逐根长出的路径生效：有 data.index 的 bar cue 或 color）
       });
     } else if (kind === 'line') {
       pts = S.map((r, i) => [xs[i], yS(r.value)]);

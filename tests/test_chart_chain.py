@@ -256,3 +256,16 @@ def test_y_range_written_in_the_chart_is_used_as_is(chain):
     """yRange [-2, 2]：縱軸就是 −2～2，數字 −0.85～0.80 的線大約占四成高（1.65 ÷ 4）。"""
     share = line_share(chain, chain.last("SH07"))
     assert 0.36 <= share <= 0.47, f"線占格線範圍的 {share:.0%}，不像是 −2～2"
+
+
+# ---------------------------------------------------------------- 5. 自己寫的柱顏色不被標註淡掉
+
+
+GREEN = np.array([0x2E, 0x8B, 0x57])
+
+
+@pytest.mark.parametrize("sid", ["SH01", "SH02"])
+def test_a_bar_with_its_own_colour_keeps_it_when_another_bar_is_labelled(chain, sid):
+    """「乙」寫了 color（綠）：標註在別根柱上時，沒寫顏色的柱淡成灰，乙還是綠的（顏色是作者指定的身分，不是強調）。"""
+    green = int((np.abs(chain.last(sid) - GREEN).max(axis=-1) <= 12).sum())
+    assert green > 1500, f"{sid} 標註出現後，乙的綠色只剩 {green} 個像素"
