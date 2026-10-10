@@ -131,6 +131,37 @@ def test_a_continuation_may_differ_in_labels_or_big_number(tmp_path, edit):
     plan_build(make_project(tmp_path, edit), tts="fake")
 
 
+def _y_range(value):
+    def edit(shots, _):
+        sh(shots, "SH01")["chart"]["data"]["yRange"] = value
+    return edit
+
+
+Y_RANGE_CASES = {
+    "不是兩個數字": ([0, "5"], ["分鏡 SH01", "yRange", "[最小, 最大]"]),
+    "最小比最大大": ([5, 0], ["分鏡 SH01", "yRange", "要比後面的"]),
+    "柱狀圖沒包含 0": ([3, 5], ["分鏡 SH01", "yRange", "包含 0"]),
+    "沒包住數字": ([0, 4], ["分鏡 SH01", "yRange", "沒包住", "4.58"]),
+}
+
+
+@pytest.mark.parametrize("case", list(Y_RANGE_CASES))
+def test_bad_y_range_is_blocked_with_a_clear_message(tmp_path, case):
+    value, needles = Y_RANGE_CASES[case]
+    with pytest.raises(ProjectError) as err:
+        build_project(make_project(tmp_path, _y_range(value)), tts="fake")
+    for needle in needles:
+        assert needle in str(err.value), f"錯誤訊息少了「{needle}」：\n{err.value}"
+
+
+def test_y_range_that_fits_is_accepted(tmp_path):
+    from article_to_video.build import plan_build
+
+    plan = plan_build(make_project(tmp_path, _y_range([0, 6])), tts="fake")
+    assert plan.clips[0].spec["data"]["yRange"] == [0, 6]
+    assert plan.clips[1].spec["data"]["yRange"] == [0, 6]  # 接續分鏡沿用
+
+
 def test_repeated_word_resolves_with_occurrence(tmp_path):
     def edit(shots, narration):
         ambiguous_word(shots, narration)

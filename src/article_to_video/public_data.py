@@ -38,7 +38,7 @@ from typing import Any
 
 import certifi
 
-from article_to_video.project import ChartConfig, Project, ProjectError
+from article_to_video.project import ChartConfig, Project, ProjectError, y_range_covers
 
 __all__ = [
     "FRED_CSV_URL",
@@ -421,6 +421,7 @@ def resolve_public_data(project: Project) -> tuple[Project, dict[str, PublicChar
         chart = PublicChart(request=req, values=tuple(values), fetched={p: snaps[p].fetched for p in req.parts},
                             source=_source_line(req, snaps))
         data = {**shot.chart.data, "series": [{"label": v.label, "value": v.value} for v in values], "source": chart.source}
+        problems.extend(y_range_covers(data, f"{shot.label} 的 chart.data"))
         shots[i] = replace(shot, chart=ChartConfig(data=data, cues=shot.chart.cues))
         charts[shot.id] = chart
     if problems:

@@ -249,6 +249,7 @@ MISUSE = {
     "every 打錯": (dict(publicData={**DGS10_MONTHLY, "every": "week"}), ["分鏡 SH01", "every", "week"]),
     "日期反了": (dict(publicData={**DGS10_MONTHLY, "from": "2025-02-01"}), ["分鏡 SH01", "from", "晚於"]),
     "xTicks 超過抓到的點數": (dict(xTicks=[0, 5]), ["分鏡 SH01", "xTicks", "2 個點"]),
+    "yRange 沒包住抓到的數字": (dict(yRange=[4, 4.6]), ["分鏡 SH01", "yRange", "沒包住", "4.6543"]),
 }
 
 

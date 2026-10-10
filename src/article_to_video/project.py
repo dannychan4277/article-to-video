@@ -80,7 +80,7 @@ ZH_TW_VOICES = {
 # 寫系列名稱取代 series 與 source，建置時抓數據換成實際數列、自動寫來源行，見 public_data.py）
 CHART_DATA_KEYS = frozenset({
     "title", "unit", "source", "badge", "chart", "series", "decimals", "prefix", "suffix",
-    "highlight", "colors", "upDown", "xAxis", "xTicks", "axisNote", "push", "publicData",
+    "highlight", "colors", "upDown", "xAxis", "xTicks", "axisNote", "push", "publicData", "yRange",
 })
 CHART_CUE_KINDS = frozenset({"title", "bar", "line", "candle", "highlight", "number"})
 VOX_CUE_KINDS = frozenset({"image", "excerpt", "box", "title", "point"})
@@ -841,7 +841,9 @@ def _check_chart_data(data: dict, label: str, problems: _Problems) -> None:
         problems.add(f"{where} 的 chart 只能是 bar、line、candle，現在是 {kind!r}")
     if "push" in data and (not _is_number(data["push"]) or not 0 <= data["push"] <= 0.2):
         problems.add(f"{where} 的 push 要是 0～0.2（整串分鏡總共推近多少，例 0.03）")
-    if "publicData" in data:  # 數列由建置抓（public_data.py）；xTicks 等抓到之後才查
+    for p in y_range_problems(data, where):
+        problems.add(p)
+    if "publicData" in data:  # 數列由建置抓（public_data.py）；xTicks、yRange 有沒有包住數字等抓到之後才查
         if "series" in data:
             problems.add(f"{where} 的 series 和 publicData 只能二擇一：用公有數據就拿掉 series（數列由建置抓）")
         if "source" in data:
@@ -866,6 +868,42 @@ def _check_chart_data(data: dict, label: str, problems: _Problems) -> None:
     xt = data.get("xTicks")
     if xt is not None and not (isinstance(xt, list) and all(isinstance(x, int) and 0 <= x < len(series) for x in xt)):
         problems.add(f"{where} 的 xTicks 要是索引清單（0～{len(series) - 1}）")
+    for p in y_range_covers(data, where):
+        problems.add(p)
+
+
+def _y_range(data: Mapping) -> tuple[float, float] | None:
+    yr = data.get("yRange")
+    if isinstance(yr, list) and len(yr) == 2 and all(_is_number(v) for v in yr) and yr[0] < yr[1]:
+        return float(yr[0]), float(yr[1])
+    return None
+
+
+def y_range_problems(data: Mapping, where: str) -> list[str]:
+    """chart.data.yRange（縱軸範圍，自己寫死）的格式：[最小, 最大] 兩個數字、最小比最大小；柱狀圖要包含 0。"""
+    if "yRange" not in data:
+        return []
+    yr = data["yRange"]
+    if not (isinstance(yr, list) and len(yr) == 2 and all(_is_number(v) for v in yr)):
+        return [f"{where} 的 yRange 要寫成 [最小, 最大] 兩個數字，例 [-1, 2]（縱軸從 -1 畫到 2），現在是 {yr!r}"]
+    if not yr[0] < yr[1]:
+        return [f"{where} 的 yRange 前面的數（最小）要比後面的（最大）小，現在是 [{yr[0]:g}, {yr[1]:g}]"]
+    if data.get("chart", "bar") == "bar" and not yr[0] <= 0 <= yr[1]:
+        return [f"{where} 的 yRange 要包含 0：柱一律從 0 長出來，現在是 [{yr[0]:g}, {yr[1]:g}]"]
+    return []
+
+
+def y_range_covers(data: Mapping, where: str) -> list[str]:
+    """yRange 有沒有包住數列的每一個數（K 線看最高、最低）：沒包住的話線或柱會畫出圖區。公有數據抓到之後也查一次。"""
+    yr = _y_range(data)
+    series = data.get("series")
+    if yr is None or not isinstance(series, list):
+        return []
+    vals = [r.get(k) for r in series if isinstance(r, dict) for k in ("value", "h", "l") if _is_number(r.get(k))]
+    if not vals or (yr[0] <= min(vals) and max(vals) <= yr[1]):
+        return []
+    return [f"{where} 的 yRange [{yr[0]:g}, {yr[1]:g}] 沒包住全部的數字（最小 {min(vals):g}、最大 {max(vals):g}），"
+            "畫出來會超出圖區：改寬一點，或拿掉 yRange 讓它自己算"]
 
 
 def _check_highlight(h: Any, where: str, problems: _Problems) -> None:

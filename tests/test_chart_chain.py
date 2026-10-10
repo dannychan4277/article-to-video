@@ -6,6 +6,7 @@
 - SH01～SH03：柱狀圖一串。SH01 標「甲」（正數柱），SH02 從 s02 開頭切入、到「跌最深」才換標「丁」（負數柱），
   SH03 從 s03 開頭切入、切點就換標「乙」。乙自己寫了顏色（綠）。
 - SH04～SH06：折線一串（有大數字）。SH04 標谷底（不在 xTicks 上），SH05 換標最後一點，SH06 同一點只換字。
+- SH07：同一組折線數字，自己寫縱軸範圍 yRange [-2, 2]。
 
 整串的第一個分鏡寫 push 0（不慢推），同一串裡不同時刻的畫面可以逐像素比；慢推的連續性另有測試（test_build.py）。
 """
@@ -32,6 +33,7 @@ NARRATION = {
     "s04": "利差先倒掛，再慢慢轉正。",
     "s05": "最後一個月，回到正的。",
     "s06": "這就是轉正。",
+    "s07": "換一種刻度來看。",
 }
 # 自製的月資料（跟 test_render_clip.py 的 DIP 同一組）：先倒掛、谷底在第 9 個月、回正
 DIP = [0.80, 0.55, 0.30, 0.10, -0.15, -0.40, -0.60, -0.75, -0.85, -0.80, -0.70, -0.55,
@@ -78,6 +80,11 @@ SHOTS = [
     {"id": "SH06", "start": _a("s06"), "continues": True, "chart": {
         "data": {"highlight": {"index": 23, "text": "這就是轉正"}},
         "cues": [{"at": _a("s06"), "kind": "highlight"}]}},
+    {"id": "SH07", "start": _a("s07"), "chart": {
+        "data": {"title": "同一組數字，縱軸寫死", "unit": "示意數據，百分點", "source": SOURCE, "chart": "line",
+                 "decimals": 2, "push": 0, "xTicks": [0, 12, 23], "colors": {"main": "#7B2CBF"}, "yRange": [-2, 2],
+                 "series": [{"label": f"{2024 + i // 12}-{i % 12 + 1:02d}", "value": v} for i, v in enumerate(DIP)]},
+        "cues": [{"at": 0, "kind": "title"}, {"at": _a("s07"), "kind": "line"}]}},
 ]
 
 LAST = -1.0
@@ -89,6 +96,7 @@ STILLS = {
     "SH04": [0.0, 1.2, 1.3, 1.4, LAST],   # 1.2～1.4 秒：折線快長完（線頭跑到右邊、靠近刻度值）
     "SH05": [0.0, LAST],
     "SH06": [0.0, LAST],
+    "SH07": [LAST],
 }
 
 
@@ -221,3 +229,30 @@ def test_moving_line_value_never_covers_the_axis_numbers(chain, t):
     ref = chain.last("SH04")
     n = changed(tick_column(chain, chain.at("SH04", t), ref), tick_column(chain, ref, ref))
     assert n == 0, f"{t} 秒線頭數值壓到刻度欄（{n} 個像素）"
+
+
+# ---------------------------------------------------------------- 2. 折線的縱軸不被大數字、標註撐得太開
+
+
+PURPLE = np.array([0x7B, 0x2C, 0xBF])
+
+
+def line_share(chain: Chain, img: np.ndarray) -> float:
+    """折線（紫色）的上下範圍占格線上下範圍幾成。"""
+    top, bottom = grid_span(chain, img)
+    plot = img[top: bottom + 1, : AXIS_RIGHT[chain.aspect] - 80]
+    ys = np.nonzero((np.abs(plot - PURPLE).max(axis=-1) <= 40).any(axis=1))[0]
+    return (ys.max() - ys.min()) / (bottom - top)
+
+
+def test_line_chart_with_a_big_number_and_a_label_is_not_squashed(chain):
+    """數字 −0.85～0.80、有大數字、有標註：原本為了標註在最高點上方硬留 170，圖區又被大數字那一條吃掉，
+    縱軸被撐到 −1～3，線只占四成高。標註放得下就不用多留，線至少占六成高。"""
+    share = line_share(chain, chain.last("SH04"))
+    assert share >= 0.6, f"線只占格線範圍的 {share:.0%}"
+
+
+def test_y_range_written_in_the_chart_is_used_as_is(chain):
+    """yRange [-2, 2]：縱軸就是 −2～2，數字 −0.85～0.80 的線大約占四成高（1.65 ÷ 4）。"""
+    share = line_share(chain, chain.last("SH07"))
+    assert 0.36 <= share <= 0.47, f"線占格線範圍的 {share:.0%}，不像是 −2～2"

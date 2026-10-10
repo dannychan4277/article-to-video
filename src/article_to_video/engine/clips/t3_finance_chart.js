@@ -32,12 +32,16 @@ return {
     const S = d.series || [];
     const vals = kind === 'candle' ? S.flatMap(r => [r.h, r.l]) : S.map(r => r.value);
     let lo = Math.min(...vals), hi = Math.max(...vals);
-    let zeroBased = kind === 'bar' || lo <= 0 || (hi - lo) / hi > 0.6;
-    if (zeroBased) lo = Math.min(0, lo);
-    const pad = (hi - lo) * 0.08, ticks = CH.ticks(zeroBased ? lo : lo - pad, hi + pad, tall ? 5 : 4);
+    // [article-to-video 內嵌修改] data.yRange [最小, 最大]：縱軸照寫的畫（格線是範圍內的整刻度），不自動留白、不加刻度。建置已經查過它包住所有數字
+    const yr = Array.isArray(d.yRange) && d.yRange.length === 2 && d.yRange[0] < d.yRange[1] ? d.yRange : null;
+    let zeroBased = yr ? yr[0] <= 0 && yr[1] >= 0 : kind === 'bar' || lo <= 0 || (hi - lo) / hi > 0.6;
+    if (zeroBased && !yr) lo = Math.min(0, lo);
+    const pad = (hi - lo) * 0.08, ticks = yr ? CH.ticks(yr[0], yr[1], tall ? 5 : 4) : CH.ticks(zeroBased ? lo : lo - pad, hi + pad, tall ? 5 : 4);
+    if (yr && ticks.length < 2) ticks.splice(0, ticks.length, ...yr);
     const step = ticks[1] - ticks[0];                                     // 刻度要把数据整个包住（CH.ticks 只给区间内的整刻度）
-    while (ticks[ticks.length - 1] < hi + pad * 0.5) ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
-    while (ticks[0] > (zeroBased ? lo : lo - pad * 0.5)) ticks.unshift(+(ticks[0] - step).toFixed(10));
+    while (!yr && ticks[ticks.length - 1] < hi + pad * 0.5) ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
+    while (!yr && ticks[0] > (zeroBased ? lo : lo - pad * 0.5)) ticks.unshift(+(ticks[0] - step).toFixed(10));
+    const dom = () => yr || [ticks[0], ticks[ticks.length - 1]];          // 縱軸畫的範圍：自己寫的 yRange，或第一格到最後一格刻度
     const titleSz = (ctx.portrait ? 64 : 58) * u, t = TY.fit(c, d.title || '', W - mL - mR, titleSz, 'PuHui-Bold', { maxLines: tall ? 3 : 2, weight: '700 ' });
     const sub = (d.unit || '') + (!zeroBased ? (d.unit ? '　' : '') + (d.axisNote || '纵轴未从 0 开始') : '');
     // 副标题、来源行：放不下先缩一点，再折两行（竖屏长口径会出画）；来源行要让开右下角标
@@ -63,25 +67,32 @@ return {
     let tdec = 0; while (tdec < 4 && Math.abs(step * 10 ** tdec - Math.round(step * 10 ** tdec)) > 1e-6) tdec++;
     const roomFor = need => { if (F.h - need < 60 * u) throw new Error(`[article-to-video 內嵌] 圖區太矮：讓開上下 safe（字幕、平台介面）之後只剩 ${Math.round(F.h)}px 畫資料，標註留白要 ${Math.round(need)}px。標題、副標或來源太長，或多了大數字那一條：請縮短文字、拿掉大數字，或把標註改短`); };   // [article-to-video 內嵌] 原版這裡放不下時下面的 while 會無限加刻度，當掉時只看到 Invalid array length
     roomFor(0);
-    if (kind === 'bar' && Math.min(...vals) < 0) {                       // 负数柱的数值写在柱底下方：最低那根下面留出一行，不然压到类目名
+    if (!yr && kind === 'bar' && Math.min(...vals) < 0) {                // 负数柱的数值写在柱底下方：最低那根下面留出一行，不然压到类目名
       const vmin = Math.min(...vals), need = 56 * u * fs0; roomFor(need);
       while ((vmin - ticks[0]) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.unshift(+(ticks[0] - step).toFixed(10));
     }
     const posL = hls.filter(h => S[h.index] && S[h.index].value >= 0), negL = hls.filter(h => S[h.index] && S[h.index].value < 0);   // [article-to-video 內嵌修改] 整串的標註（見上面 chainLayout）
-    if (kind === 'bar' && posL.length) {   // 标注的柱子上方要留够文字块（[Danny 本机改] 原本只管「不是最高那根」；标最高那根时斜向标注被 ty 夹在 F.y+60，文字压回柱子上）
+    if (!yr && kind === 'bar' && posL.length) {   // 标注的柱子上方要留够文字块（[Danny 本机改] 原本只管「不是最高那根」；标最高那根时斜向标注被 ty 夹在 F.y+60，文字压回柱子上）
       const nL = Math.max(...posL.map(h => h.lines.length)), need = (52 * nL + 44 + 30) * u * fs0, vmax = Math.max(...vals); roomFor(need);
       while ((ticks[ticks.length - 1] - vmax) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
     }
-    if (kind === 'bar' && negL.length) {    // [article-to-video 內嵌修改] 負數柱的標註放在數值標籤正下方：最低那根柱下面再留出標註文字的高度
+    if (!yr && kind === 'bar' && negL.length) {    // [article-to-video 內嵌修改] 負數柱的標註放在數值標籤正下方：最低那根柱下面再留出標註文字的高度
       const nL = Math.max(...negL.map(h => h.lines.length)), vmin = Math.min(...vals);
       const need = (NEG_LABEL + NEG_GAP + NEG_LINE1 + NEG_LINE2 * (nL - 1) + 12) * u * fs0; roomFor(need);
       while ((vmin - ticks[0]) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.unshift(+(ticks[0] - step).toFixed(10));
     }
-    if (kind === 'line' && hls.length) {                                  // [Danny 本机改] 折线标注：线的最高点之上留够文字块，斜向标注才不会压在线上
-      const vmax = Math.max(...vals), need = 170 * u * fs0; roomFor(need);
-      while ((ticks[ticks.length - 1] - vmax) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
+    if (!yr && kind === 'line' && hls.length) {                           // [Danny 本机改] 折线标注：线的最高点之上留够文字块，斜向标注才不会压在线上
+      // [article-to-video 內嵌修改] 先不留白，每個標註（含整串的）都放得到不壓線、不壓線尾數值、不壓零軸、引線不穿過折線的位置就好；
+      // 放不下才往上加一格刻度再試，最多加到原版的「最高點上方 170」。原版一律留 170：圖區被大數字那一條吃掉時，縱軸被撐到資料的兩三倍高（−0.93～1.5 畫成 −1～4）
+      const vmax = Math.max(...vals), need = 170 * u * fs0;
+      for (;;) {
+        L = { S, F, xs, slot, zeroBased, ticks, yS: CH.lin(...dom(), F.y + F.h, F.y) }; placeLineText(ctx, c);
+        if (hls.every(h => { const co = placeLineLabel(ctx, c, h); return co && co.clean; })) break;
+        if ((ticks[ticks.length - 1] - vmax) / (ticks[ticks.length - 1] - ticks[0]) * F.h >= need) break;
+        roomFor(need); ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
+      }
     }
-    L = { subF, srcF, m: mL, mR, kind, S, zeroBased, ticks, tdec, yS: CH.lin(ticks[0], ticks[ticks.length - 1], F.y + F.h, F.y), F, xs, slot, t, sub, band, category, xFont: xf * xScale, stagger,
+    L = { subF, srcF, m: mL, mR, kind, S, zeroBased, ticks, tdec, yS: CH.lin(...dom(), F.y + F.h, F.y), F, xs, slot, t, sub, band, category, xFont: xf * xScale, stagger,
       every: category ? 1 : Math.max(1, Math.ceil(n / (ctx.portrait ? 6 : 10))) };
     const brand = (d.colors && d.colors.brand) || RED;                    // [article-to-video 內嵌修改] 品牌色
     const main = (d.colors && d.colors.main) || (kind === 'bar' ? '#006BA2' : brand);
@@ -262,9 +273,10 @@ function placeLineLabel(ctx, c, h) {
     const tx = ax + dx * u, ty = ay + dy * u, align = dx > 0 ? 'left' : 'right';
     const x0 = align === 'left' ? tx + 12 : tx - 12 - tw, R = { x0, x1: x0 + tw, y0: ty + 8 - 46 * u, y1: ty + 8 + (lines.length - 1) * 40 + 10 * u };
     if (R.x0 < F.x || R.x1 > g.right || R.y0 < F.y - 10 * u || R.y1 > F.y + F.h) continue;
-    const s = 1000 * g.lineHits(R) + 1000 * g.overlap(g.grow(R, 6 * u), endR) + 400 * g.zeroHit(R) + 300 * crossings([ax, ay], [tx, ty]) + 40 * hugs([ax, ay], [tx, ty]) + 20 * g.gridHits(R)
+    const lh = g.lineHits(R), eo = g.overlap(g.grow(R, 6 * u), endR), zh = g.zeroHit(R), cr = crossings([ax, ay], [tx, ty]);
+    const s = 1000 * lh + 1000 * eo + 400 * zh + 300 * cr + 40 * hugs([ax, ay], [tx, ty]) + 20 * g.gridHits(R)
       + 0.3 * (Math.abs(dy + 140) + Math.abs(dx - (toRight ? 60 : -60))) + (dy > 0 ? 40 : 0);
-    if (!best || s < best.s) best = { s, tx, ty, align };
+    if (!best || s < best.s) best = { s, tx, ty, align, clean: !lh && !eo && !zh && !cr };   // clean：不壓線、線尾數值、零軸，引線不穿過折線（init 決定要不要多留白）
   }
   return best;
 }
