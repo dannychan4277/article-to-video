@@ -1,4 +1,4 @@
-"""環境檢查：這台電腦能不能做片（macOS、CPU、Python、Homebrew、ffmpeg＋字幕濾鏡、Playwright＋Chromium、
+"""環境檢查：這台電腦能不能做片（這台 Mac 支不支援、macOS、CPU、Python、Homebrew、ffmpeg＋字幕濾鏡、Playwright＋Chromium、
 edge-tts 與它的連線、uv、附帶字型、硬碟、頻道設定）。
 
 兩個地方用：
@@ -47,6 +47,7 @@ __all__ = [
     "check_edge_tts_online",
     "check_ffmpeg",
     "check_homebrew",
+    "check_platform",
     "check_uv",
     "collect_environment",
     "env_check",
@@ -125,6 +126,10 @@ class EnvironmentReport:
         problems = [c for c in self.checks if c.ok is False]
         if not problems:
             return "全部正常，可以開始做片。"
+        if problems[0].key == "platform":
+            # 裝不起來的 Mac：叫作者說「安裝」補裝只會白跑一趟
+            return ("第一項「這台 Mac」不符合：這個外掛只能用在 Apple Silicon、macOS 15 以上的 Mac。"
+                    "先照第一項的「修法」處理，其他項目等這台 Mac 符合了再看。")
         names = "、".join(c.name for c in problems)
         return (f"有 {len(problems)} 項要處理：{names}。照上面每一項的「修法」做；"
                 "工具沒裝好的，跟 Claude 說「安裝」就會補裝。")
@@ -165,6 +170,17 @@ def plugin_version(root: Path | None = None) -> str:
 
 
 # ---------------------------------------------------------------- 各項檢查
+
+
+@env_check("platform", "這台 Mac（晶片、macOS 版本）")
+def check_platform() -> EnvCheck:
+    """支援的 Mac：Apple Silicon＋macOS 15 以上（mac_platform.py、docs/adr/0002）。其他 Mac 裝 ffmpeg-full 會從原始碼編譯好幾個小時。"""
+    from article_to_video import mac_platform
+
+    p = mac_platform.detect_platform()
+    verdict = mac_platform.assess(p)
+    return EnvCheck("platform", "這台 Mac（晶片、macOS 版本）", verdict.ok, verdict.summary,
+                    {"arch": p.arch, "macos": p.macos, "minMacos": mac_platform.MIN_MACOS}, fix=verdict.fix)
 
 
 @env_check("macos", "macOS")
@@ -454,7 +470,7 @@ def tts_check(data_dir: str | os.PathLike | None = None, *, live: bool = False) 
 
 
 DEFAULT_CHECKS: tuple[Check, ...] = (
-    check_macos, check_cpu, check_python, check_plugin, check_homebrew, check_ffmpeg, check_playwright,
+    check_platform, check_macos, check_cpu, check_python, check_plugin, check_homebrew, check_ffmpeg, check_playwright,
     check_chromium, check_edge_tts, check_edge_tts_online, check_uv, check_fonts, check_disk,
 )
 """回報問題打包的那一份（不知道資料位置，所以不含頻道設定）。"""

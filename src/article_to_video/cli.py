@@ -246,7 +246,10 @@ def _parser() -> argparse.ArgumentParser:
              "json", "data_dir", project=None)
     ce.add_argument("--try-voice", action="store_true",
                     help="付費配音（ElevenLabs、Google）真的試唸兩個字，確認 key 能用（會用掉幾個字的額度）")
-    add("install", "安裝做片要用的工具（Homebrew、能燒字幕的 ffmpeg、Chromium），已經有的略過", "data_dir", project=None)
+    ins = add("install", "安裝做片要用的工具（Homebrew、能燒字幕的 ffmpeg、Chromium），已經有的略過", "data_dir",
+              project=None)
+    # 維護者用（docs/maintaining.md）：不支援的 Mac 也照裝、ffmpeg-full 可以從原始碼編。不列在 --help，作者那邊的 Claude 不會看到
+    ins.add_argument("--allow-source-build", action="store_true", help=argparse.SUPPRESS)
     tv = add("test-video", "做一支約 10 秒的測試片並打開（安裝最後一步，確認做片的環境沒問題）", "no_open", "data_dir",
              project=None)
     tv.add_argument("--out", help="測試片放哪個資料夾（預設 ~/Movies/解說影片/安裝測試片，Finder 裡的「影片」）")
@@ -917,7 +920,8 @@ def _check_env(args: argparse.Namespace) -> int:
 def _install(args: argparse.Namespace) -> int:
     from article_to_video.installer import Installer
 
-    report = Installer(args.data_dir, log=lambda m: print(m, flush=True)).run()
+    report = Installer(args.data_dir, allow_source_build=args.allow_source_build,
+                       log=lambda m: print(m, flush=True)).run()
     return 0 if report.ok else 1
 
 

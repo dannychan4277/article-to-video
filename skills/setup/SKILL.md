@@ -1,7 +1,9 @@
 ---
 name: setup
-description: 安裝與設定：第一次用這個外掛時，把做影片要用的工具裝好（Homebrew、能燒字幕的 ffmpeg、uv、畫圖表用的 Chromium），讓作者試聽挑配音聲音和配樂，填頻道名、logo、品牌色，最後做一支 10 秒測試片打開給他看。之後想換聲音、換配樂、改頻道名或品牌色也用這個。作者說「安裝」「設定」「第一次使用」「裝好環境」「換聲音」「換配樂」「改頻道名」「改品牌色」時使用。
+description: 安裝與設定：第一次用這個外掛時，先確認這台 Mac 是 Apple Silicon、macOS 15 以上（其他 Mac 裝不起來），再把做影片要用的工具裝好（Homebrew、能燒字幕的 ffmpeg、uv、畫圖表用的 Chromium），讓作者試聽挑配音聲音和配樂，填頻道名、logo、品牌色，最後做一支 10 秒測試片打開給他看。之後想換聲音、換配樂、改頻道名或品牌色也用這個。作者說「安裝」「設定」「第一次使用」「裝好環境」「換聲音」「換配樂」「改頻道名」「改品牌色」時使用。
 allowed-tools:
+  - Bash(sysctl -n hw.optional.arm64)
+  - Bash(sw_vers -productVersion)
   - Bash(uv --version)
   - Bash(~/.local/bin/uv --version)
   - Bash(curl -LsSf --create-dirs -o ${CLAUDE_PLUGIN_DATA}/uv-install.sh https://astral.sh/uv/install.sh)
@@ -23,6 +25,36 @@ allowed-tools:
 回答你的問題（挑聲音、挑配樂、頻道名⋯）。指令和錯誤訊息都由你轉成白話，**不要叫他自己打指令**。
 
 只想改其中一項（換聲音、換配樂、改頻道名／logo／品牌色）：直接做那一步就好，不用重裝。
+
+## 第 0 步：先看這台 Mac 能不能裝（什麼都還沒動）
+
+這個外掛只支援 **Apple Silicon（M1、M2、M3⋯）晶片、macOS 15 以上**的 Mac。其他 Mac 上，做影片要用的 ffmpeg
+沒有現成安裝包，Homebrew 會改成在作者的電腦上從原始碼編譯好幾個小時，而且常常失敗。
+所以要裝東西之前（連開場說明都還沒講），先跑這兩行（只看、不改任何東西）：
+
+```
+sysctl -n hw.optional.arm64
+```
+
+```
+sw_vers -productVersion
+```
+
+- 第一行印 `1` 是 Apple Silicon；印 `0`、什麼都沒印、或說 unknown oid，都是 Intel Mac。
+- 第二行是 macOS 版本，看第一個數字（`26.2` 是 26、`14.7.2` 是 14）。
+
+Apple Silicon、而且第一個數字是 15 以上：往下做。
+
+不符合就**停在這裡**：不要裝 uv、不要裝 Homebrew、不要跑後面任何一步，也不要想別的方法硬裝。用白話跟作者說：
+
+- **Intel Mac**：這台是 Intel 晶片的 Mac，這個外掛沒辦法簡單裝上去（做影片要用的工具沒有給 Intel Mac 的現成安裝包，
+  得在他的電腦上編譯好幾個小時，很容易失敗）。請他聯絡 Danny。想自己確認：點螢幕左上角的蘋果選單 →「關於這台 Mac」，
+  「晶片」寫 Apple M1、M2 這類才是 Apple Silicon；寫的是「處理器」、後面有 Intel，就是 Intel Mac。
+- **Apple Silicon，但 macOS 14 以前**：系統太舊，要先更新到 macOS 15 以上：點蘋果選單 →「系統設定」→「一般」→
+  「軟體更新」（macOS 12 以前是「系統偏好設定」→「軟體更新」），照畫面更新；要一段時間，記得接上電源。
+  更新完再跟你說「安裝」。想自己確認版本：蘋果選單 →「關於這台 Mac」，看「macOS」那一行。更新不了就聯絡 Danny。
+
+第 2 步的 `install` 自己也會再看一次：印出「✗ 這台 Mac」就照它的說明轉述給作者，一樣停下來（它什麼都沒裝）。
 
 ## 開始前先跟作者說
 
@@ -67,6 +99,8 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video install --data
   然後讓它跑，看到「Homebrew 裝好了」才關那個視窗。
 - 不用乾等：等的時候直接做第 3～5 步（試聽和填品牌不需要這些工具）。
 - 跑完看最後幾行：
+  - 「✗ 這台 Mac」：照第 0 步跟作者說明、停下來（它什麼都沒裝）。
+  - 「能燒字幕的 ffmpeg」說要從原始碼編譯、先停下來：照那一項的「修法」講給作者聽，不要自己換方法裝。
   - 「全部裝好了」：等第 5 步做完就做第 6 步。
   - 有「✗」的項目：把那一項的「修法」用白話講給作者聽，處理完再跑一次這一步（裝好的會略過，很快）。
   - 「edge-tts 連線」失敗通常是沒網路：請他確認 Wi-Fi 有連上。

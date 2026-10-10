@@ -19,6 +19,7 @@ import pytest
 from article_to_video.environment import EnvCheck
 from article_to_video.homebrew import BrewLayout, find_brew, machine_arch
 from article_to_video.installer import Installer
+from article_to_video.mac_platform import MacPlatform
 
 from test_ffmpeg import FILTERS_WITH_SUBTITLES, FILTERS_WITHOUT_SUBTITLES
 
@@ -29,36 +30,63 @@ def completed(args, stdout="", returncode=0):
     return subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr="")
 
 
-FAKE_BREW = '''#!{python}
-# 假 brew：--version 印版本；install ffmpeg-full 在 keg 裡放一支假 ffmpeg（被問 -filters 就印濾鏡表）
+FAKE_BREW = '''
+# 假 brew：--version 印版本；install ffmpeg-full 在 keg 裡放一支假 ffmpeg（被問 -filters 就印濾鏡表）；
+# deps／info --json=v2 照 CATALOG 回答 ffmpeg-full 的依賴樹和每個套件的現成安裝包（CATALOG 是 None＝連不上網）
+import json
 import sys
 from pathlib import Path
 
 prefix = Path(__file__).resolve().parent.parent
-if sys.argv[1:] == ["--version"]:
-    print({version!r})
-elif sys.argv[1:] == ["install", "ffmpeg-full"]:
+args = sys.argv[1:]
+if args == ["--version"]:
+    print(VERSION)
+elif args == ["install", "ffmpeg-full"]:
     print("==> Downloading ffmpeg-full")
     ff = prefix / "opt" / "ffmpeg-full" / "bin" / "ffmpeg"
     ff.parent.mkdir(parents=True, exist_ok=True)
-    ff.write_text({ffmpeg_src!r}, encoding="utf-8")
+    ff.write_text(FFMPEG_SRC, encoding="utf-8")
     ff.chmod(0o755)
     print("==> Pouring ffmpeg-full")
+elif args[:1] in (["deps"], ["info"]) and CATALOG is None:
+    sys.exit("Error: Failed to download https://formulae.brew.sh/api/internal/packages.arm64_tahoe.jws.json")
+elif args == ["deps", "--formula", "ffmpeg-full"]:
+    for name in CATALOG:
+        if name != "ffmpeg-full":
+            print(name)
+elif args[:3] == ["info", "--json=v2", "--formula"]:
+    def one(name):
+        f = CATALOG[name]
+        files = dict((tag, {"cellar": ":any"}) for tag in f["files"])
+        return {"name": name, "installed": [{"version": "1.0"}] if f["installed"] else [], "outdated": False,
+                "bottle": {"stable": {"files": files}} if files else {}}
+    print(json.dumps({"formulae": [one(n) for n in args[3:]], "casks": []}))
 else:
-    sys.exit("假 brew 不會做這件事：" + " ".join(sys.argv[1:]))
+    sys.exit("假 brew 不會做這件事：" + " ".join(args))
 '''
 
 
-def fake_brew_source(version: str = "Homebrew 4.9.9", filters: str = FILTERS_WITH_SUBTITLES) -> str:
+def catalog(tag: str = "arm64_tahoe", *, unbottled: tuple[str, ...] = (), installed: tuple[str, ...] = ()) -> dict:
+    """假 Homebrew 眼中的 ffmpeg-full 依賴樹：每個套件有哪些現成安裝包（bottle tag）、這台裝了沒。
+    預設像 Apple Silicon＋macOS 26 那樣全部都有（Homebrew 7 的 brew info 只列這台 Mac 用得到的那一個）。"""
+    names = ["ffmpeg-full", "libass", "x264", "ca-certificates"]
+    return {n: {"files": [] if n in unbottled else ["all" if n == "ca-certificates" else tag],
+                "installed": n in installed} for n in names}
+
+
+def fake_brew_source(version: str = "Homebrew 4.9.9", filters: str = FILTERS_WITH_SUBTITLES,
+                     catalog: dict | None = catalog()) -> str:
     ffmpeg_src = f"#!{sys.executable}\nimport sys\nsys.stdout.write({filters!r})\n"
-    return FAKE_BREW.format(python=sys.executable, version=version, ffmpeg_src=ffmpeg_src)
+    head = f"#!{sys.executable}\nVERSION = {version!r}\nFFMPEG_SRC = {ffmpeg_src!r}\nCATALOG = {catalog!r}\n"
+    return head + FAKE_BREW
 
 
-def fake_brew(prefix: Path, version: str = "Homebrew 4.9.9", filters: str = FILTERS_WITH_SUBTITLES) -> Path:
+def fake_brew(prefix: Path, version: str = "Homebrew 4.9.9", filters: str = FILTERS_WITH_SUBTITLES,
+              catalog: dict | None = catalog()) -> Path:
     """在 <prefix>/bin/brew 放一支假 brew。"""
     brew = prefix / "bin" / "brew"
     brew.parent.mkdir(parents=True, exist_ok=True)
-    brew.write_text(fake_brew_source(version, filters), encoding="utf-8")
+    brew.write_text(fake_brew_source(version, filters, catalog), encoding="utf-8")
     brew.chmod(0o755)
     return brew
 
@@ -155,23 +183,35 @@ def test_everything_already_installed_is_skipped_on_this_mac(tmp_path, edge_ok, 
 class FakeMac:
     """一台假的「全新 Mac」：Homebrew 位置在 tmp 底下（照架構分 /opt/homebrew 或 /usr/local）、
     PATH 上有假 sudo 和假 curl（curl 抓到的「官方安裝程式」會在那個位置放一支假 brew），
-    「終端機」用背景行程跑安裝腳本。
+    「終端機」用背景行程跑安裝腳本。系統是 macOS 26.2（換別的：installer(platform=…)）。
+    Intel 不在支援範圍（docs/adr/0002）：假 Intel Mac 要裝得下去得加 allow_source_build=True（維護者模式）。
     """
 
     def __init__(self, tmp_path: Path, arch: str, *, sudo_exit: int = 0, sudo_sleep: float = 0,
-                 filters: str = FILTERS_WITH_SUBTITLES):
+                 filters: str = FILTERS_WITH_SUBTITLES, bottles: dict | None | str = "default"):
         self.layout = BrewLayout.for_arch(arch, root=tmp_path / "mac")
         self.data = tmp_path / "資料 位置"  # 真的資料位置可能在 Application Support，路徑有空白
         self.bin = tmp_path / "fakebin"
         self.bin.mkdir(parents=True)
         self.scripts: list[str] = []
         self.procs: list[subprocess.Popen] = []
-        staged = tmp_path / "brew-to-install"
-        staged.write_text(fake_brew_source(filters=filters), encoding="utf-8")
-        install_sh = (f"mkdir -p '{self.layout.prefix}/bin' && cp '{staged}' '{self.layout.brew}' "
+        # bottles：假 Homebrew 眼中的依賴樹（catalog()；None＝查的時候連不上網）
+        if bottles == "default":
+            bottles = catalog("arm64_tahoe" if arch == "arm64" else "tahoe")
+        self.staged = tmp_path / "brew-to-install"
+        self.staged.write_text(fake_brew_source(filters=filters, catalog=bottles), encoding="utf-8")
+        install_sh = (f"mkdir -p '{self.layout.prefix}/bin' && cp '{self.staged}' '{self.layout.brew}' "
                       f"&& chmod 755 '{self.layout.brew}' && echo '==> Installation successful!'")
         self._exe("curl", f"print({install_sh!r})\n")
         self._exe("sudo", f"import sys, time\ntime.sleep({sudo_sleep})\nsys.exit({sudo_exit})\n")
+
+    def brew_already_installed(self, prefix: Path | None = None) -> Path:
+        """這台本來就有 Homebrew（不用開終端機）；prefix 給另一個位置＝以前用 Rosetta 裝在 /usr/local 的那種。"""
+        brew = (prefix or self.layout.prefix) / "bin" / "brew"
+        brew.parent.mkdir(parents=True, exist_ok=True)
+        brew.write_text(self.staged.read_text(encoding="utf-8"), encoding="utf-8")
+        brew.chmod(0o755)
+        return brew
 
     def _exe(self, name: str, body: str) -> None:
         f = self.bin / name
@@ -190,7 +230,8 @@ class FakeMac:
     def installer(self, **kw) -> Installer:
         # homebrew_timeout：哪天輪詢壞了，測試失敗而不是卡 45 分鐘
         # Chromium 不是這些測試的重點：真的開一次要半秒多，換成「開得起來」（真的那條在別的測試）
-        opts = dict(layout=self.layout, open_terminal=self.open_terminal, is_admin=lambda: True,
+        opts = dict(layout=self.layout, platform=MacPlatform(self.layout.arch, "26.2"),
+                    open_terminal=self.open_terminal, is_admin=lambda: True,
                     ffmpeg_candidates=(), poll_interval=0.05, homebrew_timeout=15, log=lambda m: None,
                     chromium_check=lambda: EnvCheck("chromium", "Chromium", True, "153.0（假）"))
         opts.update(kw)
@@ -199,9 +240,10 @@ class FakeMac:
 
 @pytest.mark.parametrize("arch", ["arm64", "x86_64"])
 def test_fresh_mac_gets_homebrew_through_terminal_then_ffmpeg_full(tmp_path, arch, edge_ok):
+    """Apple Silicon 是作者的路徑；Intel 只剩維護者模式（--allow-source-build），順便守住 /usr/local 的位置。"""
     mac = FakeMac(tmp_path, arch)
     lines: list[str] = []
-    report = mac.installer(log=lines.append).run()
+    report = mac.installer(log=lines.append, allow_source_build=arch == "x86_64").run()
     steps = {s.key: s for s in report.steps}
 
     assert steps["homebrew"].status == "installed", steps["homebrew"]
@@ -244,7 +286,7 @@ def test_closing_the_terminal_window_is_noticed(tmp_path, edge_ok):
     threading.Thread(target=close_window_soon, daemon=True).start()
     t0 = time.monotonic()
     report = inst.run()
-    homebrew = report.steps[0]
+    homebrew = {s.key: s for s in report.steps}["homebrew"]
     assert homebrew.status == "failed" and "視窗" in homebrew.message
     assert time.monotonic() - t0 < 20
 
@@ -252,20 +294,20 @@ def test_closing_the_terminal_window_is_noticed(tmp_path, edge_ok):
 def test_non_admin_account_is_told_before_opening_terminal(tmp_path, edge_ok):
     mac = FakeMac(tmp_path, "arm64")
     report = mac.installer(is_admin=lambda: False, open_terminal=forbidden).run()
-    homebrew = report.steps[0]
+    homebrew = {s.key: s for s in report.steps}["homebrew"]
     assert homebrew.status == "failed" and "管理員" in homebrew.message
 
 
 def test_terminal_that_never_starts_gives_up_with_manual_steps(tmp_path, edge_ok):
     mac = FakeMac(tmp_path, "arm64")
     report = mac.installer(open_terminal=lambda script: True, start_timeout=0.3).run()
-    homebrew = report.steps[0]
+    homebrew = {s.key: s for s in report.steps}["homebrew"]
     assert homebrew.status == "failed"
     assert HOMEBREW_INSTALLER in homebrew.fix
 
 
 def test_ffmpeg_without_subtitles_after_install_is_a_failure(tmp_path, edge_ok):
-    mac = FakeMac(tmp_path, "x86_64", filters=FILTERS_WITHOUT_SUBTITLES)
+    mac = FakeMac(tmp_path, "arm64", filters=FILTERS_WITHOUT_SUBTITLES)
     report = mac.installer().run()
     ffmpeg = {s.key: s for s in report.steps}["ffmpeg"]
     assert ffmpeg.status == "failed" and "字幕" in ffmpeg.message

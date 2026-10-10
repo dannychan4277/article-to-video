@@ -156,8 +156,16 @@ _Avoid_: 主題色、theme color
 
 ## 安裝
 
+**支援的 Mac**：
+Apple Silicon 晶片、macOS 15 以上的 Mac（docs/adr/0002）。只有這些 Mac 拿得到 ffmpeg-full 整棵依賴樹的現成安裝包；「安裝」第一步和環境檢查第一項都先看這個，不支援就說明怎麼辦、什麼都不裝。
+_Avoid_: 系統需求、相容平台、platform
+
+**現成安裝包**：
+Homebrew 事先編好、下載就能用的套件（bottle）。沒有的時候 brew 會在作者的電腦上從原始碼編譯好幾個小時，所以裝 ffmpeg-full 之前先問 Homebrew 有沒有。
+_Avoid_: bottle（給作者看的文字裡）、二進位檔
+
 **環境檢查**：
-逐項看這台 Mac 做片要用的東西（Homebrew、能燒字幕的 ffmpeg、Chromium、uv、edge-tts 與它的連線、附帶字型、硬碟、頻道設定）正不正常，有問題附一句作者做得到的修法；只看不改。
+逐項看這台 Mac 做片要用的東西（是不是支援的 Mac、Homebrew、能燒字幕的 ffmpeg、Chromium、uv、edge-tts 與它的連線、附帶字型、硬碟、頻道設定）正不正常，有問題附一句作者做得到的修法；只看不改。
 _Avoid_: 診斷、doctor、健康檢查
 
 **安裝測試片**：

@@ -1,12 +1,15 @@
 """安裝：把做片要用的工具裝好，已經有的略過。`install` 指令跑的就是 Installer(資料位置).run()。
 
 順序（一項沒裝好不影響不靠它的項目）：
+  0. 這台 Mac：只支援 Apple Silicon＋macOS 15 以上（mac_platform.py、docs/adr/0002）。不支援就白話說明、
+     什麼都不裝就停（連 Homebrew 都不裝）。維護者可以用 allow_source_build（`install --allow-source-build`）硬裝。
   1. Homebrew：官方安裝程式要 sudo 密碼和真的終端機（Claude 的 Bash 沒有 TTY），所以寫一個 .command 腳本
      用「終端機」打開：先 `sudo -v` 問一次密碼（作者自己在終端機打，Claude 碰不到），再用 NONINTERACTIVE=1
      跑官方那一行。這邊每幾秒看一次：腳本寫下的結束碼、腳本的 PID 還在不在（視窗被關掉）、等太久。
      不是管理員帳號就先說清楚，不開終端機。
-  2. 能燒字幕的 ffmpeg：find_ffmpeg 找得到有 subtitles 濾鏡的就略過；不然 `brew install ffmpeg-full`
-     （keg-only，不用改 PATH），裝完再驗一次濾鏡。
+  2. 能燒字幕的 ffmpeg：find_ffmpeg 找得到有 subtitles 濾鏡的就略過；不然先問 Homebrew 整棵依賴樹在這台 Mac
+     有沒有現成安裝包（homebrew.check_bottles；沒有就停，不讓 brew 默默從原始碼編好幾個小時；查不了就照靜態規則），
+     再 `brew install ffmpeg-full`（keg-only，不用改 PATH），裝完再驗一次濾鏡。
   3. Chromium：真的開一次無頭 Chromium；開不起來就用專案環境的 Python 跑 `playwright install chromium`
      （版本跟 pyproject 釘的 playwright 對得上），裝完再開一次。
   4. uv：我們就是用 uv 跑起來的，只回報位置與版本（第一次安裝 uv 是 skill 用官方安裝程式做的）。
@@ -33,9 +36,11 @@ from article_to_video.environment import (
     EnvCheck, SAY_INSTALL, check_chromium, check_edge_tts_online, check_uv,
 )
 from article_to_video.ffmpeg import FFmpegNotFoundError, default_ffmpeg_candidates, find_ffmpeg
+from article_to_video import mac_platform
+from article_to_video.mac_platform import MIN_MACOS, MacPlatform, assess
 from article_to_video.macos import open_path
 from article_to_video.homebrew import (
-    FFMPEG_FORMULA, INSTALL_SCRIPT_URL, BrewInfo, BrewLayout, default_layout, find_brew, keg_ffmpeg,
+    FFMPEG_FORMULA, INSTALL_SCRIPT_URL, BrewInfo, BrewLayout, check_bottles, default_layout, find_brew, keg_ffmpeg,
 )
 from article_to_video.user_settings import resolve_data_dir
 
@@ -117,6 +122,8 @@ class InstallReport:
         bad = [s for s in self.steps if not s.ok]
         if not bad:
             return "全部裝好了。"
+        if bad[0].key == "platform":
+            return "沒有安裝任何東西（Homebrew 也沒裝）：這台 Mac 不在支援範圍，請照上面的說明處理。"
         return f"有 {len(bad)} 項沒裝好：{'、'.join(s.name for s in bad)}。照上面的「修法」處理完，再說一次「安裝」。"
 
 
@@ -129,6 +136,8 @@ class Installer:
         data_dir: str | os.PathLike | None = None,
         *,
         layout: BrewLayout | None = None,
+        platform: MacPlatform | None = None,
+        allow_source_build: bool = False,
         act: Act | None = None,
         open_terminal: Callable[[Path], bool] | None = None,
         is_admin: Callable[[], bool] | None = None,
@@ -140,7 +149,10 @@ class Installer:
         log: Log = print,
     ) -> None:
         self.data_dir = resolve_data_dir(data_dir)
-        self.layout = layout or default_layout()
+        self.platform = platform or mac_platform.detect_platform()  # 叫的當下才查（測試換掉整個模組的函式）
+        self.allow_source_build = allow_source_build
+        """維護者用：不支援的 Mac 也照裝、ffmpeg-full 沒有現成安裝包也讓 brew 從原始碼編（docs/maintaining.md）。"""
+        self.layout = layout or default_layout(self.platform.arch)
         # 不給就用模組層的函式（叫的當下才查，測試可以整個模組換掉）
         self.act: Act = act or (lambda *a, **k: run_streaming(*a, **k))
         self.open_terminal = open_terminal or (lambda script: open_in_terminal(script))
@@ -166,8 +178,17 @@ class Installer:
     def run(self) -> InstallReport:
         self.work.mkdir(parents=True, exist_ok=True)
         self.log_file.write_text(time.strftime("安裝紀錄 %Y-%m-%d %H:%M:%S\n"), encoding="utf-8")
-        self.log(f"開始安裝檢查（這台是 {self.layout.label}，Homebrew 該在 {self.layout.prefix}）")
+        self.log("開始安裝檢查")
         steps: list[StepResult] = []
+        # 0. 這台 Mac：不支援就什麼都不動（Homebrew 都還沒裝）
+        gate = self._platform()
+        steps.append(gate)
+        self.log(gate.text())
+        if not gate.ok:
+            report = InstallReport(steps)
+            self.log(report.summary())
+            return report
+        self.log(f"（這台是 {self.layout.label}，Homebrew 該在 {self.layout.prefix}）")
         names = ["Homebrew", "能燒字幕的 ffmpeg", "Chromium", "uv", "edge-tts 連線"]
 
         def step(i: int, run: Callable[[], StepResult]) -> StepResult:
@@ -191,6 +212,18 @@ class Installer:
         report = InstallReport(steps)
         self.log(report.summary())
         return report
+
+    # ------------------------------------------------------------ 0. 這台 Mac
+
+    def _platform(self) -> StepResult:
+        verdict = assess(self.platform)
+        if verdict.ok:
+            return StepResult("platform", "這台 Mac", "present", verdict.summary)
+        if self.allow_source_build:
+            return StepResult("platform", "這台 Mac", "present",
+                              f"{self.platform.label}，不在支援範圍；維護者模式（--allow-source-build）照樣裝，"
+                              "ffmpeg-full 可能要從原始碼編好幾個小時")
+        return StepResult("platform", "這台 Mac", "failed", verdict.summary, fix=verdict.fix)
 
     # ------------------------------------------------------------ 1. Homebrew
 
@@ -282,6 +315,9 @@ class Installer:
         if brew is None:
             return StepResult("ffmpeg", name, "failed", "要先裝好 Homebrew 才能裝",
                               fix="先處理上面 Homebrew 那一項，再說一次「安裝」")
+        stop = self._bottles(brew)
+        if stop is not None:
+            return stop
         self.log(f"  正在裝 {FFMPEG_FORMULA}（brew install {FFMPEG_FORMULA}）。要下載不少東西，大約 5～20 分鐘…")
         env = {**os.environ, "HOMEBREW_NO_ENV_HINTS": "1", "NONINTERACTIVE": "1"}
         code = self.act([str(brew.path), "install", FFMPEG_FORMULA], env=env, log=self.log)
@@ -294,6 +330,33 @@ class Installer:
                 fix="再說一次「安裝」試一次；還是不行就說「回報問題」傳給 Danny",
             )
         return StepResult("ffmpeg", name, "installed", f"裝好了（{found}）")
+
+    def _bottles(self, brew: BrewInfo) -> StepResult | None:
+        """brew install 之前問 Homebrew：要下載的套件這台 Mac 都有現成安裝包嗎？沒有＝brew 會默默從原始碼編好幾個小時，
+        先停下來（回傳失敗的那一步）。靜態規則（mac_platform）擋得住今天的情況；這裡接住以後 Homebrew 支援範圍往前移。"""
+        brew_arch = self.layout.arch_of(brew)
+        check = check_bottles(brew, arch=brew_arch, macos_major=self.platform.major)
+        if not check.known:
+            self.log(f"  沒辦法先確認 {FFMPEG_FORMULA} 有沒有這台 Mac 能用的現成安裝包（{check.error}），"
+                     f"照「Apple Silicon、macOS {MIN_MACOS} 以上」的規則繼續裝")
+            return None
+        if not check.from_source:
+            self.log(f"  {FFMPEG_FORMULA} 和它要用的套件都有這台 Mac 能用的現成安裝包（看了 {check.looked_at} 個）")
+            return None
+        some = "、".join(check.from_source[:5]) + ("…" if len(check.from_source) > 5 else "")
+        what = (f"Homebrew 沒有這台 Mac（{self.platform.label}）能用的 {FFMPEG_FORMULA} 現成安裝包："
+                f"要裝的套件裡有 {len(check.from_source)} 個得從原始碼編譯（{some}）")
+        if self.allow_source_build:
+            self.log(f"  {what}。維護者模式（--allow-source-build）：照樣讓 brew 從原始碼編，可能要好幾個小時")
+            return None
+        if brew_arch != self.platform.arch:
+            fix = (f"這台 Mac 的 Homebrew 是以前用 Rosetta 裝的 Intel 版（在 {brew.prefix}，多半是從舊 Mac 搬過來的），"
+                   "拿不到 Apple Silicon 的現成安裝包。這要 Danny 幫忙處理：請說「回報問題」傳給 Danny。")
+        else:
+            fix = ("從原始碼編譯要好幾個小時、常常失敗，所以先停下來沒有裝。多半是 Homebrew 已經不支援這個 macOS 版本："
+                   "點螢幕左上角的蘋果選單 →「系統設定」→「一般」→「軟體更新」，把 macOS 更新到最新，再跟 Claude 說「安裝」。"
+                   "已經是最新的還是這樣，請說「回報問題」傳給 Danny。")
+        return StepResult("ffmpeg", "能燒字幕的 ffmpeg", "failed", what + "，所以先停下來、沒有開始裝", fix=fix)
 
     # ------------------------------------------------------------ 3. Chromium
 

@@ -19,7 +19,7 @@ from article_to_video.homebrew import BrewLayout
 
 from test_install import fake_brew
 
-ALL_ITEMS = ["macOS", "CPU", "Python", "外掛版本", "Homebrew", "ffmpeg", "Playwright", "Chromium", "edge-tts（配音）",
+ALL_ITEMS = ["這台 Mac", "macOS", "CPU", "Python", "外掛版本", "Homebrew", "ffmpeg", "Playwright", "Chromium", "edge-tts（配音）",
              "edge-tts 連線", "uv", "字型", "硬碟", "頻道設定"]
 
 
@@ -68,6 +68,9 @@ def test_check_env_lists_every_item_with_status_and_fix(offline_run):
     def line_of(name: str) -> str:
         return next(ln for ln in lines if ln[:1] in "✓✗・" and ln[2:].startswith(name))
 
+    # 第一項是這台 Mac 支不支援（Apple Silicon＋macOS 15 以上，docs/adr/0002）
+    first = next(ln for ln in lines if ln[:1] in "✓✗・")
+    assert first.startswith("✓ 這台 Mac") and "Apple Silicon" in first and "macOS" in first, first
     # 這台 Mac 都裝好了
     for name in ["Homebrew", "ffmpeg", "Playwright", "Chromium", "edge-tts（配音）", "uv", "字型"]:
         assert line_of(name).startswith("✓"), line_of(name)

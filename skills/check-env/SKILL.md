@@ -1,6 +1,6 @@
 ---
 name: check-env
-description: 檢查環境：逐項檢查這台 Mac 做影片要用的東西（Homebrew、能燒字幕的 ffmpeg、Chromium、uv、edge-tts 配音和它的網路連線、外掛附帶的字型、硬碟空間、頻道設定）是不是都正常，有問題就用白話說怎麼修。作者說「檢查環境」「環境有沒有問題」「是不是哪裡壞了」「為什麼做不了片」時使用。
+description: 檢查環境：逐項檢查這台 Mac 做影片要用的東西（這台 Mac 是不是 Apple Silicon、macOS 15 以上，Homebrew、能燒字幕的 ffmpeg、Chromium、uv、edge-tts 配音和它的網路連線、外掛附帶的字型、硬碟空間、頻道設定）是不是都正常，有問題就用白話說怎麼修。作者說「檢查環境」「環境有沒有問題」「是不是哪裡壞了」「為什麼做不了片」時使用。
 allowed-tools:
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video check-env *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video check-env *)
@@ -27,6 +27,10 @@ allowed-tools:
    最後一行是總結。
 
 3. 依 ✗ 的種類處理：
+   - **這台 Mac（晶片、macOS 版本）**（一定是第一項）：這個外掛只支援 Apple Silicon、macOS 15 以上的 Mac。
+     這一項 ✗ 的話先只講這一項，照它的「修法」用白話說：macOS 太舊就請他到「系統設定」→「一般」→「軟體更新」
+     更新到 15 以上；Intel Mac 就請他聯絡 Danny。**不要**叫他說「安裝」補裝其他項目（裝不起來，只會白等），
+     也不要想別的方法硬裝。
    - **工具沒裝好**（Homebrew、ffmpeg、Chromium、uv、Playwright、edge-tts）：問他要不要現在補裝。
      要的話就照「安裝與設定」（setup）那個 skill 的第 2 步做，已經裝好的會自動略過。
    - **edge-tts 連線**：多半是沒網路。請他確認 Wi-Fi、Safari 打得開網頁，再檢查一次。

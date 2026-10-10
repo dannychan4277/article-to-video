@@ -85,6 +85,28 @@ uv run --project <外掛> python -m article_to_video build <專案> --tts google
 - **舊片重建會套用留白與修剪**：旁白變短、分鏡時間重算，審片頁會把時間變了的分鏡標成改過，給作者看就是新的一版。
 - 實測（示範片 500 字，edge 曉臻）：+5%＋舊留白 134.1 秒 → +15%＋修剪 114.3 秒（短 14.8%）；每分鐘 224 字 → 262 字。
 
+## 支援的 Mac 與 `install --allow-source-build`
+
+只支援 Apple Silicon、macOS 15 以上（`docs/adr/0002-只支援-Apple-Silicon-macOS-15.md`）：其他 Mac 拿不到 `ffmpeg-full`
+整棵依賴樹的現成安裝包（bottle），`brew install` 會默默改成從原始碼編好幾個小時。
+
+- `install` 第一步看這台 Mac（`mac_platform.py`），不支援就什麼都不裝、結束碼 1；`check-env` 第一項也是它。
+- 靜態規則放行後，`brew install ffmpeg-full` 之前再問一次 Homebrew（`homebrew.check_bottles`：`brew deps --formula ffmpeg-full`
+  ＋`brew info --json=v2 --formula …`，看每個要下載的套件有沒有這台 Mac 能用的 bottle）。有要從原始碼編的就停；
+  查不了（離線）就照靜態規則繼續，`install.log` 裡會有一行「沒辦法先確認…」。
+- **維護者的逃生門**：自己的 Intel Mac、舊 macOS，或就是想讓 brew 從原始碼編：
+
+  ```
+  uv run --project <外掛> python -m article_to_video install --allow-source-build --data-dir <資料位置>
+  ```
+
+  不支援的 Mac 照裝；沒有 bottle 也讓 `brew install ffmpeg-full` 從原始碼編（好幾個小時，可能失敗）。
+  這個選項不列在 `--help`、skill 不提，**不要告訴作者**。（setup skill 的 allowed-tools `install *` 技術上會放行它，靠的是不提。）
+- 自己查某台 Mac 的 bottle：`brew info --json=v2 ffmpeg-full` 看 `bottle.stable.files`。Homebrew 7 的 `brew info` 只列這台會用的
+  那一個（舊版 macOS 的 bottle 新版可以用）；是空的就表示會從原始碼編。
+- Homebrew 的支援範圍往前移（作者回報「Homebrew 已經不支援這個 macOS 版本」）：把 `mac_platform.MIN_MACOS`、
+  `skills/setup/SKILL.md` 第 0 步、`skills/check-env/SKILL.md` 的版本一起往上調，ADR 0002 補一段。
+
 ## 私人 repo
 
 repo 還沒公開時，作者那台要有讀 repo 的權限和 git 憑證（`gh auth login` 再 `gh auth setup-git`，或 SSH）。公開之後不用。
