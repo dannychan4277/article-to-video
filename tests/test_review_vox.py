@@ -62,7 +62,8 @@ class Chain:
 
 
 def preview(root: Path) -> ReviewResult:
-    return make_review(plan_build(root, tts="fake", fmt=SMALL))
+    """預覽並打開給作者看（算一版：「這版改過」比的是作者上次看到的那一版）。"""
+    return make_review(plan_build(root, tts="fake", fmt=SMALL), shown=True)
 
 
 def chain_project(base: Path) -> Path:
