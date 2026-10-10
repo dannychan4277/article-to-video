@@ -23,6 +23,9 @@ from article_to_video.review import ReviewResult, make_review
 
 from test_vox import NUMBER_RECT, SMALL, new_project
 
+pytestmark = pytest.mark.usefixtures("internal_vox")
+"""Vox 分鏡只在內部開關打開時讀得到（docs/adr/0001-只用財經圖表風格.md）；這個模組測的就是 Vox 本身。"""
+
 CHAIN = [  # 一串四個 Vox 分鏡：原圖 → 框原圖 → 換剪報再框 → 索引卡
     {"id": "SH01", "start": {"segment": "s01"}, "vox": {"cues": [{"at": 0, "kind": "image", "image": "圖1"}]}},
     {"id": "SH02", "start": {"segment": "s02"}, "continues": True,

@@ -33,6 +33,9 @@ from article_to_video.numbers import check_numbers, reconcile
 from article_to_video.project import ProjectError
 from article_to_video.timeline import FORMAT_9x16, VideoFormat
 
+pytestmark = pytest.mark.usefixtures("internal_vox")
+"""Vox 分鏡只在內部開關打開時讀得到（docs/adr/0001-只用財經圖表風格.md）；這個模組測的就是 Vox 本身。"""
+
 FPS = 30
 GAP = 0.4
 LEAD = 0.15

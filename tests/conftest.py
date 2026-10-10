@@ -175,3 +175,15 @@ def previewed_project(tmp_path_factory) -> PreviewedProject:
     seconds = time.monotonic() - t0
     assert proc.returncode == 0, f"預覽失敗：\n{proc.stdout}\n{proc.stderr}"
     return PreviewedProject(dir=root, stdout=proc.stdout, seconds=seconds)
+
+
+@pytest.fixture(scope="module")
+def internal_vox():
+    """打開 Vox 分鏡的內部開關（project.INTERNAL_VOX_ENV）。作者的流程只用財經圖表（docs/adr/0001-只用財經圖表風格.md），
+    Vox 的程式留在外掛裡、流程碰不到；只有測它的模組用 `pytestmark = pytest.mark.usefixtures("internal_vox")` 打開。
+    模組範圍（module 範圍的建置 fixture 之前就開好）；環境變數，所以這些測試叫的 CLI 子行程也吃得到。"""
+    from article_to_video.project import INTERNAL_VOX_ENV
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv(INTERNAL_VOX_ENV, "1")
+        yield

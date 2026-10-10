@@ -30,12 +30,16 @@
                          independent-review/（給獨立審片 agent 的素材，見 independent_review.py）
 
 設定檔都是 UTF-8 JSON，由 Claude 寫、這裡驗證。驗證錯誤一次列出全部問題，每條都指出哪個分鏡、哪個欄位。
+
+分鏡一律是財經圖表（chart）：作者的流程只用這一種風格（docs/adr/0001-只用財經圖表風格.md）。Vox 分鏡（vox）的程式還在，
+只有內部開關 INTERNAL_VOX_ENV 打開時才讀（給 Vox 模組自己的測試用）；沒開時分鏡設定裡有 vox 就擋下（VOX_REFUSED）。
 """
 
 from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -45,6 +49,7 @@ from typing import Any
 __all__ = [
     "CHART_CUE_KINDS",
     "CHART_DATA_KEYS",
+    "INTERNAL_VOX_ENV",
     "SETTINGS_KEYS",
     "ZH_TW_VOICES",
     "Anchor",
@@ -79,6 +84,9 @@ CHART_CUE_KINDS = frozenset({"title", "bar", "line", "candle", "highlight", "num
 VOX_CUE_KINDS = frozenset({"image", "excerpt", "box", "title", "point"})
 """Vox 分鏡的 cue：image＝文章原圖（圖N）、excerpt＝原文剪報、box＝框（螢光筆＋紅圈，框住旁白正在唸的數字）、
 title＝黑底白字標題條、point＝橫線索引卡。"""
+INTERNAL_VOX_ENV = "ARTICLE_TO_VIDEO_INTERNAL_VOX"
+"""內部開關：這個環境變數是 "1" 才讀得到 Vox 分鏡（只給 Vox 模組自己的測試用）。作者的流程只用財經圖表
+（docs/adr/0001-只用財經圖表風格.md），沒開時分鏡設定裡有 vox 一律擋下。"""
 SETTINGS_KEYS = frozenset({"voice", "rate", "tts", "gap", "lead", "tail",
                            "channel", "logo", "brand_color", "music", "aspect"})
 
@@ -503,6 +511,19 @@ def _load_anchor(raw: Any, where: str, segments: Mapping[str, str], problems: _P
     return Anchor(segment=seg, word=word, edge=edge, offset=float(offset), span=(first, first + len(word) - 1))
 
 
+VOX_REFUSED = (
+    "{label} 是 Vox 剪報分鏡（vox）：這個外掛現在只用財經圖表風格，不用剪報畫面了。"
+    "講到文章裡的圖，就把那張圖的數字重畫成財經圖表（chart）：讀圖讀到的數字記在 article/figure_numbers.json，"
+    "來源行寫「來源：作者原文（圖N）」"
+)
+"""分鏡設定裡有 vox、內部開關又沒開時的錯誤（給 Claude 看；Claude 轉成白話跟作者說）。"""
+
+
+def vox_enabled() -> bool:
+    """內部開關（INTERNAL_VOX_ENV）打開了沒：只有 Vox 模組自己的測試會開。"""
+    return os.environ.get(INTERNAL_VOX_ENV) == "1"
+
+
 def _load_shots(raw: Any, segments: Mapping[str, str], problems: _Problems) -> list[Shot]:
     if not isinstance(raw, dict) or not isinstance(raw.get("shots"), list):
         problems.add('shots.json 要長這樣：{"shots": [ {"id": "SH01", "chart": {…}}, … ]}')
@@ -543,7 +564,14 @@ def _load_shots(raw: Any, segments: Mapping[str, str], problems: _Problems) -> l
             continues = False
 
         has_chart, has_vox = item.get("chart") is not None, item.get("vox") is not None
-        if has_chart == has_vox:
+        if has_vox and not vox_enabled():
+            problems.add(VOX_REFUSED.format(label=label))
+            has_vox = False
+            if not has_chart:
+                continue
+        elif not has_chart and not vox_enabled():
+            problems.add(f"{label} 少了 chart（財經圖表：data 和 cues）")
+        elif has_chart == has_vox:
             problems.add(f"{label} 要有 chart（財經圖表）或 vox（Vox 剪報）其中一個，而且只能一個")
         chart = (
             _load_chart(item["chart"], label, segments, problems, continues=continues) if has_chart else None

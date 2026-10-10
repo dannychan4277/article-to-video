@@ -14,9 +14,11 @@
                                                   出片：作者點頭（第 N 版）之後，建置成片、自動檢查，把成片和字幕檔放進
                                                   「影片／解說影片／日期-標題」（見 publish.py、videos.py）
   boxes <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--data-dir D]
-                                                  列出 Vox 框、渲每個框的靜態圖（照這個比例）、印核對代號
+                                                  （內部用）列出 Vox 框、渲每個框的靜態圖（照這個比例）、印核對代號
   confirm-box <專案資料夾> <核對代號>… [--note 文字] [--data-dir D]
-                                                  記下 Claude 看過靜態圖、確認過的框（見 boxes.py）
+                                                  （內部用）記下 Claude 看過靜態圖、確認過的框（見 boxes.py）
+                                                  作者的流程只用財經圖表（docs/adr/0001-只用財經圖表風格.md）：Vox 分鏡只有
+                                                  內部開關 ARTICLE_TO_VIDEO_INTERNAL_VOX=1 才讀得到，這兩個指令平常用不到
   checks <專案資料夾> [--aspect …] [--tts …] [--jobs N] [--data-dir D] [--json]
                                                   自動檢查（build 之後、給作者看之前）：每個片段跑 qa、白底片段查字幕帶，彙整到分鏡，
                                                   寫 build/<比例>/checks.json、更新審片頁（見 auto_checks.py）
@@ -157,7 +159,7 @@ def _parser() -> argparse.ArgumentParser:
         "tts", "no_open", "data_dir", "aspect")
     add("narrate", "配音（寫分鏡之前）：每段旁白配好音，印出每段的起點、長度與每個詞開始唸的秒數", "tts", "data_dir",
         project="專案資料夾（裡面有 narration.json；還不用有 shots.json）")
-    add("boxes", "列出 Vox 框、渲每個框的靜態圖、看哪些還沒核對", "tts", "jobs", "data_dir", "aspect")
+    add("boxes", "（內部用，作者的流程只用財經圖表）列出 Vox 框、渲每個框的靜態圖、看哪些還沒核對", "tts", "jobs", "data_dir", "aspect")
     add("checks", "自動檢查（build 之後、給作者看之前跑）：每個片段跑 qa、白底片段查字幕帶，結果寫進審片頁",
         "tts", "jobs", "data_dir", "aspect", "json")
     add("review-prep", "獨立審片：從成片準備審片素材（總覽圖、畫面事件圖、字幕檔），印出派 agent 的 prompt",
@@ -176,7 +178,8 @@ def _parser() -> argparse.ArgumentParser:
     how.add_argument("--fixed", metavar="說明", help="改好了：寫怎麼改的（只用在獨立審片的問題）")
     how.add_argument("--accept", metavar="理由", help="接受不改：寫為什麼（作者決定的加 --by 作者）")
     rs.add_argument("--by", default="Claude", help="誰決定的：Claude（預設）或 作者")
-    cb = add("confirm-box", "記下 Claude 看過靜態圖、確認沒問題的框（核對代號從 boxes 指令來）", "data_dir")
+    cb = add("confirm-box", "（內部用，作者的流程只用財經圖表）記下 Claude 看過靜態圖、確認沒問題的框（核對代號從 boxes 指令來）",
+             "data_dir")
     cb.add_argument("tokens", nargs="*", help="核對代號，例 SH02:1@1a2b3c4d（可以一次給好幾個）")
     cb.add_argument("--note", default="", help="備註（例：框在「十年期」那一列的 3.96 上）")
     nw = add("new", "開新專案：在「影片／解說影片」建「日期-標題/專案」資料夾，擷取文章（含截字檢查）", project=None)
