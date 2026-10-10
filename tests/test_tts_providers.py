@@ -25,6 +25,8 @@ import pytest
 
 from article_to_video.narration import WordTiming, get_tts_engine, narrate
 
+from conftest import MINI_PROJECT
+
 FAKE_KEY = "fake-elevenlabs-key-7f3a9c2e"
 FAKE_GOOGLE_KEY = "fake-google-key-41b8d0aa"
 T0, STEP, TAIL = 0.05, 0.1, 0.3
@@ -237,3 +239,189 @@ def test_api_key_comes_from_env_then_data_dir_then_user_config(tmp_path, tts_ser
     # 全部段落都有快取：不需要 key（例：維護者重現回報的問題）
     narrate({"s01": "三。"}, engine=get_tts_engine(provider, data_dir=data), voice=voice, rate="+5%",
             cache_dir=tmp_path / "cache")
+
+
+# ---------------------------------------------------------------- 設定、指令列、花了多少字
+
+
+def _project(tmp_path: Path, settings: dict | None = None) -> Path:
+    root = tmp_path / "專案"
+    root.mkdir()
+    (root / "narration.json").write_text((MINI_PROJECT / "narration.json").read_text(encoding="utf-8"),
+                                         encoding="utf-8")
+    if settings is not None:
+        (root / "settings.json").write_text(json.dumps(settings, ensure_ascii=False), encoding="utf-8")
+    return root
+
+
+def _cli(capsys, *argv: object) -> str:
+    from article_to_video import cli
+
+    capsys.readouterr()
+    code = cli.main([str(a) for a in argv])
+    out = capsys.readouterr()
+    assert code == 0, out.out + out.err
+    return out.out
+
+
+def _sent(out: str) -> int:
+    m = re.search(r"送出 (\d+) 字", out)
+    assert m, out
+    return int(m.group(1))
+
+
+def test_provider_is_picked_in_settings_and_switching_back_costs_nothing(tmp_path, tts_server, monkeypatch, capsys):
+    """settings set 選配音層與它自己的聲音 → 新專案快照帶過去；這支片換到 Google 全部重配一次，換回 ElevenLabs 用舊快取、
+    送出 0 字。每次配音都印這次送出幾個字（付費配音照字數算錢）。"""
+    monkeypatch.setenv("ELEVENLABS_API_KEY", FAKE_KEY)
+    monkeypatch.setenv("GOOGLE_TTS_API_KEY", FAKE_GOOGLE_KEY)
+    data = tmp_path / "plugin-data"
+    _cli(capsys, "settings", "set", "--data-dir", data, "--channel", "小明", "--tts", "elevenlabs",
+         "--elevenlabs-voice", "VoiceId1234567890abc")
+    root = _project(tmp_path)
+    texts = json.loads((MINI_PROJECT / "narration.json").read_text(encoding="utf-8"))["segments"].values()
+    n_chars = sum(len(t) for t in texts)  # 兩段旁白的字數
+
+    out = _cli(capsys, "narrate", root, "--data-dir", data)
+    snap = json.loads((root / "settings.json").read_text(encoding="utf-8"))
+    assert (snap["tts"], snap["elevenlabs_voice"]) == ("elevenlabs", "VoiceId1234567890abc")
+    assert snap["google_voice"] == "cmn-TW-Wavenet-A"  # 每家有自己的聲音
+    assert [r["path"].split("/")[3] for r in tts_server.synth("elevenlabs")] == ["VoiceId1234567890abc"] * 2
+    assert _sent(out) == n_chars
+    assert _sent(_cli(capsys, "narrate", root, "--data-dir", data)) == 0  # 沒改：全部用快取
+
+    _cli(capsys, "settings", "set", "--project", root, "--tts", "google")
+    out = _cli(capsys, "narrate", root, "--data-dir", data)
+    assert len(tts_server.synth("google")) == 2
+    assert _sent(out) == n_chars + 2 * len("<speak></speak>")
+
+    _cli(capsys, "settings", "set", "--project", root, "--tts", "elevenlabs")
+    assert _sent(_cli(capsys, "narrate", root, "--data-dir", data)) == 0
+    assert len(tts_server.synth("elevenlabs")) == 2  # 換回來沒有重配
+
+    _cli(capsys, "settings", "set", "--project", root, "--elevenlabs-model", "eleven_v3")
+    assert _sent(_cli(capsys, "narrate", root, "--data-dir", data)) == n_chars  # 換模型就重配
+    assert tts_server.synth("elevenlabs")[-1]["body"]["model_id"] == "eleven_v3"
+
+    assert _sent(_cli(capsys, "narrate", root, "--data-dir", data, "--tts", "fake")) == n_chars  # --tts 蓋過設定
+    assert json.loads(_cli(capsys, "settings", "show", "--json", "--data-dir", data))["tts"] == "elevenlabs"
+
+
+def test_a_project_made_before_paid_voices_keeps_its_edge_voice(tmp_path, capsys):
+    """設定快照是付費配音出現之前做的（有頻道名、沒有 tts）：使用者後來改用 ElevenLabs，舊片重建照樣是 edge。"""
+    data = tmp_path / "plugin-data"
+    _cli(capsys, "settings", "set", "--data-dir", data, "--channel", "小明", "--tts", "elevenlabs")
+    old = _project(tmp_path, {"channel": "小明", "logo": None, "brand_color": None, "voice": "zh-TW-HsiaoYuNeural",
+                              "rate": "+5%", "music": "calm", "aspect": "16x9"})
+    _cli(capsys, "narrate", old, "--data-dir", data, "--tts", "fake")
+    snap = json.loads((old / "settings.json").read_text(encoding="utf-8"))
+    assert snap["tts"] == "edge"
+    assert snap["voice"] == "zh-TW-HsiaoYuNeural"
+
+
+# ---------------------------------------------------------------- key 不外流
+
+
+def _files_containing(root: Path, secret: str) -> list[str]:
+    return [str(p) for p in root.rglob("*") if p.is_file() and secret.encode() in p.read_bytes()]
+
+
+def test_the_api_key_never_reaches_logs_project_files_or_the_issue_report(tmp_path, tts_server, capsys, monkeypatch):
+    """key 放在資料位置的 keys/ 裡；服務端回錯誤時連 key 一起印出來（最壞情況）：錯誤訊息、last-run 紀錄、專案裡任何檔案、
+    回報問題的 zip、環境檢查都不能出現 key。之後配音成功，回報的 zip 標明用 ElevenLabs 的時間點（維護者不用 key 就能重現）。"""
+    import shutil
+    import zipfile
+
+    from article_to_video import cli
+
+    data = tmp_path / "plugin-data"
+    (data / "keys").mkdir(parents=True)
+    (data / "keys" / "elevenlabs.key").write_text(FAKE_KEY + "\n", encoding="utf-8")
+    _cli(capsys, "settings", "set", "--data-dir", data, "--channel", "小明", "--tts", "elevenlabs")
+    root = tmp_path / "專案"
+    shutil.copytree(MINI_PROJECT, root)
+    (root / "settings.json").unlink()
+
+    tts_server.status = 401
+    capsys.readouterr()
+    assert cli.main(["build", str(root), "--data-dir", str(data), "--no-open"]) == 1
+    out = capsys.readouterr()
+    assert "ElevenLabs 不收這把 API key" in out.err
+    assert FAKE_KEY in json.dumps(tts_server.requests[-1]["headers"])  # 真的有送 key（服務端也真的印回來了）
+    assert FAKE_KEY not in out.out + out.err
+
+    _cli(capsys, "report-issue", root, "--out-dir", tmp_path / "失敗之後")
+    tts_server.status = None
+    _cli(capsys, "narrate", root, "--data-dir", data)
+    # 作者把 key 貼進問題描述（環境變數裡的 key＝這台設定的 key；另一把長得像 ElevenLabs key 的也要遮）
+    monkeypatch.setenv("ELEVENLABS_API_KEY", FAKE_KEY)
+    other = "sk_" + "a1" * 24
+    _cli(capsys, "report-issue", root, "--out-dir", tmp_path / "成功之後", "--note", f"key 是 {FAKE_KEY}，舊的是 {other}")
+
+    assert _files_containing(root, FAKE_KEY) == []
+    zips = [*(tmp_path / "失敗之後").glob("*.zip"), *(tmp_path / "成功之後").glob("*.zip")]
+    assert len(zips) == 2
+    for zpath in zips:
+        with zipfile.ZipFile(zpath) as z:
+            leaked = [n for n in z.namelist() if FAKE_KEY.encode() in z.read(n) or other.encode() in z.read(n)]
+            assert leaked == []
+    with zipfile.ZipFile(zips[-1]) as z:
+        assert json.loads(z.read("report.json"))["tts"] == "elevenlabs"
+
+
+# ---------------------------------------------------------------- 試聽
+
+
+def test_voice_samples_for_paid_providers_use_their_own_voices(tmp_path, tts_server, monkeypatch, capsys):
+    """試聽：Google 給六個台灣口音的聲音各一個；ElevenLabs 給設定的聲音，或 --voice 指定的幾個（挑聲音用）。"""
+    monkeypatch.setenv("ELEVENLABS_API_KEY", FAKE_KEY)
+    monkeypatch.setenv("GOOGLE_TTS_API_KEY", FAKE_GOOGLE_KEY)
+    data, out = tmp_path / "plugin-data", tmp_path / "試聽"
+    text = "試聽一下。"
+
+    printed = _cli(capsys, "samples", "voice", "--tts", "google", "--out", out, "--text", text, "--data-dir", data)
+    assert sorted(p.name for p in out.glob("*.wav")) == sorted(
+        f"voice-cmn-TW-{kind}-{x}.wav" for kind in ("Standard", "Wavenet") for x in "ABC")
+    assert _sent(printed) == 6 * len(f"<speak>{text}</speak>")
+
+    _cli(capsys, "settings", "set", "--data-dir", data, "--elevenlabs-voice", "SetVoice1234567890ab")
+    _cli(capsys, "samples", "voice", "--tts", "elevenlabs", "--out", out, "--text", text, "--data-dir", data)
+    assert (out / "voice-SetVoice1234567890ab.wav").is_file()
+    _cli(capsys, "samples", "voice", "--tts", "elevenlabs", "--out", out, "--text", text, "--data-dir", data,
+         "--voice", "TryVoiceA1234567890a", "--voice", "TryVoiceB1234567890b")
+    assert (out / "voice-TryVoiceA1234567890a.wav").is_file() and (out / "voice-TryVoiceB1234567890b.wav").is_file()
+    assert [r["path"].split("/")[3] for r in tts_server.synth("elevenlabs")] == [
+        "SetVoice1234567890ab", "TryVoiceA1234567890a", "TryVoiceB1234567890b"]
+
+
+# ---------------------------------------------------------------- 檢查環境
+
+
+def test_check_env_says_whether_the_paid_voice_has_a_key_and_only_tries_it_when_asked(tmp_path, tts_server, capsys):
+    from article_to_video import cli
+    from article_to_video.environment import tts_check
+
+    data = tmp_path / "plugin-data"
+    _cli(capsys, "settings", "set", "--data-dir", data, "--channel", "小明", "--tts", "edge")
+    assert tts_check(data)().ok is None  # edge 免費、不用 key：只是資訊
+
+    said = _cli(capsys, "settings", "set", "--data-dir", data, "--tts", "google")
+    assert "找不到" in said and str(data / "keys" / "google-tts.key") in said  # 換到付費配音當下就提醒 key 還沒放
+    c = tts_check(data)()
+    assert c.ok is False and "API key" in c.value
+    assert str(data / "keys" / "google-tts.key") in c.fix  # 修法講 key 放哪裡
+
+    (data / "keys").mkdir()
+    (data / "keys" / "google-tts.key").write_text(FAKE_GOOGLE_KEY, encoding="utf-8")
+    c = tts_check(data)()
+    assert c.ok is True and str(data / "keys" / "google-tts.key") in c.value  # 講 key 從哪裡來，不講 key 本身
+    assert tts_server.requests == []  # 沒說要試唸就不連線、不花錢
+
+    capsys.readouterr()
+    cli.main(["check-env", "--json", "--data-dir", str(data), "--try-voice"])
+    out = capsys.readouterr().out
+    [tts] = [c for c in json.loads(out)["checks"] if c["key"] == "tts"]
+    assert tts["ok"] is True and "試唸" in tts["value"], tts
+    [req] = tts_server.synth("google")
+    assert req["body"]["voice"]["name"] == "cmn-TW-Wavenet-A"
+    assert FAKE_GOOGLE_KEY not in out

@@ -129,10 +129,13 @@ class RunRecord:
 
                 info["unexpected"] = True
                 text.append("".join(traceback.format_exception(error)))
+        from article_to_video.tts_providers import scrub_secrets
+
         try:
             self.build_dir.mkdir(parents=True, exist_ok=True)
-            (self.build_dir / LAST_RUN_LOG).write_text("\n".join(text) + "\n", encoding="utf-8")
-            (self.build_dir / LAST_RUN_JSON).write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
+            (self.build_dir / LAST_RUN_LOG).write_text(scrub_secrets("\n".join(text) + "\n"), encoding="utf-8")
+            (self.build_dir / LAST_RUN_JSON).write_text(
+                scrub_secrets(json.dumps(info, ensure_ascii=False, indent=1)), encoding="utf-8")
         except OSError:
             pass
 
@@ -203,7 +206,8 @@ def _engine_with_full_cache(paths: ProjectPaths) -> tuple[str | None, list[Path]
     names = [s.tts] + sorted({info["engine"] for _, info in metas} - {s.tts})
     cache = paths.narration_cache
     for name in names:
-        files = [cached_timing_file(cache, name, s.voice, s.rate, text) for text in project.segments.values()]
+        voice, model = s.tts_voice(name), s.tts_model(name)  # 付費配音各有自己的聲音（ElevenLabs 還有模型）
+        files = [cached_timing_file(cache, name, voice, s.rate, text, model) for text in project.segments.values()]
         if all(f.is_file() and f.with_suffix(".wav").is_file() for f in files):
             return name, files
     return None, []
@@ -237,9 +241,13 @@ _USERS_RE = re.compile(r"/Users/(?!Shared(?:/|$))[^/\s\"'\\:]+")
 
 
 def redact(text: str, *, username: bool = True) -> str:
-    """家目錄換成 ~、其他 /Users/<名字> 換成 /Users/<使用者>；username=True 時連單獨出現的使用者名稱也換掉。"""
+    """家目錄換成 ~、其他 /Users/<名字> 換成 /Users/<使用者>；username=True 時連單獨出現的使用者名稱也換掉。
+    付費配音的 API key（這台設定的、長得像 key 的）一律換成「<API key>」。"""
     import getpass
 
+    from article_to_video.tts_providers import scrub_secrets
+
+    text = scrub_secrets(text)
     home = str(Path.home())
     for h in sorted({home.rstrip("/"), os.path.realpath(home)}, key=len, reverse=True):
         if len(h) > 1:  # 只換完整的路徑段：家目錄是 /Users/dan 時，/Users/dante 不能變成 ~te

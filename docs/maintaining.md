@@ -43,6 +43,37 @@
   真的要重灌，維護者自己帶 `--keep-data` 做，或先跑 `settings show --json` 把設定抄下來。
 - 每支片的專案資料夾有自己的設定快照，跟外掛資料夾無關。
 
+## 付費配音（ElevenLabs、Google）：key 放哪裡、怎麼換
+
+預設是免費的 edge 語音。換付費配音只要改設定，不用改程式：
+
+```
+uv run --project <外掛> python -m article_to_video settings set --tts elevenlabs --data-dir <資料位置>   # 或 google、edge
+uv run --project <外掛> python -m article_to_video settings set --project <專案> --tts elevenlabs        # 只改那支片
+uv run --project <外掛> python -m article_to_video build <專案> --tts google --data-dir <資料位置>       # 這一次臨時用
+```
+
+- **API key 絕不放進 repo、專案資料夾或 settings.json**。找 key 的順序（第一個有的）：
+  1. 環境變數 `ELEVENLABS_API_KEY`／`GOOGLE_TTS_API_KEY`
+  2. `<資料位置>/keys/elevenlabs.key`／`google-tts.key`（作者那台的資料位置是 `~/.claude/plugins/data/<id>/`，
+     `settings show` 印得出來）——**給作者那台設定時放這裡**，跟著外掛資料走、更新外掛不會掉
+  3. `~/.config/article-to-video/elevenlabs.key`／`google-tts.key`（自己這台方便；有設 `XDG_CONFIG_HOME` 就在那底下）
+
+  檔案裡只放 key 一行（`chmod 600` 比較保險）。錯誤訊息、`last-run` 紀錄、回報問題的 zip 裡出現 key 一律換成 `<API key>`。
+- 拿 key：ElevenLabs 網站 → Developers → API Keys（權限至少要 Text to Speech；要能列聲音的話加 Voices read）。
+  Google Cloud Console：開 Cloud Text-to-Speech API、綁帳單 → 憑證 → 建立 API 金鑰（建議限制只能用這個 API）。
+- 確認 key 能用：`check-env --try-voice --data-dir <資料位置>`（真的試唸「測試」兩個字）；不加 `--try-voice` 只看 key 在不在、不連線。
+- 聲音：每家有自己的聲音設定，換配音層不用改聲音。
+  - ElevenLabs：`--elevenlabs-voice <voice_id>`，預設 Sarah（`EXAVITQu4vr4xnSDxMaL`，內建聲音，不是台灣口音）。
+    聲音庫裡台灣口音的聲音要先在 ElevenLabs 網站「Add to My Voices」才能用。模型 `--elevenlabs-model`，預設 `eleven_multilingual_v2`。
+    同時只送 2 段（免費方案的上限）。
+  - Google：`--google-voice`，cmn-TW 只有 `Wavenet-A`（女，預設）、`Wavenet-B／C`（男）、`Standard-A／B／C`（較便宜）。
+  - 試聽：`samples voice --tts google|elevenlabs --out <資料夾> [--voice <代號>]…`。
+- 花了多少字：`narrate`、`build`、`samples voice` 每次都印「這次送出 N 字給配音服務」；全用快取就是 0。
+  Google 的 `<mark>` 不計費，`<speak>` 外殼每段多算 15 字。
+- 快取：鍵是「配音層｜模型｜聲音｜語速｜文字」。換配音層整支重配一次；換回原本的直接用舊快取，不再花錢。
+- 舊的片：設定快照是付費配音出現之前做的，會照舊用 edge；要換就 `settings set --project <專案> --tts …`。
+
 ## 私人 repo
 
 repo 還沒公開時，作者那台要有讀 repo 的權限和 git 憑證（`gh auth login` 再 `gh auth setup-git`，或 SSH）。公開之後不用。

@@ -102,6 +102,40 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings set -
 覺得講太快或太慢：語速預設 +5%，可以改成例如 `--rate +10%` 或 `--rate -5%`，用
 `samples voice --rate +10% …`（其他照上面）重產試聽檔再聽一次，滿意了 `settings set` 時一起帶 `--rate`。
 
+### 換成付費配音（ElevenLabs、Google）
+
+上面三個是免費的 edge 語音。作者想換成付費、正式授權的配音時：
+
+1. 要先有 API key，**這件事由 Danny 處理**（key 放哪裡寫在外掛的 docs/maintaining.md）。不要叫作者把 key 貼進對話。
+2. 換配音（之後新做的片都用它，已經做好的片不會跟著變）。Google 寫 `--tts google`，換回免費的寫 `--tts edge`：
+
+   ```
+   uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings set --tts elevenlabs --data-dir ${CLAUDE_PLUGIN_DATA}
+   ```
+
+   印出「注意：…找不到它的 API key」就是 key 還沒放好：跟作者說要等 Danny 設定，先用 `--tts edge` 換回來。
+3. 試聽（要連網，會用掉一點額度）。Google 有六個台灣口音的聲音（Wavenet-A 女聲、B／C 男聲；Standard-A／B／C 較便宜）：
+
+   ```
+   uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video samples voice --tts google --out ${CLAUDE_PLUGIN_DATA}/previews/voices --data-dir ${CLAUDE_PLUGIN_DATA}
+   ```
+
+   一樣一個一個 `afplay`（檔名照指令印出來的，例如 `voice-cmn-TW-Wavenet-A.wav`），挑好了存起來：
+
+   ```
+   uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings set --google-voice cmn-TW-Wavenet-B --data-dir ${CLAUDE_PLUGIN_DATA}
+   ```
+
+   ElevenLabs 試聽的是設定好的聲音；Danny 給了別的聲音代號，就加 `--voice <聲音代號>`（可以給好幾個）一起試，
+   挑好了用 `settings set --elevenlabs-voice <聲音代號>` 存起來：
+
+   ```
+   uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video samples voice --tts elevenlabs --out ${CLAUDE_PLUGIN_DATA}/previews/voices --data-dir ${CLAUDE_PLUGIN_DATA}
+   ```
+
+4. 正在做的那支片也要換：再加一次 `settings set --project "<專案資料夾>" --tts elevenlabs`（只改那支片）。
+   那支片會整支重新配音一次（費用是一支片的字數）；換回原本的配音不用再花錢（舊的配音還留著）。
+
 ## 第 4 步：挑配樂
 
 產生三首的試聽檔（每首 15 秒，幾秒鐘就好）：

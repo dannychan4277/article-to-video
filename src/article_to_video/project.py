@@ -22,7 +22,7 @@
       字幕.srt           字幕檔（檔名故意跟成片不同：同名 .srt 會被播放器自動疊上去，變成兩層字幕）
       成片-9x16.mp4、字幕-9x16.srt、審片頁-9x16.html   直式（9:16）版，跟 16:9 的並存（--aspect 9:16 或預設比例設直式）
       build/             建置產物，可整個刪掉重來
-        narration/       配音層快取（依「配音層｜聲音｜語速｜文字」）與 timing.json
+        narration/       配音層快取（依「配音層｜模型｜聲音｜語速｜文字」）與 timing.json
         vox/             原文剪報圖（excerpt-<內容雜湊>.png，跟比例無關；excerpt.py）
         16x9/、9x16/     各畫面比例的產物：specs/、clips/、logs/、fonts/、stills/、boxes/（Vox 框的靜態圖）、
                          timeline.json、review.json、subs.*、narration.wav、soundtrack.wav、
@@ -41,6 +41,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+
+from article_to_video.tts_providers import DEFAULT_ELEVENLABS_MODEL, DEFAULT_ELEVENLABS_VOICE, DEFAULT_GOOGLE_VOICE
 
 __all__ = [
     "CHART_CUE_KINDS",
@@ -80,7 +82,8 @@ VOX_CUE_KINDS = frozenset({"image", "excerpt", "box", "title", "point"})
 """Vox 分鏡的 cue：image＝文章原圖（圖N）、excerpt＝原文剪報、box＝框（螢光筆＋紅圈，框住旁白正在唸的數字）、
 title＝黑底白字標題條、point＝橫線索引卡。"""
 SETTINGS_KEYS = frozenset({"voice", "rate", "tts", "gap", "lead", "tail",
-                           "channel", "logo", "brand_color", "music", "aspect"})
+                           "channel", "logo", "brand_color", "music", "aspect",
+                           "elevenlabs_voice", "elevenlabs_model", "google_voice"})
 
 _KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 _RATE_RE = re.compile(r"^[+-]\d{1,3}%$")
@@ -238,15 +241,22 @@ class Settings:
     """設定快照。優先序：CLI 參數 > 專案 settings.json > 這裡的預設。"""
 
     voice: str = "zh-TW-HsiaoChenNeural"
+    """edge 的聲音（曉臻／曉雨／雲哲）。付費配音各有自己的聲音（下面），換配音層不用改這個。"""
     rate: str = "+5%"
     tts: str = "edge"
+    """配音層：edge（免費，預設）、elevenlabs、google（付費，要 API key，見 tts_providers.py）、fake（測試）。"""
+    elevenlabs_voice: str = DEFAULT_ELEVENLABS_VOICE
+    """ElevenLabs 的聲音代號（voice_id）。"""
+    elevenlabs_model: str = DEFAULT_ELEVENLABS_MODEL
+    google_voice: str = DEFAULT_GOOGLE_VOICE
+    """Google 的聲音名稱（cmn-TW-Wavenet-A…）。"""
     gap: float = 0.35
     """每段旁白之後的留白秒數（下一段的起點＝上一段起點＋長度＋留白）。"""
     lead: float = 0.15
     """錨點對到詞的「開頭」時，畫面提早這麼多秒出現，看起來才同步。"""
     tail: float = 5.0
     """片尾卡秒數：最後一段旁白唸完之後接片尾卡，停這麼久（算進成片長度）。"""
-    # 以下是從使用者設定複製來的快照（user_settings.SNAPSHOT_KEYS，加上 voice、rate）
+    # 以下是從使用者設定複製來的快照（user_settings.SNAPSHOT_KEYS，加上 voice、rate、tts 與付費配音的聲音）
     channel: str = ""
     """頻道名（片尾卡上的名字）。"""
     logo: str | None = None
@@ -257,6 +267,15 @@ class Settings:
     """配樂（music.TRACKS 的名字）或 "none"。"""
     aspect: str = "16x9"
     """預設比例（直式那張票用）。"""
+
+    def tts_voice(self, engine: str | None = None) -> str:
+        """這個配音層（預設：設定的 tts）用的聲音：每家有自己的聲音欄位，edge 和 fake 用 voice。"""
+        name = engine or self.tts
+        return {"elevenlabs": self.elevenlabs_voice, "google": self.google_voice}.get(name, self.voice)
+
+    def tts_model(self, engine: str | None = None) -> str:
+        """這個配音層的模型（算進配音快取鍵）：只有 ElevenLabs 有，其他是空字串。"""
+        return self.elevenlabs_model if (engine or self.tts) == "elevenlabs" else ""
 
 
 @dataclass(frozen=True)
@@ -442,7 +461,7 @@ def _load_settings(raw: Any, overrides: Mapping[str, Any], problems: _Problems) 
             problems.add(f"settings.json 的 {name} 要是 {lo:g}～{hi:g} 之間的秒數（現在是 {v!r}）")
     from article_to_video.user_settings import SettingsError, normalize_value  # 避免循環匯入
 
-    for name in ("channel", "brand_color", "music", "aspect"):
+    for name in ("channel", "brand_color", "music", "aspect", "elevenlabs_voice", "elevenlabs_model", "google_voice"):
         v = getattr(s, name)
         try:
             if normalize_value(name, v) != v:

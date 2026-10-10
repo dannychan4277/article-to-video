@@ -1,4 +1,4 @@
-"""使用者設定：頻道名、logo、品牌色、聲音、語速、配樂、預設比例。
+"""使用者設定：頻道名、logo、品牌色、聲音、語速、配樂、預設比例、配音層（edge／elevenlabs／google，各有自己的聲音）。
 
 存在外掛資料夾以外，更新外掛不受影響（${CLAUDE_PLUGIN_DATA} 在最後一個 scope 解除安裝時會被刪掉，除非加 --keep-data）：
 
@@ -11,6 +11,7 @@
       logo.png         logo（設定時從使用者給的路徑複製進來；也可能是 .jpg／.webp）
       music/           配樂快取（程式作曲，刪掉會自動重產，一模一樣）
       previews/        安裝時試聽用的聲音、配樂樣本
+      keys/            付費配音的 API key（elevenlabs.key、google-tts.key；不是設定、不進快照，見 tts_providers.py）
 
 每支片的專案資料夾有一份設定快照（<專案>/settings.json 裡的這幾個欄位）：第一次建置時從使用者設定
 複製過去（logo 也複製一份進專案），之後使用者設定再怎麼改，舊專案重建出來都一樣。
@@ -30,6 +31,7 @@ from typing import Any
 
 from article_to_video.music import TRACKS
 from article_to_video.project import SETTINGS_FILE, ZH_TW_VOICES, Settings
+from article_to_video.tts_providers import GOOGLE_TW_VOICES
 
 __all__ = [
     "ASPECTS",
@@ -48,7 +50,8 @@ __all__ = [
 
 DATA_ENV = "ARTICLE_TO_VIDEO_DATA"
 FALLBACK_DATA_DIR = Path("Library") / "Application Support" / "article-to-video"
-SNAPSHOT_KEYS = ("channel", "logo", "brand_color", "voice", "rate", "music", "aspect")
+SNAPSHOT_KEYS = ("channel", "logo", "brand_color", "voice", "rate", "music", "aspect",
+                 "tts", "elevenlabs_voice", "elevenlabs_model", "google_voice")
 USER_ONLY_KEYS = ("independent_review",)
 """只在使用者設定、不進每支片設定快照的鍵（做片流程的開關，不影響成片長什麼樣子）。"""
 _ON_WORDS = {"開", "开", "打開", "要", "on", "true", "yes", "1"}
@@ -57,6 +60,9 @@ ASPECTS = {"16x9": "橫式 16:9", "9x16": "直式 9:16"}
 _ASPECT_ALIASES = {"16x9": "16x9", "16:9": "16x9", "橫式": "16x9", "横式": "16x9",
                    "9x16": "9x16", "9:16": "9x16", "直式": "9x16"}
 _NONE_WORDS = {"", "none", "無", "不要", "沒有", "null"}
+_TTS_ALIASES = {"edge": "edge", "edge-tts": "edge", "微軟": "edge", "免費": "edge",
+                "elevenlabs": "elevenlabs", "11labs": "elevenlabs",
+                "google": "google", "google-tts": "google", "谷歌": "google", "fake": "fake"}
 _HEX_RE = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 _RATE_RE = re.compile(r"^[+-]\d{1,3}%$")
 MAX_CHANNEL_CHARS = 40
@@ -86,6 +92,11 @@ class UserSettings:
     """配樂（music.TRACKS 的名字）或 "none"。"""
     aspect: str = Settings.aspect
     """預設比例："16x9" 或 "9x16"。"""
+    tts: str = Settings.tts
+    """配音層：edge（免費，預設）、elevenlabs、google（付費，要 API key；key 不存在設定裡，見 tts_providers.py）。"""
+    elevenlabs_voice: str = Settings.elevenlabs_voice
+    elevenlabs_model: str = Settings.elevenlabs_model
+    google_voice: str = Settings.google_voice
     independent_review: bool = True
     """作者看審片頁之前（出片之前）要不要派一個只看成片的 agent 獨立審片一輪（independent_review.py）。全部影片共用，不進設定快照。"""
 
@@ -173,6 +184,32 @@ def normalize_value(key: str, value: Any) -> Any:
         if v is None:
             raise SettingsError(f"預設比例「{value}」看不懂，只能是 16:9（橫式）或 9:16（直式）")
         return v
+    if key == "tts":
+        v = _TTS_ALIASES.get("".join(value.split()).lower()) if isinstance(value, str) else None
+        if v is None:
+            raise SettingsError(f"配音「{value}」看不懂，可以選：edge（微軟，免費，預設）、elevenlabs、google"
+                                "（這兩家付費、要 API key）")
+        return v
+    if key == "elevenlabs_voice":
+        v = value.strip() if isinstance(value, str) else ""
+        if not re.fullmatch(r"[A-Za-z0-9]{10,40}", v):
+            raise SettingsError(f"ElevenLabs 的聲音代號「{value}」不對：要像 EXAVITQu4vr4xnSDxMaL 這樣一串英數字"
+                                "（在 ElevenLabs 網站點開聲音、複製它的 ID）")
+        return v
+    if key == "elevenlabs_model":
+        v = value.strip() if isinstance(value, str) else ""
+        if not re.fullmatch(r"[a-z0-9_]{3,64}", v):
+            raise SettingsError(f"ElevenLabs 的模型「{value}」不對，例：eleven_multilingual_v2")
+        return v
+    if key == "google_voice":
+        v = value.strip() if isinstance(value, str) else ""
+        m = re.fullmatch(r"(?i)(?:cmn-tw-)?(standard|wavenet)-([abc])", v)
+        if m:
+            return f"cmn-TW-{m.group(1).capitalize()}-{m.group(2).upper()}"
+        if re.fullmatch(r"[a-z]{2,3}-[A-Z]{2}-[A-Za-z0-9]+-[A-Z]", v):
+            return v
+        names = "、".join(f"{n}（{d}）" for n, d in GOOGLE_TW_VOICES.items())
+        raise SettingsError(f"Google 的聲音「{value}」不對，台灣口音的有：{names}")
     if key == "independent_review":
         if isinstance(value, bool):
             return value
@@ -310,8 +347,11 @@ def snapshot_into_project(project_dir: str | os.PathLike, data_dir: str | os.Pat
         return []
     d = resolve_data_dir(data_dir)
     user = load_user_settings(d)
+    before_paid_voices = "channel" in raw  # 快照是能選配音層之前做的（那時一律 edge）
     for key in missing:
-        if key == "logo":
+        if key == "tts" and before_paid_voices:  # 照舊用 edge：之後改用付費配音的使用者設定不影響這支片
+            raw["tts"] = Settings.tts
+        elif key == "logo":
             raw["logo"] = _copy_logo(d / user.logo, root) if user.logo and (d / user.logo).is_file() else None
         else:
             raw[key] = getattr(user, key)

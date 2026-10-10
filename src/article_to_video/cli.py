@@ -3,9 +3,9 @@
 子指令：
   new <文章檔|-> [--title 片名] [--root 影片資料夾]  開新專案：~/Movies/解說影片/<日期>-<片名>/專案/，擷取文章（含截字檢查）
   projects [關鍵字] [--root 影片資料夾] [--json]       列出做過的影片（最近動過的在前面）
-  preview <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]
+  preview <專案資料夾> [--aspect 16:9|9:16] [--tts 配音層] [--jobs N] [--no-open] [--data-dir D]
                                                   預覽：只出分鏡靜態圖＋審片頁（不渲整支片）
-  build <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--no-open] [--data-dir D]
+  build <專案資料夾> [--aspect 16:9|9:16] [--tts 配音層] [--jobs N] [--no-open] [--data-dir D]
                                                   建置成片＋字幕檔，審片頁內嵌成片
   open-review <專案資料夾> [--aspect …] [--tts …] [--no-open] [--data-dir D]
                                                   更新審片頁（最新的檢查結果、還是最新的成片就內嵌）並在瀏覽器打開給作者看
@@ -13,7 +13,7 @@
   publish <專案資料夾> --version N [--aspect …] [--tts …] [--jobs N] [--no-open] [--data-dir D] [--out 資料夾]
                                                   出片：作者點頭（第 N 版）之後，建置成片、自動檢查，把成片和字幕檔放進
                                                   「影片／解說影片／日期-標題」（見 publish.py、videos.py）
-  boxes <專案資料夾> [--aspect 16:9|9:16] [--tts edge|fake] [--jobs N] [--data-dir D]
+  boxes <專案資料夾> [--aspect 16:9|9:16] [--tts 配音層] [--jobs N] [--data-dir D]
                                                   列出 Vox 框、渲每個框的靜態圖（照這個比例）、印核對代號
   confirm-box <專案資料夾> <核對代號>… [--note 文字] [--data-dir D]
                                                   記下 Claude 看過靜態圖、確認過的框（見 boxes.py）
@@ -29,7 +29,7 @@
   resolve <專案資料夾> <代號>… (--fixed 說明 | --accept 理由) [--by 作者|Claude] [--data-dir D]
                                                   記下必修的處理：改好了（獨立審片）或接受不改；記了就不再擋出片
   lint <專案資料夾>                                 旁白規則檢查（narration.json；規則見 lint.py）；有要改的結束碼 1
-  narrate <專案資料夾> [--tts edge|fake] [--data-dir D]
+  narrate <專案資料夾> [--tts 配音層] [--data-dir D]
                                                   配音（寫分鏡之前）：每段配好音，印總長、每段起點與長度、每個詞開始唸的秒數
   feedback <專案資料夾> [--file 檔]                   審片頁複製出來的留言（stdin）→ JSON（格式見 feedback.py）：
                                                   每則對到分鏡 id、種類、畫面上的字、唸到的旁白段與文字
@@ -41,14 +41,17 @@
   settings show [--json] [--data-dir D] [--project P]               看使用者設定（或某支片的設定快照）
   settings set [--channel …] [--logo 圖檔|none] [--brand-color #RRGGBB|none] [--voice 曉臻|曉雨|雲哲]
                [--rate +5%] [--music calm|pulse|minimal|none] [--aspect 16:9|9:16] [--independent-review 開|關]
+               [--tts edge|elevenlabs|google] [--elevenlabs-voice 代號] [--elevenlabs-model 模型] [--google-voice 聲音]
                [--data-dir D] [--project P]
                                                                      改使用者設定；加 --project 只改那支片的快照
   samples music --out 資料夾 [--seconds 20] [--data-dir D]           每首配樂一個試聽檔 music-<名字>.wav
-  samples voice --out 資料夾 [--rate +5%] [--text …] [--tts edge|fake] 每個聲音一個試聽檔 voice-<代號>.wav（edge 要連網）
-  check-env [--json] [--data-dir D]                  檢查環境：逐項列出狀態與修法；有問題結束碼 1
+  samples voice --out 資料夾 [--rate +5%] [--text …] [--tts 配音層] [--voice 代號]…
+                                                     每個聲音一個試聽檔 voice-<代號>.wav（要連網；印出送出幾個字）
+  check-env [--json] [--try-voice] [--data-dir D]    檢查環境：逐項列出狀態與修法；有問題結束碼 1
+                                                     （--try-voice：付費配音真的試唸兩個字，確認 API key 能用）
   install [--data-dir D]                             安裝 Homebrew（開終端機請作者輸入密碼）、ffmpeg-full、Chromium，
                                                      已經有的略過；最後試 edge-tts 連線。沒全部裝好結束碼 1
-  test-video [--out 資料夾] [--tts edge|fake] [--no-open] [--data-dir D]
+  test-video [--out 資料夾] [--tts 配音層] [--no-open] [--data-dir D]
                                                      用外掛自帶的範例做一支約 10 秒的測試片並打開（安裝最後一步）
 
 preview、build、open-review 做完會用 macOS 的 open 在預設瀏覽器打開審片頁；--no-open 或環境變數
@@ -58,6 +61,9 @@ narrate、boxes、checks、review-prep、review-record、test-video）的輸出�
 
 結構：每個子指令一個處理函式（HANDLERS），共用的選項（--tts、--jobs、--no-open、--data-dir、--aspect、--json）
 各寫一次（_shared_options，argparse 的 parents），留紀錄、印錯誤、被擋下時重寫審片頁都在 _recorded。
+
+--tts：配音層 edge（免費，預設）、elevenlabs、google（付費，API key 放哪裡見 tts_providers.py、docs/maintaining.md）、
+fake（測試）。不給就用設定快照的 tts。配音之後印「這次送出 N 字給配音服務」（付費配音照字數算錢；全用快取是 0）。
 
 --aspect：畫面比例。作者說「直式」就給 9:16（也收「直式」「9x16」）；不給就用設定快照裡的預設比例
 （使用者設定 aspect，沒設就是 16:9）。直式的產物：成片-9x16.mp4、字幕-9x16.srt、審片頁-9x16.html、build/9x16/，
@@ -95,9 +101,15 @@ _SET_OPTIONS = {  # 選項 → 設定鍵
     "rate": "語速，例 +5%、-10%",
     "music": "配樂：calm（沉穩鋼琴）、pulse（新聞脈動）、minimal（極簡電子）、none",
     "aspect": "預設比例：16:9（橫式）或 9:16（直式）",
+    "tts": "配音：edge（微軟，免費，預設）、elevenlabs、google（這兩家付費、要 API key，key 放哪裡見 docs/maintaining.md）",
+    "elevenlabs_voice": "ElevenLabs 的聲音代號（voice_id，一串英數字）",
+    "elevenlabs_model": "ElevenLabs 的模型（預設 eleven_multilingual_v2）",
+    "google_voice": "Google 的聲音：cmn-TW-Wavenet-A（女，預設）、Wavenet-B／C（男）、Standard-A／B／C（較便宜）",
     "independent_review": "建好審片用的成片、作者看審片頁之前，派一個只看成片的 agent 獨立審片一輪：開（預設）或 關"
                           "（全部影片共用，不能加 --project）",
 }
+_TTS_LABELS = {"edge": "edge（微軟，免費）", "elevenlabs": "ElevenLabs（付費）", "google": "Google（付費，每月有免費額度）",
+               "fake": "fake（測試用，沒有聲音）"}
 VOICE_SAMPLE = "大家好，歡迎來到我的頻道。今天用三分鐘，帶你看懂殖利率曲線在說什麼。"
 _PROJECT = "專案資料夾"
 _PROJECT_FILES = "專案資料夾（裡面有 narration.json、shots.json）"
@@ -221,9 +233,15 @@ def _parser() -> argparse.ArgumentParser:
     voice.add_argument("--out", required=True, help="試聽檔放哪個資料夾")
     voice.add_argument("--rate", default=None, help="語速（預設用使用者設定）")
     voice.add_argument("--text", default=VOICE_SAMPLE, help="試聽唸的句子")
-    voice.add_argument("--tts", choices=sorted(TTS_ENGINES), default="edge", help="配音層（預設 edge，要連網）")
+    voice.add_argument("--tts", choices=sorted(TTS_ENGINES), default="edge",
+                       help="配音層（預設 edge，要連網）；google 給六個台灣口音的聲音，elevenlabs 給設定的聲音")
+    voice.add_argument("--voice", action="append", default=[],
+                       help="只試這幾個聲音（可重複；ElevenLabs 填聲音代號，挑聲庫的台灣口音聲音用）")
 
-    add("check-env", "檢查環境：逐項列出做片要用的工具狀態與修法（含 edge-tts 連線）", "json", "data_dir", project=None)
+    ce = add("check-env", "檢查環境：逐項列出做片要用的工具狀態與修法（含 edge-tts 連線、付費配音有沒有 API key）",
+             "json", "data_dir", project=None)
+    ce.add_argument("--try-voice", action="store_true",
+                    help="付費配音（ElevenLabs、Google）真的試唸兩個字，確認 key 能用（會用掉幾個字的額度）")
     add("install", "安裝做片要用的工具（Homebrew、能燒字幕的 ffmpeg、Chromium），已經有的略過", "data_dir", project=None)
     tv = add("test-video", "做一支約 10 秒的測試片並打開（安裝最後一步，確認做片的環境沒問題）", "no_open", "data_dir",
              project=None)
@@ -730,12 +748,20 @@ def _describe(values: dict) -> str:
     from article_to_video.music import TRACKS
     from article_to_video.user_settings import ASPECTS
 
+    from article_to_video.tts_providers import GOOGLE_TW_VOICES
+
     music = values.get("music")
+    tts = values.get("tts") or "edge"
+    voice = {
+        "elevenlabs": f"{values.get('elevenlabs_voice')}（模型 {values.get('elevenlabs_model')}）",
+        "google": f"{values.get('google_voice')}（{GOOGLE_TW_VOICES.get(values.get('google_voice'), '')}）",
+    }.get(tts, f"{ZH_TW_VOICES.get(values.get('voice'), '?')}（{values.get('voice')}）")
     lines = [
         f"頻道名：{values.get('channel') or '（還沒設定：片尾卡要用，請設定）'}",
         f"logo：{values.get('logo') or '（沒有）'}",
         f"品牌色：{values.get('brand_color') or '（沒設定：圖表用預設紅黑白）'}",
-        f"聲音：{ZH_TW_VOICES.get(values.get('voice'), '?')}（{values.get('voice')}）",
+        f"配音：{_TTS_LABELS.get(tts, tts)}",
+        f"聲音：{voice}",
         f"語速：{values.get('rate')}",
         f"配樂：{'不要配樂' if music == 'none' else f'{TRACKS[music].label}（{music}）' if music in TRACKS else music}",
         f"預設比例：{ASPECTS.get(values.get('aspect'), values.get('aspect'))}",
@@ -780,6 +806,12 @@ def _settings_set(args: argparse.Namespace) -> int:
         print(_describe(us.to_json()))
     if "brand_color" in changes and (note := brand_note(normalize_value("brand_color", changes["brand_color"]))):
         print(note)  # 淺色照樣收：告訴作者圖表上的字和線用加深的版本
+    if "tts" in changes:
+        from article_to_video.tts_providers import KEY_SPECS, find_api_key, missing_key_message
+
+        tts = normalize_value("tts", changes["tts"])
+        if tts in KEY_SPECS and find_api_key(tts, args.data_dir) is None:
+            print(f"注意：{missing_key_message(tts, args.data_dir)}")
     return 0
 
 
@@ -819,15 +851,25 @@ def _samples(args: argparse.Namespace) -> int:
             return 0
 
         from article_to_video.narration import get_tts_engine, narrate
+        from article_to_video.tts_providers import GOOGLE_TW_VOICES
         from article_to_video.user_settings import load_user_settings, normalize_value, resolve_data_dir
 
-        rate = normalize_value("rate", args.rate) if args.rate else load_user_settings(args.data_dir).rate
+        us = load_user_settings(args.data_dir)
+        rate = normalize_value("rate", args.rate) if args.rate else us.rate
         cache = resolve_data_dir(args.data_dir) / "previews" / "voice-cache"
-        for vid, name in ZH_TW_VOICES.items():
-            audio = narrate({"sample": args.text}, engine=get_tts_engine(args.tts), voice=vid, rate=rate, cache_dir=cache)
+        voices = {"google": GOOGLE_TW_VOICES, "elevenlabs": {us.elevenlabs_voice: "設定的聲音"}}.get(args.tts, ZH_TW_VOICES)
+        if args.voice:
+            voices = {v: GOOGLE_TW_VOICES.get(v) or ZH_TW_VOICES.get(v) or "指定的聲音" for v in args.voice}
+        engine = get_tts_engine(args.tts, model=us.elevenlabs_model if args.tts == "elevenlabs" else "",
+                                data_dir=args.data_dir)
+        sent = 0
+        for vid, name in voices.items():
+            audio = narrate({"sample": args.text}, engine=engine, voice=vid, rate=rate, cache_dir=cache)
+            sent += audio["sample"].sent_chars
             f = out / f"voice-{vid}.wav"
             f.write_bytes(audio["sample"].audio.read_bytes())
             print(f"{name}（{vid}）：\n  {f}")
+        print(f"這次送出 {sent} 字給配音服務（{args.tts}）")
         return 0
     except KNOWN_ERRORS as e:
         print(f"試聽檔產生失敗：{e}", file=sys.stderr)
@@ -837,7 +879,7 @@ def _samples(args: argparse.Namespace) -> int:
 def _check_env(args: argparse.Namespace) -> int:
     from article_to_video.environment import collect_environment, environment_checks
 
-    report = collect_environment(environment_checks(args.data_dir))
+    report = collect_environment(environment_checks(args.data_dir, try_voice=args.try_voice))
     if args.json:
         print(json.dumps(report.to_json(), ensure_ascii=False, indent=1))
     else:

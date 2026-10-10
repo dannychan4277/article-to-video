@@ -98,8 +98,10 @@ def _snapshot(project_dir: str | os.PathLike, data_dir: str | os.PathLike | None
         log(f"設定快照：從使用者設定補上 {'、'.join(added)}（之後改使用者設定不會影響這支片）")
 
 
-def _voice(project: Project, ffmpeg: Path | None, log: Log) -> dict[str, SegmentAudio]:
-    """配音層：字幕字型涵蓋檢查 → 每段配音（有快取）→ timing.json。配音（narrate）和建置計畫共用這一段。"""
+def _voice(project: Project, ffmpeg: Path | None, log: Log,
+           data_dir: str | os.PathLike | None = None) -> dict[str, SegmentAudio]:
+    """配音層：字幕字型涵蓋檢查 → 每段配音（有快取）→ timing.json。配音（narrate）和建置計畫共用這一段。
+    data_dir：付費配音在 <資料位置>/keys/ 找 API key。印出這次送給配音服務幾個字（付費配音照字數算錢；全用快取是 0）。"""
     missing = missing_subtitle_glyphs(project.segments)
     if missing:
         raise ProjectError(
@@ -108,17 +110,21 @@ def _voice(project: Project, ffmpeg: Path | None, log: Log) -> dict[str, Segment
             hint=f"字幕字型是外掛附帶的 {SUBTITLE_FONT_FAMILY}（常用繁體、簡體字都有）。修法：把這些字換成常用字，或改寫那句旁白。",
         )
     s = project.settings
-    engine = get_tts_engine(s.tts)
+    model, voice = s.tts_model(), s.tts_voice()
+    engine = get_tts_engine(s.tts, model=model, data_dir=data_dir)
     cached_n = 0
 
     def seg_done(key: str, cached: bool) -> None:
         nonlocal cached_n
         cached_n += cached
 
-    audio = narrate(project.segments, engine=engine, voice=s.voice, rate=s.rate,
+    audio = narrate(project.segments, engine=engine, voice=voice, rate=s.rate,
                     cache_dir=project.paths.narration_cache, ffmpeg=ffmpeg, on_segment=seg_done)
     write_timing(audio, project.paths.narration_cache / "timing.json")
-    log(f"配音（{engine.name}，{s.voice}，語速 {s.rate}）：{len(audio)} 段，{len(audio) - cached_n} 段新配、{cached_n} 段用快取")
+    sent = sum(a.sent_chars for a in audio.values())
+    who = f"{engine.name}／{model}" if model else engine.name
+    log(f"配音（{who}，{voice}，語速 {s.rate}）：{len(audio)} 段，{len(audio) - cached_n} 段新配、{cached_n} 段用快取；"
+        f"這次送出 {sent} 字給配音服務")
     return audio
 
 
@@ -150,7 +156,7 @@ def voice_narration(
     跟預覽、建置同一個快取，之後 preview／build 不會重配。"""
     _snapshot(project_dir, data_dir, log)
     project = load_narration(project_dir, overrides={"tts": tts})
-    audio = _voice(project, None, log)
+    audio = _voice(project, None, log, data_dir)
     return Voicing(project, segment_timings(project, audio))
 
 
@@ -197,7 +203,7 @@ def plan_build(
     if fmt is None:
         fmt = FORMATS[s.aspect]
 
-    audio = _voice(project, ffmpeg, log)
+    audio = _voice(project, ffmpeg, log, data_dir)
     timeline = build_timeline(project, audio, fmt)
     clips = plan_clips(project, timeline, fmt)
     vp = project.paths.variant(fmt.name)

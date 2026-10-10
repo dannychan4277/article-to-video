@@ -52,6 +52,7 @@ __all__ = [
     "env_check",
     "environment_checks",
     "settings_check",
+    "tts_check",
 ]
 
 EDGE_PROXY_ENV = "ARTICLE_TO_VIDEO_EDGE_TTS_PROXY"
@@ -401,6 +402,57 @@ def settings_check(data_dir: str | os.PathLike | None = None) -> Check:
     return check_settings
 
 
+TTS_PROBE_TEXT = "測試"
+
+
+def tts_check(data_dir: str | os.PathLike | None = None, *, live: bool = False) -> Check:
+    """配音（使用者設定的配音層）：付費配音（ElevenLabs、Google）有沒有 API key——只講有沒有、從哪裡來，不印 key 本身。
+    live=True（check-env --try-voice）才真的請它唸「測試」兩個字（會用掉幾個字的額度）；平常不連線。"""
+
+    @env_check("tts", "配音")
+    def check_tts() -> EnvCheck:
+        import tempfile
+
+        from article_to_video.narration import NarrationError, get_tts_engine
+        from article_to_video.project import Settings
+        from article_to_video.tts_providers import KEY_SPECS, find_api_key, scrub_secrets
+        from article_to_video.user_settings import load_user_settings, resolve_data_dir
+
+        us = load_user_settings(data_dir)
+        if us.tts not in KEY_SPECS:
+            return EnvCheck("tts", "配音", None, f"{us.tts}（免費，不用 API key）", {"tts": us.tts})
+        spec = KEY_SPECS[us.tts]
+        name = f"配音（{spec.label}，付費）"
+        found = find_api_key(us.tts, data_dir)
+        detail: dict[str, Any] = {"tts": us.tts, "keyFound": found is not None,
+                                  "keySource": found.source if found else None}
+        if found is None:
+            where = resolve_data_dir(data_dir) / "keys" / spec.file
+            return EnvCheck("tts", name, False, "找不到 API key", detail,
+                            fix=f"請 Danny 把 {spec.label} 的 API key 放好（{where}，或環境變數 {spec.env}；"
+                                "說明在外掛的 docs/maintaining.md）。不想用付費配音：跟 Claude 說「換聲音」，換回免費的 edge 語音")
+        value = f"有 API key（{found.source}）"
+        if not live:
+            return EnvCheck("tts", name, True, value, detail)
+        s = Settings(tts=us.tts, elevenlabs_voice=us.elevenlabs_voice, elevenlabs_model=us.elevenlabs_model,
+                     google_voice=us.google_voice)
+        engine = get_tts_engine(us.tts, model=s.tts_model(), data_dir=data_dir)
+        t0 = time.monotonic()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                engine.synthesize(TTS_PROBE_TEXT, voice=s.tts_voice(), rate=us.rate, out_stem=Path(tmp) / "probe")
+        except NarrationError as e:
+            msg = scrub_secrets(str(e), data_dir=data_dir)
+            detail["error"] = msg
+            return EnvCheck("tts", name, False, f"{value}，但試唸失敗", detail, fix=msg)
+        secs = time.monotonic() - t0
+        detail["seconds"] = round(secs, 2)
+        return EnvCheck("tts", name, True, f"{value}；試唸「{TTS_PROBE_TEXT}」{secs:.1f} 秒回來（用掉約 {len(TTS_PROBE_TEXT)} 字的額度）",
+                        detail)
+
+    return check_tts
+
+
 DEFAULT_CHECKS: tuple[Check, ...] = (
     check_macos, check_cpu, check_python, check_plugin, check_homebrew, check_ffmpeg, check_playwright,
     check_chromium, check_edge_tts, check_edge_tts_online, check_uv, check_fonts, check_disk,
@@ -408,6 +460,6 @@ DEFAULT_CHECKS: tuple[Check, ...] = (
 """回報問題打包的那一份（不知道資料位置，所以不含頻道設定）。"""
 
 
-def environment_checks(data_dir: str | os.PathLike | None = None) -> tuple[Check, ...]:
-    """「檢查環境」的完整清單：DEFAULT_CHECKS＋頻道設定。"""
-    return (*DEFAULT_CHECKS, settings_check(data_dir))
+def environment_checks(data_dir: str | os.PathLike | None = None, *, try_voice: bool = False) -> tuple[Check, ...]:
+    """「檢查環境」的完整清單：DEFAULT_CHECKS＋頻道設定＋配音（付費配音的 API key；try_voice 才真的試唸）。"""
+    return (*DEFAULT_CHECKS, settings_check(data_dir), tts_check(data_dir, live=try_voice))
