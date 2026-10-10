@@ -64,9 +64,10 @@ uv run --project <外掛> python -m article_to_video build <專案> --tts google
   Google Cloud Console：開 Cloud Text-to-Speech API、綁帳單 → 憑證 → 建立 API 金鑰（建議限制只能用這個 API）。
 - 確認 key 能用：`check-env --try-voice --data-dir <資料位置>`（真的試唸「測試」兩個字）；不加 `--try-voice` 只看 key 在不在、不連線。
 - 聲音：每家有自己的聲音設定，換配音層不用改聲音。
-  - ElevenLabs：`--elevenlabs-voice <voice_id>`，預設 Sarah（`EXAVITQu4vr4xnSDxMaL`，內建聲音，不是台灣口音）。
-    聲音庫裡台灣口音的聲音要先在 ElevenLabs 網站「Add to My Voices」才能用。模型 `--elevenlabs-model`，預設 `eleven_multilingual_v2`。
-    同時只送 2 段（免費方案的上限）。
+  - ElevenLabs：`--elevenlabs-voice <voice_id>`，預設 Neil Chuang（`auoHciLZJwKTwYUoRTYz`，台灣口音男聲、沉穩，
+    已經在 Danny 的帳號裡）。換別的帳號要先在聲音庫把它「Add to My Voices」，或改用每個帳號都有的 Sarah
+    （`EXAVITQu4vr4xnSDxMaL`，不是台灣口音）；聲音庫其他台灣口音的聲音也一樣要先加進帳號。
+    模型 `--elevenlabs-model`，預設 `eleven_multilingual_v2`。同時只送 2 段（免費方案的同時請求上限）。
   - Google：`--google-voice`，cmn-TW 只有 `Wavenet-A`（女，預設）、`Wavenet-B／C`（男）、`Standard-A／B／C`（較便宜）。
   - 試聽：`samples voice --tts google|elevenlabs --out <資料夾> [--voice <代號>]…`。
 - 花了多少字：`narrate`、`build`、`samples voice` 每次都印「這次送出 N 字給配音服務」；全用快取就是 0。

@@ -68,8 +68,10 @@ ELEVENLABS_URL = "https://api.elevenlabs.io"
 GOOGLE_TTS_URL = "https://texttospeech.googleapis.com"
 
 DEFAULT_ELEVENLABS_MODEL = "eleven_multilingual_v2"
-DEFAULT_ELEVENLABS_VOICE = "EXAVITQu4vr4xnSDxMaL"
-"""Sarah（ElevenLabs 內建聲音，每個帳號都有、不用加進帳號）。台灣口音的要從聲音庫挑，見 docs/maintaining.md。"""
+DEFAULT_ELEVENLABS_VOICE = "auoHciLZJwKTwYUoRTYz"
+"""Neil Chuang（台灣口音男聲，沉穩、適合旁白；ElevenLabs 標記 cmn-TW、eleven_multilingual_v2 驗證過）。
+已經在 Danny 的 ElevenLabs 帳號裡；別的帳號要先在聲音庫「Add to My Voices」，或改用每個帳號都有的內建聲音
+Sarah（EXAVITQu4vr4xnSDxMaL，不是台灣口音）。見 docs/maintaining.md。"""
 ELEVENLABS_OUTPUT = "wav_24000"
 ELEVENLABS_PARALLEL = 2
 """同時送幾段給 ElevenLabs：免費方案同時最多 2 個請求，再多會被擋（429）。"""
