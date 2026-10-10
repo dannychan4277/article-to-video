@@ -47,7 +47,9 @@ return {
     const top = ctx.safe.top + 80 * u + t.lines.length * t.size * 1.25 + 60 * u + (subF.lines.length - 1) * subF.size * 1.3;
     // [article-to-video 內嵌修改] 一串接續分鏡的版面一次算好：data.chainLayout（建置給的）列出整串每個分鏡的標註、整串有沒有大數字，
     // 留白照整串的需要留，每個分鏡的刻度、圖區都一樣（原版只看自己這個分鏡的第一個標註，標到負數柱時底下多一格、切點刻度跳）
-    const CL = d.chainLayout || {}, hls = [...ctx.of('highlight').map(q => hlOf(q, d, S.length)), ...(CL.highlights || []).map(h => hlOf({ text: h.text, sub: h.sub, data: { index: h.index, carried: true } }, d, S.length))];
+    // chainLayout 的標註：{index, lines（幾行）}，折線另外帶 text、sub（擺位置要量字寬）
+    const CL = d.chainLayout || {}, hls = [...ctx.of('highlight').map(q => hlOf(q, d, S.length)),
+      ...(CL.highlights || []).map(h => ({ index: h.index != null ? h.index : S.length - 1, lines: h.text || h.sub ? [h.text, h.sub].filter(Boolean) : Array(h.lines || 0).fill('') }))];
     const band = ctx.of('number').length || CL.number ? 150 * u : 0;     // 有 number：给大数字单独留一条，不压在图区里（折线一上涨，右上角正好是线头）
     const F = { x: mL + 20 * u, y: top + 40 * u + band, w: W - mL - mR - 40 * u, h: H - top - 40 * u - band - (tall ? 260 : 190) * u - ctx.safe.bottom - (srcF.lines.length - 1) * srcF.size * 1.3 };   // safe.bottom：字幕带整条让出来，来源行落在它上面
     const n = S.length, slot = (F.w - 80 * u) / n, xs = S.map((_, i) => F.x + slot * (i + 0.5));   // 右边留 80px 给刻度值，别压在最后一根柱上
@@ -65,7 +67,7 @@ return {
       const vmin = Math.min(...vals), need = 56 * u * fs0; roomFor(need);
       while ((vmin - ticks[0]) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.unshift(+(ticks[0] - step).toFixed(10));
     }
-    const qh1 = ctx.of('highlight')[0], H1 = d.highlight || {}, hiI = qh1 ? hlOf(qh1, d, S.length).index : -1;
+    const qh1 = ctx.of('highlight')[0], hiI = qh1 ? hlOf(qh1, d, S.length).index : -1;
     const posL = hls.filter(h => S[h.index] && S[h.index].value >= 0), negL = hls.filter(h => S[h.index] && S[h.index].value < 0);   // [article-to-video 內嵌修改] 整串的標註（見上面 chainLayout）
     if (kind === 'bar' && posL.length) {   // 标注的柱子上方要留够文字块（[Danny 本机改] 原本只管「不是最高那根」；标最高那根时斜向标注被 ty 夹在 F.y+60，文字压回柱子上）
       const nL = Math.max(...posL.map(h => h.lines.length)), need = (52 * nL + 44 + 30) * u * fs0, vmax = Math.max(...vals); roomFor(need);
@@ -95,7 +97,12 @@ return {
       for (let i = 0; i < n; i++) if (i !== hiI && base(i) && kept.every(j => Math.abs(xs[i] - xs[j]) >= half(i) + half(j) + 16 * u)) kept.push(i);
       L.xKeep = new Set(kept);
     }
-    if (kind === 'line') placeLineText(ctx, c, hiI, qh1, H1);
+    // [article-to-video 內嵌修改] 標註照時間一個換一個（接續分鏡：建置把上一個分鏡最後的標註沿用過來、時間寫成負的，第一幀就在）。
+    // 跟前一個一模一樣（同一點、同樣的字）的標註不重來一次：start 沿用前一個的。位置（折線挑的位置、柱的三種擺法）每個標註 init 算好
+    L.hl = ctx.of('highlight').map(q => hlOf(q, d, n)).filter(h => S[h.index]);
+    L.hl.forEach((h, j) => { const p = L.hl[j - 1]; h.start = p && p.index === h.index && p.lines.join('\n') === h.lines.join('\n') ? p.start : h.q.at; });
+    if (kind === 'line') { placeLineText(ctx, c); L.hl.forEach(h => { h.co = placeLineLabel(ctx, c, h); }); }
+    if (kind === 'bar') L.hl.forEach(h => { h.mode = barMode(ctx, c, h); });
   },
   draw(c0, t, ctx) {
     // alpha：图是白纸黑字，叠在深色画面上墨色看不见。先画进缓冲，再带一圈白色光晕合成（和 t1 同一招）
@@ -132,90 +139,51 @@ return {
     // ---- 数据 ----
     const n = S.length, ddur = qd.dur || Math.min(2.2, Math.max(0.9, n * (kind === 'bar' ? 0.22 : 0.06)));
     const dp = ctx.p(t, qd.at, ddur);
-    const qh = ctx.of('highlight')[0], hi = qh ? (qh.data && qh.data.index != null ? qh.data.index : (d.highlight && d.highlight.index != null ? d.highlight.index : n - 1)) : -1;
-    const hiP = qh ? MO.smooth(ctx.p(t, qh.at, 0.4)) : 0;
-    let anchor = null;
+    // [article-to-video 內嵌修改] 標註一個換一個（init 的 L.hl）：現在是哪一個（cur）、淡掉的程度（dimA）、線尾數值的透明度（endA）
+    // 都照順序疊上去，換標註時只有變了的東西在動（原版只認第一個 highlight cue；接續分鏡的切點標註消失、淡掉的柱閃回原色、線尾數值跳出來）
+    const hs = L.hl, dimA = S.map(() => 0);
+    let curI = -1, endA = 1;
+    for (const h of hs) {
+      const k = ctx.lt(t, h.start); if (k <= 0) continue;
+      const w = MO.smooth(clamp(k / 0.4));
+      for (let i = 0; i < n; i++) dimA[i] = lerp(dimA[i], i === h.index ? 0 : 1, w);
+      endA = lerp(endA, h.index === n - 1 ? 0 : 1, clamp(k / 0.25));   // [Danny 本机改] 标注就是最后一点时，线头数值让位，免得两个数字叠在一起
+      curI = h.index;
+    }
+    let tops = null, pts = null;
     if (kind === 'bar') {
       const bw = Math.min(150 * u, L.slot * 0.62);
-      const on = qh && ctx.lt(t, qh.at) > 0, opt = { col: L.col.main, hiP, hiCol: L.col.accent, dimCol: L.col.dim,
-        fmt: v => fmtv(d, v), font: `600 ${Math.max(24 * u * fs, Math.min(34 * u * fs, L.slot * 0.3))}px ${NUM}`, labelCol: INK, label: n <= 14 };
+      const opt = { dimCol: L.col.dim, fmt: v => fmtv(d, v), font: `600 ${Math.max(24 * u * fs, Math.min(34 * u * fs, L.slot * 0.3))}px ${NUM}`, labelCol: INK, label: n <= 14 };
       const own = {};                                                      // 带 data.index 的 bar cue：这几根柱子从它的 at 起单独长
       for (const q of ctx.of('bar')) if (q.data && q.data.index != null) [].concat(q.data.index).forEach(i => { own[i] = q; });
-      let tops;
-      if (!Object.keys(own).length && !S.some(r => r.color)) tops = CH.bars(c, S.map((r, i) => ({ x: xs[i], v: r.value })), yS, bw, dp, { ...opt, lag: Math.min(0.22, 2 / n), hi: on ? hi : -1 });
-      else tops = S.map((r, i) => {
+      const perBar = Object.keys(own).length > 0 || S.some(r => r.color);   // 原版「逐根長出」的路徑（series[i].text 只在這條路徑生效）
+      // [article-to-video 內嵌修改] 一律逐根畫（跟原版整排一起畫的錯開時間一樣：MO.lagged），每根柱自己的淡掉程度 dimA[i]
+      tops = S.map((r, i) => {
         const q = own[i], p = q ? ctx.p(t, q.at, q.dur || 0.7) : MO.lagged(i, n, dp, Math.min(0.22, 2 / n));
-        const col = r.color || L.col.main;
-        return CH.bars(c, [{ x: xs[i], v: r.value }], yS, bw, p, { ...opt, ...(r.text != null ? { fmt: () => r.text } : {}), lag: 0, col, hiCol: col, hi: on ? (i === hi ? 0 : 1) : -1 })[0];   // [Danny 本机改] series 项可写 text 覆盖柱上数值（如「＞50%」；只在逐根长出的路径生效：有 data.index 的 bar cue 或 color）
+        const base = r.color || L.col.main, col = i === curI ? (perBar ? base : L.col.accent) : base;
+        return CH.bars(c, [{ x: xs[i], v: r.value }], yS, bw, p, { ...opt, ...(perBar && r.text != null ? { fmt: () => r.text } : {}), lag: 0, col, hi: dimA[i] > 0 ? 1 : -1, hiP: dimA[i] })[0];   // [Danny 本机改] series 项可写 text 覆盖柱上数值（如「＞50%」；只在逐根长出的路径生效：有 data.index 的 bar cue 或 color）
       });
-      if (hi >= 0) anchor = [xs[hi], tops[hi][1]];
-      L.neg = hi >= 0 && S[hi].value < 0; L.tops = tops;
-      L.barAbove = hi >= 0 && S[hi].value >= 0 && S.some((r, j) => j !== hi && r.value > S[hi].value * 1.5);   // 有更高的柱子挡在旁边：标注放在这根柱子正上方，别压进别的柱子
     } else if (kind === 'line') {
-      const pts = S.map((r, i) => [xs[i], yS(r.value)]);
+      pts = S.map((r, i) => [xs[i], yS(r.value)]);
       const lp = MO.smooth(dp);
       const hp = CH.line(c, pts, lp, { col: L.col.main, lw: 5 * u, headR: 9 * u, area: { top: F.y, base: F.y + F.h, c0: rgba(L.col.main, 0.12, 'rgba(227,18,11,0.12)'), c1: rgba(L.col.main, 0, 'rgba(227,18,11,0)') } });
       if (hp && lp < 1) { const v = yS.inv(hp[1]); c.save(); c.font = `700 ${36 * u}px ${NUM}`; c.fillStyle = L.col.main; c.textAlign = 'left'; c.textBaseline = 'middle'; haloTabular(c, fmtv(d, v), hp[0] + 20 * u, hp[1] - 4 * u, {}, 8 * u); c.restore(); }   // [article-to-video 內嵌修改] 描白邊
-      else if (lp >= 1) { const v = S[n - 1].value; c.save(); if (qh && hi === n - 1) c.globalAlpha = 1 - clamp(ctx.lt(t, qh.at) / 0.25);   // [Danny 本机改] 标注就是最后一点时，线头数值让位，免得两个数字叠在一起
+      else if (lp >= 1 && endA > 0) { const v = S[n - 1].value; c.save(); c.globalAlpha = endA;
         c.font = `700 ${36 * u}px ${NUM}`; c.fillStyle = L.col.main; c.textAlign = 'right'; c.textBaseline = 'alphabetic'; haloTabular(c, fmtv(d, v), L.endLab.x, L.endLab.y, { align: 'right' }, 8 * u); c.restore(); }   // [article-to-video 內嵌修改] 位置挑不被線穿過的（placeLineText）、描白邊
-      if (hi >= 0) anchor = pts[hi];
     } else {
       const cw = Math.min(30 * u, L.slot * 0.6);
       CH.candles(c, S, xs, yS, cw, dp, { up: L.updown[0], down: L.updown[1], lag: Math.min(0.06, 1.5 / n) });
-      if (hi >= 0) anchor = [xs[hi], yS(S[hi].c)];
     }
     // ---- 标注：一镜只标一件事 ----
-    let above = L.barAbove;
-    if (qh && anchor && kind === 'bar' && !above && !L.neg) {             // 预演斜向标注的文字框：压到别的柱子或它的数值，就改放这根柱子正上方
-      const H0 = d.highlight || {}, ls = [C(qh.text, H0.text), C(qh.sub, H0.sub)].filter(Boolean);
-      const ax = anchor[0] - Math.min(150 * u, L.slot * 0.62) / 2, right = ax > F.x + F.w * 0.55, tx = right ? ax - 60 * u : ax + 60 * u, ty = Math.max(F.y + 60 * u, anchor[1] - 140 * u);
-      c.save(); c.font = `700 ${50 * u}px ${NUM}`; let tw = c.measureText(ls[0] || '').width; c.font = `400 ${28 * u * fs}px ${CN}`; if (ls[1]) tw = Math.max(tw, c.measureText(ls[1]).width); c.restore();
-      const bx0 = right ? tx - 12 - tw : tx + 12, bx1 = bx0 + tw, by1 = ty + (ls.length > 1 ? 56 : 16) * u;
-      above = L.tops.some(([bx, by], j) => j !== hi && bx + L.slot * 0.45 > bx0 && bx - L.slot * 0.45 < bx1 && by - 44 * u * fs < by1);
-    }
-    if (qh && anchor && kind === 'bar' && L.neg) {
-      // [article-to-video 內嵌修改] 負數柱：數值標籤寫在柱底下方（CH.bars），原版的斜向標註往下拉會壓在標籤上（「-2.6%」被「跌最深」蓋住）。
-      // 改成文字塊放在這根柱的數值標籤正下方（也讓開它橫跨到的其他負數柱與它們的標籤），引線從標籤下緣垂直拉下來；圓點照舊在柱底左角。
-      const H0 = d.highlight || {}, lines = [C(qh.text, H0.text), C(qh.sub, H0.sub)].filter(Boolean), k = ctx.lt(t, qh.at);
-      if (k > 0) {
-        const s = MO.spring(k, { duration: 0.45, bounce: 0.25 }), lp = MO.quintOut(MO.seg(k, 0.12, 0.45)), fp = MO.quintOut(MO.seg(k, 0.3, 0.7));
-        const [x, y] = anchor, vlab = NEG_LABEL * u * fs;
-        c.save(); c.font = `700 ${50 * u * fs}px ${NUM}`; let tw = c.measureText(lines[0]).width; c.font = `400 ${28 * u * fs}px ${CN}`; if (lines[1]) tw = Math.max(tw, c.measureText(lines[1]).width);
-        const cx = clamp(x, F.x + tw / 2, F.x + F.w - 80 * u - tw / 2);
-        const cover = L.tops.filter(([bx]) => bx > cx - tw / 2 - L.slot / 2 && bx < cx + tw / 2 + L.slot / 2).map(([, by]) => by > yS(0) ? by + vlab : yS(0));
-        const top = Math.max(y + vlab, ...cover) + NEG_GAP * u * fs;   // 文字塊上緣
-        c.fillStyle = L.col.ink; c.beginPath(); c.arc(x - Math.min(150 * u, L.slot * 0.62) / 2, y, 9 * u * Math.max(0, s), 0, 7); c.fill();
-        const y0 = y + vlab, y1 = top - 6 * u;
-        if (y1 - y0 > 6 * u) { c.strokeStyle = INK; c.lineWidth = 2 * u; c.beginPath(); c.moveTo(x, y0); c.lineTo(lerp(x, cx, lp), lerp(y0, y1, lp)); c.stroke(); }
-        c.globalAlpha = fp; c.fillStyle = INK; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
-        lines.forEach((ln, i) => { c.font = i === 0 ? `700 ${50 * u * fs}px ${NUM}` : `400 ${28 * u * fs}px ${CN}`; haloText(c, ln, cx, top + (NEG_LINE1 + i * NEG_LINE2) * u * fs + (1 - fp) * 12 * u, 10 * u); });   // [article-to-video 內嵌修改] 描白邊（試跑 #9）
-        c.restore();
-      }
-    } else if (qh && anchor && kind === 'bar' && above) {
-      const H0 = d.highlight || {}, lines = [C(qh.text, H0.text), C(qh.sub, H0.sub)].filter(Boolean), k = ctx.lt(t, qh.at);
-      if (k > 0) {
-        const s = MO.spring(k, { duration: 0.45, bounce: 0.25 }), lp = MO.quintOut(MO.seg(k, 0.12, 0.45)), fp = MO.quintOut(MO.seg(k, 0.3, 0.7));
-        // 文字块放在这根柱子正上方：先量宽，横向夹在图区里；再抬到它横跨的所有柱子（含数值标签）之上，引线从本柱数值标签上沿连上去
-        const [x, y] = anchor, lh = 52 * u * fs, vlab = 44 * u * fs;
-        c.save(); c.font = `700 ${50 * u * fs}px ${NUM}`; let tw = c.measureText(lines[0]).width; c.font = `400 ${28 * u * fs}px ${CN}`; if (lines[1]) tw = Math.max(tw, c.measureText(lines[1]).width);
-        const cx = clamp(x, F.x + tw / 2, F.x + F.w - 80 * u - tw / 2);
-        const cover = L.tops.filter(([bx]) => bx > cx - tw / 2 - L.slot / 2 && bx < cx + tw / 2 + L.slot / 2).map(([, by]) => by);
-        // [article-to-video 內嵌修改] 引線至少露出 LEADER_MIN：原版文字塊緊貼數值標籤（只隔 18），引線只剩 10 像素、看起來被標籤蓋掉（短柱最明顯）
-        const y0 = y - vlab - 4 * u, bottom = Math.max(F.y + lh * lines.length, Math.min(Math.min(y, ...cover) - vlab - 18 * u, y0 - LEADER_MIN * u * fs - 10 * u));   // 文字块底边
-        c.fillStyle = L.col.ink; c.beginPath(); c.arc(x - Math.min(150 * u, L.slot * 0.62) / 2, y, 9 * u * Math.max(0, s), 0, 7); c.fill();   // [Danny 本机改] 圆点放在柱顶左角：放柱顶正中会压到柱上数值的字底
-        const y1 = bottom + 10 * u;
-        if (y0 - y1 > 6 * u) { c.strokeStyle = INK; c.lineWidth = 2 * u; c.beginPath(); c.moveTo(x, y0); c.lineTo(lerp(x, cx, lp), lerp(y0, y1, lp)); c.stroke(); }
-        c.globalAlpha = fp; c.fillStyle = INK; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
-        lines.forEach((ln, i) => { c.font = i === 0 ? `700 ${50 * u * fs}px ${NUM}` : `400 ${28 * u * fs}px ${CN}`; haloText(c, ln, cx, bottom - (lines.length - 1 - i) * lh * (i === 0 ? 1 : 0.62) + (1 - fp) * 12 * u, 10 * u); });   // [article-to-video 內嵌修改] 描白邊（試跑 #9）
-        c.restore();
-      }
-    } else if (qh && anchor) {
-      if (kind === 'bar') anchor = [anchor[0] - Math.min(150 * u, L.slot * 0.62) / 2, anchor[1]];
-      const H0 = d.highlight || {}, lines = [C(qh.text, H0.text), C(qh.sub, H0.sub)].filter(Boolean);
-      const right = anchor[0] > F.x + F.w * 0.55, co = kind === 'line' ? L.lineCo : null;   // [article-to-video 內嵌修改] 折線：位置照 placeLineText 挑的（不壓線、零軸）
-      const tx = co ? co.tx : right ? anchor[0] - 60 * u : anchor[0] + 60 * u;
-      const ty = co ? co.ty : Math.max(F.y + 60 * u, anchor[1] - 140 * u);   // [article-to-video 內嵌修改] 負數柱另外處理（上面那段），這裡只剩正數柱與折線、K 線
-      CH.callout(c, ctx.lt(t, qh.at), 0, { x: anchor[0], y: anchor[1], tx, ty, lines, col: INK, dotCol: L.col.ink, font: `700 ${50 * u}px ${NUM}`, font2: `400 ${28 * u * fs}px ${CN}`, align: co ? co.align : right ? 'right' : 'left', r: 9 * u, halo: 10 * u });
+    // [article-to-video 內嵌修改] 接續分鏡：上一個分鏡的標註（沿用過來）一直留著，到這個分鏡自己的標註才換。
+    // 同一點：圓點不動、舊字淡出、新的引線和字長出來；換到別點：舊的整個淡出（0.25 秒）、新的圓點彈出來。一模一樣的標註不重來
+    let ci = -1; hs.forEach((h, j) => { if (ctx.lt(t, h.start) > 0) ci = j; });
+    if (ci >= 0) {
+      const cur = hs[ci], kc = ctx.lt(t, cur.start), anchorOf = i => kind === 'bar' ? [xs[i], tops[i][1]] : kind === 'line' ? pts[i] : [xs[i], yS(S[i].c)];
+      let pj = ci - 1; while (pj >= 0 && hs[pj].start === cur.start) pj--;
+      const prev = pj >= 0 ? hs[pj] : null, same = !!prev && prev.index === cur.index;
+      if (prev) { const out = 1 - MO.seg(kc, 0, 0.25); if (out > 0) drawLabel(c, ctx, prev, ctx.lt(t, prev.start), out, same ? 'none' : 'spring', anchorOf(prev.index), tops); }
+      drawLabel(c, ctx, cur, kc, 1, same ? 'full' : 'spring', anchorOf(cur.index), tops);
     }
     // ---- 大数字（number cue：at = 落定时刻） ----
     for (const q of ctx.of('number')) {
@@ -244,30 +212,36 @@ function hlOf(q, d, n) {
 // 常壓到零軸、線本身和格線（線最後往下掉時，線尾數值正好被線穿過）。改成從幾個候選位置挑分數最低的：
 // 壓到線、壓到線尾數值＝重罰；壓到零軸＝中罰；引線穿過折線＝中罰；壓到格線＝輕罰（字另外描白邊，格線碰不到字）；
 // 離原本的位置越遠、放在點的下方，各加一點分。只看資料與版面、init 一次算好，確定性。
-function placeLineText(ctx, c, hiI, qh1, H1) {
-  const { u, data: d } = ctx, { F, S, xs, yS } = L, n = S.length, fs = ctx.portrait ? 1.2 : 1;
+function lineGeom(ctx) {
+  const { u } = ctx, { F, S, xs, yS } = L, n = S.length;
   const pts = S.map((r, i) => [xs[i], yS(r.value)]);
-  const right = F.x + F.w - 80 * u;                                     // 右邊那一欄是刻度值，不放字
   const grow = (R, m) => ({ x0: R.x0 - m, y0: R.y0 - m, x1: R.x1 + m, y1: R.y1 + m });
   const hitsSeg = (a, b, R) => { const k = Math.max(2, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / (3 * u)));
     for (let j = 0; j <= k; j++) { const x = lerp(a[0], b[0], j / k), y = lerp(a[1], b[1], j / k); if (x >= R.x0 && x <= R.x1 && y >= R.y0 && y <= R.y1) return true; } return false; };
-  const lineHits = R => { const G = grow(R, 8 * u); let k = 0; for (let i = 1; i < n; i++) if (hitsSeg(pts[i - 1], pts[i], G)) k++; return k; };
   const zeroY = L.zeroBased && L.ticks[0] < 0 ? yS(0) : null;           // 零軸（黑色粗線）在圖區中間時
-  const zeroHit = R => zeroY != null && R.y0 - 12 * u < zeroY && R.y1 + 12 * u > zeroY;
-  const gridHits = R => L.ticks.filter(v => zeroY == null || Math.abs(v) > 1e-9).filter(v => { const y = yS(v); return y > R.y0 - 2 * u && y < R.y1 + 2 * u; }).length;
-  const overlap = (A, B) => !!(A && B && A.x0 < B.x1 && B.x0 < A.x1 && A.y0 < B.y1 && B.y0 < A.y1);
-  // 線尾數值（36 號粗體、右對齊在最後一點的 x）：上方（原版）、下方、左邊
+  return {
+    pts, n, F, grow, right: F.x + F.w - 80 * u,                          // 右邊那一欄是刻度值，不放字
+    lineHits: R => { const G = grow(R, 8 * u); let k = 0; for (let i = 1; i < n; i++) if (hitsSeg(pts[i - 1], pts[i], G)) k++; return k; },
+    zeroHit: R => zeroY != null && R.y0 - 12 * u < zeroY && R.y1 + 12 * u > zeroY,
+    gridHits: R => L.ticks.filter(v => zeroY == null || Math.abs(v) > 1e-9).filter(v => { const y = yS(v); return y > R.y0 - 2 * u && y < R.y1 + 2 * u; }).length,
+    overlap: (A, B) => !!(A && B && A.x0 < B.x1 && B.x0 < A.x1 && A.y0 < B.y1 && B.y0 < A.y1),
+  };
+}
+// 線尾數值（36 號粗體、右對齊在最後一點的 x）：上方（原版）、下方、左邊
+function placeLineText(ctx, c) {
+  const { u, data: d } = ctx, { S } = L, g = lineGeom(ctx), { F, n } = g;
   c.font = `700 ${36 * u}px ${NUM}`;
   const lab = fmtv(d, S[n - 1].value), lw = [...lab].reduce((s, ch) => s + c.measureText(/[0-9]/.test(ch) ? '0' : ch).width, 0);
-  const [ex, ey] = pts[n - 1], asc = 27 * u, desc = 6 * u;
-  const endScore = k => (k.R.x0 < F.x || k.R.y0 < F.y - 30 * u || k.R.y1 > F.y + F.h ? 1e6 : 0) + 1000 * lineHits(k.R) + 400 * zeroHit(k.R) + 20 * gridHits(k.R) + k.pref;
+  const [ex, ey] = g.pts[n - 1], asc = 27 * u, desc = 6 * u;
+  const endScore = k => (k.R.x0 < F.x || k.R.y0 < F.y - 30 * u || k.R.y1 > F.y + F.h ? 1e6 : 0) + 1000 * g.lineHits(k.R) + 400 * g.zeroHit(k.R) + 20 * g.gridHits(k.R) + k.pref;
   L.endLab = [{ x: ex, y: ey - 24 * u, pref: 0 }, { x: ex, y: ey + 24 * u + asc, pref: 6 }, { x: ex, y: ey - 60 * u, pref: 8 },
     { x: ex - 22 * u, y: ey + asc / 2, pref: 12 }, { x: ex, y: ey + 60 * u + asc, pref: 14 }]
     .map(k => ({ ...k, R: { x0: k.x - lw, x1: k.x, y0: k.y - asc, y1: k.y + desc } }))
     .reduce((b, k) => endScore(k) < endScore(b) ? k : b);
-  // 標註（CH.callout：第一行 50 號粗體、第二行 28 號；字從 (tx±12, ty+8) 起、行距 40）
-  if (hiI < 0 || !S[hiI]) return;
-  const lines = [C(qh1 && qh1.text, H1.text), C(qh1 && qh1.sub, H1.sub)].filter(Boolean);
+}
+// 一個標註（CH.callout：第一行 50 號粗體、第二行 28 號；字從 (tx±12, ty+8) 起、行距 40）擺哪；一個都放不下回傳 null（照原版的位置）
+function placeLineLabel(ctx, c, h) {
+  const { u } = ctx, g = lineGeom(ctx), { F, n, pts } = g, fs = ctx.portrait ? 1.2 : 1, hiI = h.index, lines = h.lines;
   c.font = `700 ${50 * u}px ${NUM}`; let tw = lines[0] ? c.measureText(lines[0]).width : 0;
   c.font = `400 ${28 * u * fs}px ${CN}`; if (lines[1]) tw = Math.max(tw, c.measureText(lines[1]).width);
   const [ax, ay] = pts[hiI], toRight = !(ax > F.x + F.w * 0.55), endR = hiI === n - 1 ? null : L.endLab.R;   // 標的就是最後一點時線尾數值會淡出讓位
@@ -279,12 +253,67 @@ function placeLineText(ctx, c, hiI, qh1, H1) {
   for (const dy of [-140, -190, -240, -100, 110, 160, 210]) for (const dx of [60, 120, 200, -60, -120, -200]) {
     const tx = ax + dx * u, ty = ay + dy * u, align = dx > 0 ? 'left' : 'right';
     const x0 = align === 'left' ? tx + 12 : tx - 12 - tw, R = { x0, x1: x0 + tw, y0: ty + 8 - 46 * u, y1: ty + 8 + (lines.length - 1) * 40 + 10 * u };
-    if (R.x0 < F.x || R.x1 > right || R.y0 < F.y - 10 * u || R.y1 > F.y + F.h) continue;
-    const s = 1000 * lineHits(R) + 1000 * overlap(grow(R, 6 * u), endR) + 400 * zeroHit(R) + 300 * crossings([ax, ay], [tx, ty]) + 40 * hugs([ax, ay], [tx, ty]) + 20 * gridHits(R)
+    if (R.x0 < F.x || R.x1 > g.right || R.y0 < F.y - 10 * u || R.y1 > F.y + F.h) continue;
+    const s = 1000 * g.lineHits(R) + 1000 * g.overlap(g.grow(R, 6 * u), endR) + 400 * g.zeroHit(R) + 300 * crossings([ax, ay], [tx, ty]) + 40 * hugs([ax, ay], [tx, ty]) + 20 * g.gridHits(R)
       + 0.3 * (Math.abs(dy + 140) + Math.abs(dx - (toRight ? 60 : -60))) + (dy > 0 ? 40 : 0);
     if (!best || s < best.s) best = { s, tx, ty, align };
   }
-  L.lineCo = best;                                                       // 圖太小、一個都放不下：照原版的位置
+  return best;
+}
+// [article-to-video 內嵌修改] 柱狀圖的標註擺法（原版每一幀在 draw 裡決定，這裡用柱長完的位置 init 算好）：
+// 負數柱 'neg'（數值標籤正下方）；旁邊有高 1.5 倍以上的柱、或預演的斜向文字框會壓到別根柱或它的數值 'above'（這根柱正上方）；其他 'diag'（斜向）
+function barMode(ctx, c, h) {
+  const { u } = ctx, { S, xs, yS, F } = L, fs = ctx.portrait ? 1.2 : 1, hi = h.index, v = S[hi].value, ls = h.lines;
+  if (v < 0) return 'neg';
+  if (S.some((r, j) => j !== hi && r.value > v * 1.5)) return 'above';   // 有更高的柱子挡在旁边：标注放在这根柱子正上方，别压进别的柱子
+  const tops = S.map((r, i) => [xs[i], yS(r.value)]), anchor = tops[hi];   // 预演斜向标注的文字框：压到别的柱子或它的数值，就改放这根柱子正上方
+  const ax = anchor[0] - Math.min(150 * u, L.slot * 0.62) / 2, right = ax > F.x + F.w * 0.55, tx = right ? ax - 60 * u : ax + 60 * u, ty = Math.max(F.y + 60 * u, anchor[1] - 140 * u);
+  c.save(); c.font = `700 ${50 * u}px ${NUM}`; let tw = c.measureText(ls[0] || '').width; c.font = `400 ${28 * u * fs}px ${CN}`; if (ls[1]) tw = Math.max(tw, c.measureText(ls[1]).width); c.restore();
+  const bx0 = right ? tx - 12 - tw : tx + 12, bx1 = bx0 + tw, by1 = ty + (ls.length > 1 ? 56 : 16) * u;
+  return tops.some(([bx, by], j) => j !== hi && bx + L.slot * 0.45 > bx0 && bx - L.slot * 0.45 < bx1 && by - 44 * u * fs < by1) ? 'above' : 'diag';
+}
+// [article-to-video 內嵌修改] 畫一個標註（原版寫在 draw 裡、只畫第一個 highlight cue）。k：這個標註出現了幾秒；alpha：整個標註的透明度（換標註時舊的淡出）；
+// dot：'spring'＝圓點彈出（原版）、'full'＝圓點已經在（同一點換字）、'none'＝不畫圓點（同一點換字時舊的那個）。anchor：點（柱頂／柱底、折線上的點）；tops：現在的柱頂
+function drawLabel(c, ctx, h, k, alpha, dot, anchor, tops) {
+  if (k <= 0 || alpha <= 0) return;
+  const { u } = ctx, { F, yS, kind } = L, fs = ctx.portrait ? 1.2 : 1, lines = h.lines, bw = Math.min(150 * u, L.slot * 0.62);
+  const s = dot === 'spring' ? MO.spring(k, { duration: 0.45, bounce: 0.25 }) : 1, lp = MO.quintOut(MO.seg(k, 0.12, 0.45)), fp = MO.quintOut(MO.seg(k, 0.3, 0.7));
+  const [x, y] = anchor;
+  if (kind === 'bar' && h.mode === 'neg') {
+    // [article-to-video 內嵌修改] 負數柱：數值標籤寫在柱底下方（CH.bars），原版的斜向標註往下拉會壓在標籤上（「-2.6%」被「跌最深」蓋住）。
+    // 改成文字塊放在這根柱的數值標籤正下方（也讓開它橫跨到的其他負數柱與它們的標籤），引線從標籤下緣垂直拉下來；圓點照舊在柱底左角。
+    const vlab = NEG_LABEL * u * fs;
+    c.save(); c.globalAlpha = alpha; c.font = `700 ${50 * u * fs}px ${NUM}`; let tw = c.measureText(lines[0] || '').width; c.font = `400 ${28 * u * fs}px ${CN}`; if (lines[1]) tw = Math.max(tw, c.measureText(lines[1]).width);
+    const cx = clamp(x, F.x + tw / 2, F.x + F.w - 80 * u - tw / 2);
+    const cover = tops.filter(([bx]) => bx > cx - tw / 2 - L.slot / 2 && bx < cx + tw / 2 + L.slot / 2).map(([, by]) => by > yS(0) ? by + vlab : yS(0));
+    const top = Math.max(y + vlab, ...cover) + NEG_GAP * u * fs;   // 文字塊上緣
+    if (dot !== 'none') { c.fillStyle = L.col.ink; c.beginPath(); c.arc(x - bw / 2, y, 9 * u * Math.max(0, s), 0, 7); c.fill(); }
+    const y0 = y + vlab, y1 = top - 6 * u;
+    if (y1 - y0 > 6 * u) { c.strokeStyle = INK; c.lineWidth = 2 * u; c.beginPath(); c.moveTo(x, y0); c.lineTo(lerp(x, cx, lp), lerp(y0, y1, lp)); c.stroke(); }
+    c.globalAlpha = alpha * fp; c.fillStyle = INK; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
+    lines.forEach((ln, i) => { c.font = i === 0 ? `700 ${50 * u * fs}px ${NUM}` : `400 ${28 * u * fs}px ${CN}`; haloText(c, ln, cx, top + (NEG_LINE1 + i * NEG_LINE2) * u * fs + (1 - fp) * 12 * u, 10 * u); });   // [article-to-video 內嵌修改] 描白邊（試跑 #9）
+    c.restore();
+  } else if (kind === 'bar' && h.mode === 'above') {
+    // 文字块放在这根柱子正上方：先量宽，横向夹在图区里；再抬到它横跨的所有柱子（含数值标签）之上，引线从本柱数值标签上沿连上去
+    const lh = 52 * u * fs, vlab = 44 * u * fs;
+    c.save(); c.globalAlpha = alpha; c.font = `700 ${50 * u * fs}px ${NUM}`; let tw = c.measureText(lines[0] || '').width; c.font = `400 ${28 * u * fs}px ${CN}`; if (lines[1]) tw = Math.max(tw, c.measureText(lines[1]).width);
+    const cx = clamp(x, F.x + tw / 2, F.x + F.w - 80 * u - tw / 2);
+    const cover = tops.filter(([bx]) => bx > cx - tw / 2 - L.slot / 2 && bx < cx + tw / 2 + L.slot / 2).map(([, by]) => by);
+    // [article-to-video 內嵌修改] 引線至少露出 LEADER_MIN：原版文字塊緊貼數值標籤（只隔 18），引線只剩 10 像素、看起來被標籤蓋掉（短柱最明顯）
+    const y0 = y - vlab - 4 * u, bottom = Math.max(F.y + lh * lines.length, Math.min(Math.min(y, ...cover) - vlab - 18 * u, y0 - LEADER_MIN * u * fs - 10 * u));   // 文字块底边
+    if (dot !== 'none') { c.fillStyle = L.col.ink; c.beginPath(); c.arc(x - bw / 2, y, 9 * u * Math.max(0, s), 0, 7); c.fill(); }   // [Danny 本机改] 圆点放在柱顶左角：放柱顶正中会压到柱上数值的字底
+    const y1 = bottom + 10 * u;
+    if (y0 - y1 > 6 * u) { c.strokeStyle = INK; c.lineWidth = 2 * u; c.beginPath(); c.moveTo(x, y0); c.lineTo(lerp(x, cx, lp), lerp(y0, y1, lp)); c.stroke(); }
+    c.globalAlpha = alpha * fp; c.fillStyle = INK; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
+    lines.forEach((ln, i) => { c.font = i === 0 ? `700 ${50 * u * fs}px ${NUM}` : `400 ${28 * u * fs}px ${CN}`; haloText(c, ln, cx, bottom - (lines.length - 1 - i) * lh * (i === 0 ? 1 : 0.62) + (1 - fp) * 12 * u, 10 * u); });   // [article-to-video 內嵌修改] 描白邊（試跑 #9）
+    c.restore();
+  } else {
+    const a = kind === 'bar' ? [x - bw / 2, y] : [x, y];
+    const right = a[0] > F.x + F.w * 0.55, co = kind === 'line' ? h.co : null;   // [article-to-video 內嵌修改] 折線：位置照 placeLineLabel 挑的（不壓線、零軸）
+    const tx = co ? co.tx : right ? a[0] - 60 * u : a[0] + 60 * u;
+    const ty = co ? co.ty : Math.max(F.y + 60 * u, a[1] - 140 * u);   // [article-to-video 內嵌修改] 負數柱另外處理（上面那段），這裡只剩正數柱與折線、K 線
+    CH.callout(c, k, 0, { x: a[0], y: a[1], tx, ty, lines, col: INK, dotCol: L.col.ink, font: `700 ${50 * u}px ${NUM}`, font2: `400 ${28 * u * fs}px ${CN}`, align: co ? co.align : right ? 'right' : 'left', r: 9 * u, halo: 10 * u, alpha, dot });
+  }
 }
 function segX(a, b, p, q) { const o = (r, s, v) => Math.sign((s[0] - r[0]) * (v[1] - r[1]) - (s[1] - r[1]) * (v[0] - r[0])); return o(a, b, p) !== o(a, b, q) && o(p, q, a) !== o(p, q, b); }
 // [article-to-video 內嵌修改] 等寬數字（同 TY.tabular）＋白邊：先描一圈白、再填字，格線、面積底色碰不到字

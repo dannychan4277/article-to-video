@@ -237,8 +237,20 @@ def _carry(cue: Cue) -> Cue:
     return Cue(kind=cue.kind, at=at, fields=dict(cue.fields), where=cue.where + "（沿用）", carried=True)
 
 
+def _carry_highlight(cue: Cue, data: Mapping[str, Any]) -> Cue:
+    """上一個分鏡最後的標註沿用過來：字和 index 照上一個分鏡解好寫死（data.carried），接續分鏡自己的 data.highlight 不會蓋到它。"""
+    h = resolve_highlight(cue.fields, data)
+    q: dict[str, Any] = {"carried": True}
+    if h["index"] is not None:
+        q["index"] = h["index"]
+    fields: dict[str, Any] = {"kind": "highlight", "data": q}
+    fields.update({k: h[k] for k in ("text", "sub") if h[k] is not None})
+    return Cue(kind="highlight", at=CONTINUATION_AT, fields=fields, where=cue.where + "（沿用）", carried=True)
+
+
 def effective_chart(shots: list[Shot], i: int) -> tuple[dict[str, Any], list[Cue]]:
-    """第 i 個分鏡實際生效的圖表 data 與 cue（接續分鏡會沿用上一個）。沿用的 cue 排在前面、時間已改成負數。"""
+    """第 i 個分鏡實際生效的圖表 data 與 cue（接續分鏡會沿用上一個）。沿用的 cue 排在前面、時間已改成負數。
+    上一個分鏡最後的標註也沿用（第一幀就在、淡掉的柱照樣淡著），到這個分鏡自己的 highlight cue 才換。"""
     shot = shots[i]
     assert shot.chart is not None
     if not shot.continues or i == 0 or shots[i - 1].chart is None:
@@ -246,6 +258,9 @@ def effective_chart(shots: list[Shot], i: int) -> tuple[dict[str, Any], list[Cue
     p_data, p_cues = effective_chart(shots, i - 1)
     own_number = any(c.kind == "number" for c in shot.chart.cues)
     carried = [_carry(c) for c in p_cues if c.kind != "highlight" and not (own_number and c.kind == "number")]
+    p_labels = [c for c in p_cues if c.kind == "highlight"]
+    if p_labels:
+        carried.append(_carry_highlight(p_labels[-1], p_data))
     return {**p_data, **shot.chart.data}, carried + list(shot.chart.cues)
 
 
@@ -467,17 +482,24 @@ def resolve_highlight(fields: Mapping[str, Any], data: Mapping[str, Any]) -> dic
 
 
 def _chain_layout(project: Project, members: list[int]) -> dict[str, Any]:
-    """一串接續分鏡的版面要用到的東西（給引擎 data.chainLayout）：整串每個分鏡自己的標註（已經解好字和 index）、
-    整串有沒有大數字。引擎照整串的需要留白，每個分鏡的刻度、圖區都一樣，切點不跳。"""
+    """一串接續分鏡的版面要用到的東西（給引擎 data.chainLayout）：整串每個分鏡自己的標註標哪一點、幾行字
+    （折線另外帶字：標註擺哪、要不要多留空間看字多寬），整串有沒有大數字。引擎照整串的需要留白，每個分鏡的
+    刻度、圖區都一樣，切點不跳。只帶版面用得到的：柱狀圖改後面分鏡的標註字，前面的分鏡不用重渲。"""
     highlights: list[dict[str, Any]] = []
     number = False
     for n in members:
         shot = project.shots[n]
-        data, _ = effective_chart(project.shots, n)
+        data, cues = effective_chart(project.shots, n)
+        kind = next((c.kind for c in cues if c.kind in ("bar", "line", "candle")), data.get("chart", "bar"))
         for cue in shot.chart.cues:
             if cue.kind == "highlight":
                 h = resolve_highlight(cue.fields, data)
-                highlights.append({k: v for k, v in h.items() if v is not None})
+                item: dict[str, Any] = {"lines": sum(1 for k in ("text", "sub") if h[k])}
+                if h["index"] is not None:
+                    item["index"] = h["index"]
+                if kind == "line":
+                    item.update({k: h[k] for k in ("text", "sub") if h[k]})
+                highlights.append(item)
             number = number or cue.kind == "number"
     return {"highlights": highlights, "number": number}
 

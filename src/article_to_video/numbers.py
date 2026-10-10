@@ -70,7 +70,7 @@ from typing import TYPE_CHECKING, Any
 from article_to_video.article import ArticlePaths
 from article_to_video.project import ProjectError, ProjectPaths
 from article_to_video.public_data import WHITELIST, PublicChart
-from article_to_video.timeline import ShotTiming, effective_chart
+from article_to_video.timeline import ShotTiming, effective_chart, resolve_highlight
 
 if TYPE_CHECKING:
     from article_to_video.build import BuildPlan
@@ -651,12 +651,15 @@ def chart_texts(plan: BuildPlan, st: ShotTiming) -> list[ScreenText]:
         if label:
             out.append(ScreenText("類目名", label, public=idx))
 
-    hq = next((c for c in cues if c.kind == "highlight"), None)
-    if hq is not None:  # 引擎只畫第一個 highlight cue；字以 cue 自己的為準，沒寫就用 data.highlight
-        h = data.get("highlight") or {}
+    seen: set[str] = set()
+    for hq in cues:  # 標註照時間一個換一個：接續分鏡沿用上一個分鏡的標註（換之前還在畫面上），再換成自己的
+        if hq.kind != "highlight":
+            continue
+        h = resolve_highlight(hq.fields, data)
         for k in ("text", "sub"):
-            v = hq.fields.get(k) if hq.fields.get(k) not in (None, "") else h.get(k)
-            if isinstance(v, str) and v:
+            v = h[k]
+            if isinstance(v, str) and v and v not in seen:
+                seen.add(v)
                 out.append(ScreenText("標註", v))
     for c in cues:
         if c.kind != "number":

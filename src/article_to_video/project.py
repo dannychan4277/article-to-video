@@ -879,9 +879,6 @@ def _check_highlight(h: Any, where: str, problems: _Problems) -> None:
             problems.add(f"{where} 的 {k} 要是文字")
 
 
-_HIGHLIGHT_CUE = '{"at": 錨點, "kind": "highlight"}'
-
-
 def _check_vox_boxes(shots: list[Shot], problems: _Problems) -> None:
     """框畫在它前面最近的那件圖上（同一張桌面，接續分鏡算同一張）：前面要有圖或剪報；
     rect 框原圖、find 框剪報。"""
@@ -908,10 +905,9 @@ def _check_vox_boxes(shots: list[Shot], problems: _Problems) -> None:
 
 
 def _check_continuations(shots: list[Shot], problems: _Problems) -> None:
-    """接續分鏡：上一個要是財經圖表。整串的版面（標註、大數字要留的空間）由建置一次算好（timeline._chain_layout），
-    所以標註行數、大數字有無不用一樣。"""
-    from article_to_video.timeline import effective_chart  # 避免循環匯入
-
+    """接續分鏡：上一個要是財經圖表（或兩個都是 Vox）。整串的版面（標註、大數字要留的空間）由建置一次算好
+    （timeline._chain_layout），上一個分鏡的標註也會沿用到這個分鏡自己的標註出現為止，所以標註行數、
+    有沒有自己的標註 cue、大數字有無都不用一樣。"""
     for i, shot in enumerate(shots):
         if not shot.continues:
             continue
@@ -926,10 +922,3 @@ def _check_continuations(shots: list[Shot], problems: _Problems) -> None:
             continue
         if shot.chart is None or prev.chart is None:
             problems.add(f"{shot.label} 設了 continues，但它和上一個分鏡 {prev.id} 都要是財經圖表分鏡才能接續")
-            continue
-        _, p_cues = effective_chart(shots, i - 1)
-        if any(c.kind == "highlight" for c in p_cues) and not any(c.kind == "highlight" for c in shot.chart.cues):
-            problems.add(
-                f"{shot.label} 接續 {prev.id}，但 {shot.id} 沒有自己的標註 cue，上一個分鏡的標註不會沿用過來。"
-                f"修法：{shot.id} 加一個 {_HIGHLIGHT_CUE}（要換的標註字寫在 data.highlight 或 cue 的 text）"
-            )

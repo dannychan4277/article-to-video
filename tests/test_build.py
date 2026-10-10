@@ -258,12 +258,13 @@ def test_continuation_keeps_layout_and_ticks_across_the_cut(built_project):
 
 
 def test_continuation_starts_fully_drawn(built_project):
-    """接續分鏡的沿用 cue 都是負時間：片段第一幀標題、兩根柱都已畫好。"""
+    """接續分鏡的沿用 cue 都是負時間：片段第一幀標題、兩根柱、SH01 的標註都已畫好（SH02 自己的標註到「倒掛」才換）。"""
     spec = json.loads((built_project.dir / "build" / "16x9" / "specs" / "SH02.json").read_text(encoding="utf-8"))
     carried = [c for c in spec["cues"] if c["at"] < 0]
-    assert sorted(c["kind"] for c in carried) == ["bar", "bar", "title"]
+    assert sorted(c["kind"] for c in carried) == ["bar", "bar", "highlight", "title"]
     assert all(c["at"] <= -3 for c in carried)
-    assert not any(c["kind"] == "highlight" and c["at"] < 0 for c in spec["cues"])
+    [label] = [c for c in carried if c["kind"] == "highlight"]
+    assert (label["text"], label["data"]["index"]) == ("短天期較高", 0)  # SH01 的標註，不是 SH02 data.highlight 的字
 
 
 def test_chart_specs_default_the_axis_note_to_traditional_chinese(built_project):

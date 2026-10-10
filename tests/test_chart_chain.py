@@ -85,7 +85,7 @@ LAST = -1.0
 STILLS = {
     "SH01": [0.0, LAST],
     "SH02": [0.0, 0.7, LAST],   # 0.7 秒：還沒唸到「跌最深」
-    "SH03": [0.0, LAST],
+    "SH03": [0.0, 0.2, LAST],
     "SH04": [0.0, LAST],
     "SH05": [0.0, LAST],
     "SH06": [0.0, LAST],
@@ -163,3 +163,35 @@ def test_axis_stays_put_through_a_continued_chain(chain, shots):
     for sid in shots[1:]:
         n = changed(tick_column(chain, chain.last(sid), ref), tick_column(chain, ref, ref))
         assert n == 0, f"{sid} 的刻度欄跟 {shots[0]} 不一樣（{n} 個像素）"
+# ---------------------------------------------------------------- 1. 切點看不出來
+
+
+@pytest.mark.parametrize("before, after", [("SH01", "SH02"), ("SH02", "SH03"), ("SH04", "SH05")])
+def test_continued_chart_looks_the_same_across_the_cut(chain, before, after):
+    """上一個分鏡最後一幀 vs 接續分鏡第一幀：標註、淡掉的柱、線尾數值都要一樣（只有這句要換的東西才開始動，
+    第一幀頂多動一點點）。原本：標註在切點消失、淡掉的柱閃回原色、線尾數值跳出來。"""
+    n = changed(chain.last(before), chain.at(after, 0.0))
+    assert n < 400, f"{before}→{after} 切點前後有 {n} 個像素變了"
+
+
+def test_previous_label_stays_until_the_new_one_is_spoken(chain):
+    """SH02 從 s02 開頭切入，到「跌最深」才換標註：在那之前畫面跟切點一樣（SH01 的標註、淡掉的柱都還在）。"""
+    n = changed(chain.at("SH02", 0.0), chain.at("SH02", 0.7))
+    assert n < 50, f"還沒唸到新標註，畫面就變了 {n} 個像素"
+
+
+def dilate(mask: np.ndarray, r: int) -> np.ndarray:
+    """mask 往外擴 r 像素（方形）。"""
+    m = np.pad(mask.astype(np.int64), ((r + 1, r), (r + 1, r)))
+    c = m.cumsum(0).cumsum(1)
+    k = 2 * r + 1
+    return (c[k:, k:] - c[:-k, k:] - c[k:, :-k] + c[:-k, :-k]) > 0
+
+
+def test_only_what_the_new_label_changes_moves_during_the_switch(chain):
+    """SH03 一切入就換標註（丁→乙）：換的那 0.4 秒裡，新舊兩個樣子都一樣的地方（例如兩次都淡掉的「丙」）一直不動。
+    原本：切點先閃回「全部沒淡掉」，再一起淡下去。比對範圍去掉新舊標註附近 50 像素（圓點彈出的光圈）。"""
+    old, new, mid = chain.last("SH02"), chain.last("SH03"), chain.at("SH03", 0.2)
+    same = ~dilate(np.abs(old - new).max(axis=-1) > 8, 50)
+    moved = int(((np.abs(mid - old).max(axis=-1) > 40) & same).sum())
+    assert moved < 150, f"換標註時，新舊都一樣的地方動了 {moved} 個像素"

@@ -107,17 +107,19 @@ CH.candles = (c, rows, xs, yS, cw, p, { up = '#e0322f', down = '#11a05a', lag = 
 // ---------- 标注：圆点弹出（弹簧）→ 脉冲环 → 引线画出 → 文字淡入。时间用秒，便于对口播 ----------
 // lt 秒；t0 开始时刻；(x,y) 数据点；(tx,ty) 文字锚点；lines 第一行用 font、其余用 font2（数字先说，比较后说）
 // [article-to-video 內嵌修改] halo（線寬，預設 0＝不描）：字先描一圈白邊再填，格線、面積底色碰不到字
-CH.callout = (c, lt, t0, { x, y, tx, ty, lines = [], col = '#121212', dotCol = '#e3120b', font = '600 30px sans-serif', font2, align = 'left', r = 11, halo = 0 }) => {
+// [article-to-video 內嵌修改] alpha（整個標註的透明度，預設 1）、dot（'spring' 圓點彈出＋光圈＝原版；'full' 圓點已經在、不彈不閃；'none' 不畫圓點）：
+// 接續分鏡換標註時，舊的整個淡出、同一點換字時圓點不動
+CH.callout = (c, lt, t0, { x, y, tx, ty, lines = [], col = '#121212', dotCol = '#e3120b', font = '600 30px sans-serif', font2, align = 'left', r = 11, halo = 0, alpha = 1, dot = 'spring' }) => {
   const k = lt - t0; if (k <= 0) return;
-  const s = MO.spring(k, { duration: 0.45, bounce: 0.25 });
-  c.save();
-  c.fillStyle = dotCol; c.beginPath(); c.arc(x, y, r * Math.max(0, s), 0, Math.PI * 2); c.fill();
-  const pr = seg(k, 0, 0.6); if (pr > 0 && pr < 1) { c.strokeStyle = dotCol; c.globalAlpha = 1 - pr; c.lineWidth = 3; c.beginPath(); c.arc(x, y, r + pr * 34, 0, Math.PI * 2); c.stroke(); c.globalAlpha = 1; }
+  const s = dot === 'spring' ? MO.spring(k, { duration: 0.45, bounce: 0.25 }) : 1;
+  c.save(); c.globalAlpha = alpha;
+  if (dot !== 'none') { c.fillStyle = dotCol; c.beginPath(); c.arc(x, y, r * Math.max(0, s), 0, Math.PI * 2); c.fill(); }
+  const pr = seg(k, 0, 0.6); if (dot === 'spring' && pr > 0 && pr < 1) { c.strokeStyle = dotCol; c.globalAlpha = alpha * (1 - pr); c.lineWidth = 3; c.beginPath(); c.arc(x, y, r + pr * 34, 0, Math.PI * 2); c.stroke(); c.globalAlpha = alpha; }
   const lp = MO.quintOut(seg(k, 0.12, 0.45));
   if (lp > 0) { c.strokeStyle = col; c.lineWidth = 2; c.beginPath(); c.moveTo(x, y); c.lineTo(lerp(x, tx, lp), lerp(y, ty, lp)); c.stroke(); }
   const fp = MO.quintOut(seg(k, 0.3, 0.7));
   if (fp > 0) {
-    c.globalAlpha = fp; c.fillStyle = col; c.textAlign = align; c.textBaseline = 'alphabetic';
+    c.globalAlpha = alpha * fp; c.fillStyle = col; c.textAlign = align; c.textBaseline = 'alphabetic';
     const dx = align === 'left' ? 12 : align === 'right' ? -12 : 0;
     lines.forEach((L, i) => { c.font = i === 0 ? font : (font2 || font); const px = tx + dx + (1 - fp) * (align === 'right' ? 16 : -16), py = ty + 8 + i * 40;
       if (halo) { c.save(); c.strokeStyle = '#FFFFFF'; c.lineWidth = halo; c.lineJoin = 'round'; c.strokeText(L, px, py); c.restore(); }
