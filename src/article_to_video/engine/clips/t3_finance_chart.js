@@ -45,7 +45,10 @@ return {
     c.font = `700 ${28 * u}px "PuHui-Medium"`; const badgeW = d.badge ? c.measureText(d.badge).width + 28 + 30 * u : 0;
     const srcF = TY.fit(c, d.source || '', W - mL - mR - badgeW, 26 * u * fsz, 'PuHui-Medium', { maxLines: 2, min: 0.8 });
     const top = ctx.safe.top + 80 * u + t.lines.length * t.size * 1.25 + 60 * u + (subF.lines.length - 1) * subF.size * 1.3;
-    const band = ctx.of('number').length ? 150 * u : 0;                 // 有 number：给大数字单独留一条，不压在图区里（折线一上涨，右上角正好是线头）
+    // [article-to-video 內嵌修改] 一串接續分鏡的版面一次算好：data.chainLayout（建置給的）列出整串每個分鏡的標註、整串有沒有大數字，
+    // 留白照整串的需要留，每個分鏡的刻度、圖區都一樣（原版只看自己這個分鏡的第一個標註，標到負數柱時底下多一格、切點刻度跳）
+    const CL = d.chainLayout || {}, hls = [...ctx.of('highlight').map(q => hlOf(q, d, S.length)), ...(CL.highlights || []).map(h => hlOf({ text: h.text, sub: h.sub, data: { index: h.index, carried: true } }, d, S.length))];
+    const band = ctx.of('number').length || CL.number ? 150 * u : 0;     // 有 number：给大数字单独留一条，不压在图区里（折线一上涨，右上角正好是线头）
     const F = { x: mL + 20 * u, y: top + 40 * u + band, w: W - mL - mR - 40 * u, h: H - top - 40 * u - band - (tall ? 260 : 190) * u - ctx.safe.bottom - (srcF.lines.length - 1) * srcF.size * 1.3 };   // safe.bottom：字幕带整条让出来，来源行落在它上面
     const n = S.length, slot = (F.w - 80 * u) / n, xs = S.map((_, i) => F.x + slot * (i + 0.5));   // 右边留 80px 给刻度值，别压在最后一根柱上
     // x 轴：时间序列（折线/K 线，或 data.xAxis:'time'）按间隔抽稀；类目（柱状图默认）每根都要有名字，放不下就缩字、再放不下错成两行
@@ -62,17 +65,18 @@ return {
       const vmin = Math.min(...vals), need = 56 * u * fs0; roomFor(need);
       while ((vmin - ticks[0]) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.unshift(+(ticks[0] - step).toFixed(10));
     }
-    const qh1 = ctx.of('highlight')[0], H1 = d.highlight || {}, hiI = qh1 ? (qh1.data && qh1.data.index != null ? qh1.data.index : (H1.index != null ? H1.index : S.length - 1)) : -1;
-    if (kind === 'bar' && hiI >= 0 && S[hiI] && S[hiI].value >= 0) {   // 标注的柱子上方要留够文字块（[Danny 本机改] 原本只管「不是最高那根」；标最高那根时斜向标注被 ty 夹在 F.y+60，文字压回柱子上）
-      const nL = [C(qh1.text, H1.text), C(qh1.sub, H1.sub)].filter(Boolean).length, need = (52 * nL + 44 + 30) * u * fs0, vmax = Math.max(...vals); roomFor(need);
+    const qh1 = ctx.of('highlight')[0], H1 = d.highlight || {}, hiI = qh1 ? hlOf(qh1, d, S.length).index : -1;
+    const posL = hls.filter(h => S[h.index] && S[h.index].value >= 0), negL = hls.filter(h => S[h.index] && S[h.index].value < 0);   // [article-to-video 內嵌修改] 整串的標註（見上面 chainLayout）
+    if (kind === 'bar' && posL.length) {   // 标注的柱子上方要留够文字块（[Danny 本机改] 原本只管「不是最高那根」；标最高那根时斜向标注被 ty 夹在 F.y+60，文字压回柱子上）
+      const nL = Math.max(...posL.map(h => h.lines.length)), need = (52 * nL + 44 + 30) * u * fs0, vmax = Math.max(...vals); roomFor(need);
       while ((ticks[ticks.length - 1] - vmax) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
     }
-    if (kind === 'bar' && hiI >= 0 && S[hiI] && S[hiI].value < 0) {    // [article-to-video 內嵌修改] 負數柱的標註放在數值標籤正下方：最低那根柱下面再留出標註文字的高度
-      const nL = [C(qh1.text, H1.text), C(qh1.sub, H1.sub)].filter(Boolean).length, vmin = Math.min(...vals);
+    if (kind === 'bar' && negL.length) {    // [article-to-video 內嵌修改] 負數柱的標註放在數值標籤正下方：最低那根柱下面再留出標註文字的高度
+      const nL = Math.max(...negL.map(h => h.lines.length)), vmin = Math.min(...vals);
       const need = (NEG_LABEL + NEG_GAP + NEG_LINE1 + NEG_LINE2 * (nL - 1) + 12) * u * fs0; roomFor(need);
       while ((vmin - ticks[0]) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.unshift(+(ticks[0] - step).toFixed(10));
     }
-    if (kind === 'line' && hiI >= 0) {                                    // [Danny 本机改] 折线标注：线的最高点之上留够文字块，斜向标注才不会压在线上
+    if (kind === 'line' && hls.length) {                                  // [Danny 本机改] 折线标注：线的最高点之上留够文字块，斜向标注才不会压在线上
       const vmax = Math.max(...vals), need = 170 * u * fs0; roomFor(need);
       while ((ticks[ticks.length - 1] - vmax) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
     }
@@ -228,6 +232,14 @@ return {
   },
 };
 function C(...a) { return a.find(v => v != null && v !== ''); }
+// [article-to-video 內嵌修改] 一個 highlight cue 標哪一點、寫哪幾行：cue 自己寫的優先，沒寫用 data.highlight，index 再沒有就是最後一點。
+// data.carried（建置從上一個分鏡沿用過來的標註、chainLayout 列的標註）：字和 index 都已經寫死，不看這個分鏡的 data.highlight
+function hlOf(q, d, n) {
+  const H = d.highlight || {}, fixed = !!(q.data && q.data.carried), qi = q.data && q.data.index;
+  const index = qi != null ? qi : !fixed && H.index != null ? H.index : n - 1;
+  const lines = fixed ? [q.text, q.sub].filter(Boolean) : [C(q.text, H.text), C(q.sub, H.sub)].filter(Boolean);
+  return { index, lines, q };
+}
 // [article-to-video 內嵌修改] 折線的標註與線尾數值擺哪（真實試跑 #9）。原版標註固定在點的右上（或左上）140、線尾數值固定寫在線頭左上，
 // 常壓到零軸、線本身和格線（線最後往下掉時，線尾數值正好被線穿過）。改成從幾個候選位置挑分數最低的：
 // 壓到線、壓到線尾數值＝重罰；壓到零軸＝中罰；引線穿過折線＝中罰；壓到格線＝輕罰（字另外描白邊，格線碰不到字）；

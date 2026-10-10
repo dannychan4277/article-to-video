@@ -448,10 +448,49 @@ def _push_chains(timeline: Timeline) -> dict[str, tuple[int, int, str]]:
     return out
 
 
+def resolve_highlight(fields: Mapping[str, Any], data: Mapping[str, Any]) -> dict[str, Any]:
+    """一個 highlight cue 實際標哪一點、寫什麼（跟引擎 t3_finance_chart 的 hlOf 同一套規則）：cue 自己寫的 text、sub、
+    data.index 優先，沒寫（或空字串）用 data.highlight 的；index 都沒寫是 None（引擎當最後一點）。
+    建置沿用過來的標註（data.carried）字和 index 已經寫死，不看 data.highlight。"""
+    q = fields.get("data") if isinstance(fields.get("data"), Mapping) else {}
+    h = data.get("highlight") if isinstance(data.get("highlight"), Mapping) else {}
+    fixed = bool(q.get("carried"))
+
+    def pick(key: str) -> Any:
+        own = fields.get(key)
+        if fixed or own not in (None, ""):
+            return own if own not in (None, "") else None
+        return h.get(key) if h.get(key) not in (None, "") else None
+
+    index = q.get("index") if q.get("index") is not None else (None if fixed else h.get("index"))
+    return {"index": index, "text": pick("text"), "sub": pick("sub")}
+
+
+def _chain_layout(project: Project, members: list[int]) -> dict[str, Any]:
+    """一串接續分鏡的版面要用到的東西（給引擎 data.chainLayout）：整串每個分鏡自己的標註（已經解好字和 index）、
+    整串有沒有大數字。引擎照整串的需要留白，每個分鏡的刻度、圖區都一樣，切點不跳。"""
+    highlights: list[dict[str, Any]] = []
+    number = False
+    for n in members:
+        shot = project.shots[n]
+        data, _ = effective_chart(project.shots, n)
+        for cue in shot.chart.cues:
+            if cue.kind == "highlight":
+                h = resolve_highlight(cue.fields, data)
+                highlights.append({k: v for k, v in h.items() if v is not None})
+            number = number or cue.kind == "number"
+    return {"highlights": highlights, "number": number}
+
+
 def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_16x9) -> list[ClipPlan]:
     fps = fmt.fps
     chains = _push_chains(timeline)
     head_push = {st.shot.id: st.shot.chart.data.get("push") for st in timeline.shots if st.shot.chart}
+    members: dict[str, list[int]] = {}
+    for n, st in enumerate(timeline.shots):
+        if st.shot.chart is not None:
+            members.setdefault(chains[st.shot.id][2], []).append(n)
+    layouts = {head: _chain_layout(project, ns) for head, ns in members.items() if len(ns) > 1}
     plans: list[ClipPlan] = []
     for n, st in enumerate(timeline.shots):
         shot = st.shot
@@ -462,6 +501,8 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
         data, _ = effective_chart(project.shots, n)
         data = apply_brand(prepare_chart_data(data), project.settings.brand_color)
         g0, g1, head = chains[shot.id]
+        if head in layouts:
+            data["chainLayout"] = layouts[head]
         chain_secs = (g1 - g0) / fps
         total_push = head_push.get(head)
         rate = total_push / chain_secs if total_push is not None else min(0.004, 0.06 / chain_secs)

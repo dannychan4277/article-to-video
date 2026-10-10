@@ -62,16 +62,6 @@ def continuation_changes_series(shots, _):
     sh(shots, "SH02")["chart"]["data"]["series"] = [{"label": "五年期", "value": 4.0}]
 
 
-def continuation_changes_highlight_lines(shots, _):
-    sh(shots, "SH02")["chart"]["data"]["highlight"]["sub"] = "多一行說明"
-
-
-def chain_head_without_highlight_cue(shots, _):
-    """data.highlight 寫了，但這串的第一個分鏡沒有 highlight cue：引擎只為有標註 cue 的分鏡留標註的空間。"""
-    cues = sh(shots, "SH01")["chart"]["cues"]
-    cues[:] = [c for c in cues if c["kind"] != "highlight"]
-
-
 def continuation_without_its_own_highlight_cue(shots, _):
     """接續分鏡沒寫自己的 highlight cue：上一個的標註不會沿用過來。"""
     sh(shots, "SH02")["chart"]["cues"] = []
@@ -97,9 +87,6 @@ CASES = {
     "分鏡長度是零": (zero_length_shot, ["分鏡 SH02", "SH01", "切入點"]),
     "沒有這個旁白段": (missing_segment, ["分鏡 SH02", "start", "「s09」"]),
     "接續分鏡改了數列": (continuation_changes_series, ["分鏡 SH02", "接續", "series"]),
-    "接續分鏡標註行數不同": (continuation_changes_highlight_lines, ["分鏡 SH02", "SH01", "標註行數", "sub"]),
-    "接續鏈第一個分鏡沒有標註 cue": (chain_head_without_highlight_cue,
-                            ["分鏡 SH02", "SH01 沒有標註 cue", "\"kind\": \"highlight\"", "continues"]),
     "接續分鏡沒有自己的標註 cue": (continuation_without_its_own_highlight_cue,
                            ["分鏡 SH02", "SH02 沒有自己的標註 cue", "不會沿用", "\"kind\": \"highlight\""]),
     "不認得的 cue": (unknown_cue_kind, ["分鏡 SH01", "chart.cues[0]", "titel"]),
@@ -121,12 +108,34 @@ def test_bad_project_is_blocked_with_a_clear_message(tmp_path, case):
     assert not (root / "build" / "16x9" / "clips").exists()  # 渲染前就擋下
 
 
-@pytest.mark.parametrize("edit", [chain_head_without_highlight_cue, continuation_without_its_own_highlight_cue])
-def test_a_missing_highlight_cue_is_not_blamed_on_text_and_sub(tmp_path, edit):
+def test_a_missing_highlight_cue_is_not_blamed_on_text_and_sub(tmp_path):
     """少的是標註 cue，不是 text／sub：訊息不能叫人去改 text、sub（試跑時照著改了也沒用）。"""
     with pytest.raises(ProjectError) as err:
-        build_project(make_project(tmp_path, edit), tts="fake")
+        build_project(make_project(tmp_path, continuation_without_its_own_highlight_cue), tts="fake")
     assert "text、sub 都寫或都不寫" not in str(err.value)
+
+
+def _sub_on_continuation_only(shots, _):
+    sh(shots, "SH02")["chart"]["data"]["highlight"]["sub"] = "多一行說明"
+
+
+def _no_label_on_chain_head(shots, _):
+    cues = sh(shots, "SH01")["chart"]["cues"]
+    cues[:] = [c for c in cues if c["kind"] != "highlight"]
+
+
+def _number_on_continuation_only(shots, _):
+    sh(shots, "SH02")["chart"]["cues"].append(
+        {"at": {"segment": "s02", "word": "倒掛"}, "kind": "number", "text": "差", "data": {"value": 1}})
+
+
+@pytest.mark.parametrize("edit", [_sub_on_continuation_only, _no_label_on_chain_head, _number_on_continuation_only])
+def test_a_continuation_may_add_label_lines_a_first_label_or_a_big_number(tmp_path, edit):
+    """整串接續分鏡的版面由建置一次算好（照整串所有的標註、大數字留空間），所以接續分鏡多一行標註、
+    整串第一個分鏡沒有標註、只有後面的分鏡有大數字，刻度都不會跳，不用擋。"""
+    from article_to_video.build import plan_build
+
+    plan_build(make_project(tmp_path, edit), tts="fake")
 
 
 def test_repeated_word_resolves_with_occurrence(tmp_path):
