@@ -12,7 +12,9 @@
 
 ## 需要什麼
 
-- macOS（Apple Silicon 或 Intel），要能上網。
+- **Apple Silicon（M 系列晶片）的 Mac，macOS 15 以上**，要能上網。
+  - macOS 14 以下、或 Intel 晶片的 Mac 裝不起來：做影片要用的 ffmpeg 在這些電腦上沒有現成版本，要從原始碼編譯好幾個小時，很容易失敗。安裝流程一開始就會檢查，不符合會先停下來說明。
+  - 怎麼看：蘋果選單 →「關於這台 Mac」，看「晶片」和「macOS」。Apple Silicon 但還是 macOS 14 的話，先到「系統設定 → 一般 → 軟體更新」升級。
 - Claude 桌面 app 的 **Code** 分頁。
 - 其他工具（Homebrew、能燒字幕的 ffmpeg、uv、Chromium）由安裝流程自動裝，已經有的會略過。
 
