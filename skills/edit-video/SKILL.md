@@ -108,7 +108,8 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings set -
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video preview "<專案>" --no-open --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-- 只有改到的分鏡重渲靜態圖、只有改到的旁白段重新配音，幾秒鐘。它會印這是**第幾版**和這版改了哪些分鏡的靜態圖路徑：每一張都 Read 看過。
+- 只有改到的分鏡重渲靜態圖、只有改到的旁白段重新配音，幾秒鐘。它會印給他看時會是**第幾版**，和跟上次預覽比改了哪些分鏡的靜態圖路徑：
+  每一張都 Read 看過。`--no-open` 的預覽是你自己檢查，不算一版：自己改幾輪都一樣，下一步打開給他看才是新的一版。
 - 數字對帳那行有「找不到出處」就先改好（文章裡的數字；他圖上的數字記進 figure_numbers.json；算出來的宣告 `derived`）。
 
 - 改得很多（大約三分之一以上的分鏡，或整段旁白重寫）：照 checks-and-review.md 再 build、checks、審一輪，再給他看。
@@ -119,7 +120,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video preview "<專�
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video open-review "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-跟他說這是第幾版、改了哪幾張（頁面上標「這版改過」）、怎麼改的。這一版先看靜態圖，不用等整支片重做。
+跟他說這是第幾版、改了哪幾張（頁面上標「這版改過」，比的是他上次看到的那一版）、怎麼改的。這一版先看靜態圖，不用等整支片重做。
 他想先看整支片再決定：
 
 ```
@@ -139,7 +140,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video publish "<專�
 它會建置成片（沒改的片段用快取）、跑自動檢查，把成片和字幕檔放進「影片 → 解說影片 → 日期-片名」，在 Finder 裡指給他看。
 片長或改得多時用背景執行（run_in_background）。被擋下時：
 
-- **版本對不上、改過還沒給他看**：先預覽、給他看新的一版，他點頭再出片。不要自己換版號硬出。
+- **版本對不上、改過還沒給他看**：先預覽、`open-review` 給他看新的一版，他點頭再出片。不要自己換版號硬出。
 - **還沒做過獨立審片**：照 checks-and-review.md 做一輪再出片。
 - **自動檢查查出必修、數字對帳**：照訊息改 → 預覽 → 給他看 → 他點頭 → 出片。
   你覺得不用改的必修要問他，他說不改才記下（代號照訊息抄）：

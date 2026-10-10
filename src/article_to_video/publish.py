@@ -1,8 +1,8 @@
 """出片：作者看過審片頁、點頭之後，把成片和字幕檔放進「影片／解說影片／日期-標題」（videos.py）。
 
 publish_project() 照順序（前面的檢查不用渲染，幾秒內就擋下）：
-  1. 作者點頭的版本：審片頁現在是第幾版、分鏡與旁白還是不是那一版（review.seen_version）。
-     作者說「可以」的是第 N 版，就要 --version N；之後 Claude 又改過（版本變了、或改了還沒預覽）→ 擋下，先給作者看。
+  1. 作者點頭的版本：作者上次打開看到的審片頁是第幾版、分鏡與旁白還是不是那一版（review.seen_version）。
+     作者說「可以」的是第 N 版，就要 --version N；之後 Claude 又改過（還沒 open-review 給他看）→ 擋下，先給作者看。
   2. 獨立審片：使用者設定開著，這支片卻一輪都沒審過 → 擋下（主流程在作者第一次看審片頁之前就要審一輪）。
      之後作者要求的修改不用每次重審：作者自己看過那些改動了。
   3. 建置成片（build_project：數字對帳、Vox 框核對、還沒處理的必修照樣擋；片段沒變的用快取）。
@@ -52,17 +52,18 @@ def _check_approved(plan: BuildPlan, version: int, data_dir: str | os.PathLike |
     from article_to_video.review import seen_version
 
     root, aspect = plan.project.root, aspect_args(plan.format.name)
-    preview = cli_command("preview", root, *aspect, "--no-open", data_dir=data_dir)
+    show = cli_command("open-review", root, *aspect, data_dir=data_dir)
     stored, same = seen_version(plan)
     if stored is None:
-        raise ProjectError("這支片還沒有審片頁，作者還沒看過", title="還不能出片",
-                           hint=f"先跑 preview（{preview}），給作者看過、他點頭再出片。")
+        raise ProjectError("作者還沒看過這支片的審片頁（--no-open 的預覽、建置是你自己檢查用的，不算給他看）",
+                           title="還不能出片",
+                           hint=f"檢查都做完之後打開審片頁給作者看（{show}），他點頭再用頁首寫的版號出片。")
     if not same:
         raise ProjectError(
             f"審片頁第 {stored} 版之後，分鏡或旁白又改過了，作者還沒看過改過的樣子",
             title="還不能出片",
-            hint=f"先跑 preview（{preview}，會變成第 {stored + 1} 版），"
-                 "把改了什麼告訴作者、打開審片頁給他看，他點頭再用那一版的版號出片。",
+            hint=f"打開審片頁給作者看（{show}，會變成第 {stored + 1} 版），"
+                 "把改了什麼告訴他，他點頭再用那一版的版號出片。",
         )
     if stored != version:
         raise ProjectError(

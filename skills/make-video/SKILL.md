@@ -113,7 +113,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video narrate "<專�
 文章的圖怎麼重畫…）寫 `<專案>/shots.json`，格式見 `formats.md`。每個分鏡都是財經圖表（`chart`）。
 用公有數據畫走勢時第一次要連網。
 
-## 6. 預覽：分鏡靜態圖、數字對帳（先不給作者看）
+## 6. 預覽：分鏡靜態圖、數字對帳（先不給作者看：一定加 `--no-open`，不算一版）
 
 ```
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video preview "<專案>" --no-open --data-dir ${CLAUDE_PLUGIN_DATA}
@@ -178,8 +178,9 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video resolve "<專�
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video open-review "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-它會在瀏覽器打開審片頁、印出這是**第幾版**（記住，出片時要用）。你自己檢查時改過幾輪，頁首就不是第 1 版、
-卡片上也會標「這版改過」：跟他說那是你自己檢查時改的，從這一版開始看就好。用口語跟作者說：
+它會在瀏覽器打開審片頁、印出這是**第幾版**（記住，出片時要用）。版本跟著作者看到的走：只有打開給他看
+（`open-review`，或 preview／build 沒加 `--no-open`）才算一版，你前面加了 `--no-open` 的預覽、建置不算，
+所以他第一次打開就是第 1 版、卡片上沒有「這版改過」。用口語跟作者說：
 
 - 每張卡是一個分鏡：編號、畫面、那句旁白、畫面上數字的出處。上面可以看整支片。
 - 有重畫他文章的圖的話：那幾張卡的數字標「原文圖表」，是你看他的圖讀出來的，**請他對照自己的原圖**，讀錯了就在那張卡寫正確的數字。
