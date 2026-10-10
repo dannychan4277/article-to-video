@@ -253,6 +253,14 @@ def test_cards_also_show_the_moment_just_before_each_later_beat(previewed_projec
     assert all(t < SH01_END for _, t in sh01.stills)
 
 
+def test_the_menu_offers_only_what_the_plugin_makes_now(previewed_project):
+    """「能加什麼」照外掛現在做得到的寫：只用財經圖表（ADR 0001），文章裡的圖是重畫成圖表，不是貼剪報、畫框。"""
+    menu = read_review(previewed_project.dir).menu_text
+    assert "把文章裡的圖重畫成圖表" in menu
+    for gone in ("剪報", "框", "桌面", "Vox"):
+        assert gone not in menu, f"「能加什麼」還有「{gone}」：{menu}"
+
+
 def test_each_card_shows_where_the_shot_sits_in_the_video(previewed_project):
     page = read_review(previewed_project.dir)
     assert [c.timecode.strip() for c in page.cards] == ["0:00.0–0:05.7", "0:05.7–0:07.2"]
