@@ -86,6 +86,12 @@ def test_chart_source_notes_stay_whole_and_article_references_group_cleanly():
     ]
 
 
+def test_charts_redrawn_from_article_figures_are_credited_together():
+    """文章的圖重畫成圖表（ADR 0001）：來源行寫「來源：作者原文（圖N）」，片尾卡併成一行；寫成「資料：」也一樣。"""
+    assert merge_sources(["來源：作者原文（圖2）", "資料：作者原文（圖1）", "來源：FRED（DGS10）", "作者原文（圖2）"]) == [
+        "作者原文（圖1、圖2）", "FRED（DGS10）"]
+
+
 def test_public_data_charts_show_up_on_the_end_card(tmp_path, fred):
     """公有數據自動寫的來源行也會進片尾卡；同出處、同算法的兩個系列併成一行。"""
     from datetime import date

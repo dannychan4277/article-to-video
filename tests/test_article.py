@@ -432,6 +432,9 @@ def test_pasted_text_is_saved_as_paragraphs(tmp_path):
 def test_rerun_replaces_the_previous_extraction(tmp_path, sample_pdfs):
     project = tmp_path / "專案"
     extract_article(project, sample_pdfs.normal)
+    # Claude 讀上一份的圖記下的數字（原文圖表）：圖換了就不算數，跟著舊的圖一起拿掉
+    (project / "article" / "figure_numbers.json").write_text(
+        '{"figures": {"圖1": [{"value": "4.58", "label": "兩年期"}]}}', encoding="utf-8")
     extract_article(project, text="換成貼上的文字。")
 
     article = project / "article"

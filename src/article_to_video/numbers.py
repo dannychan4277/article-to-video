@@ -12,14 +12,21 @@
   接續分鏡只算它自己新出現的字（沿用的圖記在上一個分鏡）。
   不算：來源行（data.source，那是出處本身）、預設的縱軸說明「縱軸未從 0 開始」、刻度值（引擎依數據範圍排的尺，
   不是主張；數據本身已經對過帳）、片尾卡（不是分鏡：頻道名、彙整的來源行、固定的免責聲明，都是出處或固定字）。
-  Vox 索引卡（#8）：寫一個 ScreenTextSource（BuildPlan, ShotTiming → [ScreenText]）加進 default_sources()。
+  Vox 分鏡（內部開關打開時才有，ADR 0001）的標題卡、索引卡、圖說、剪報：vox.vox_texts，也在 default_sources()。
 
 出處分類（每個數字照順序找，找到就停）：
   public   白名單公有數據：這個分鏡的公有數據圖畫的值、期間標籤、系列名稱（附系列、期間、擷取日期）。
   derived  推算：分鏡設定的 derived 宣告了算式，算式的每個輸入都找得到出處（原文或這張圖的公有數據；10、100、1000…
            換算單位的常數免），而且算出來四捨五入到畫面的位數＝畫面上的數字。
   article  原文出現：文章裡有一個數字，照下面的比對規則就是畫面上的數字。
+  figure   原文圖表：數字只畫在文章的圖上（文字裡沒有），Claude 看過圖N、把讀到的數字記在
+           article/figure_numbers.json（load_figure_numbers 驗證）；照同一套比對規則對上就算。審片頁標「原文圖表
+           （圖N，Claude 讀圖）」、標成要看一下，請作者對照原圖。推算的輸入也可以是讀圖記下的數字。
   none     無出處：以上都不是。有任何一個 → check_numbers 擋下正式出片（預覽照樣出，審片頁標出來）。
+
+讀圖記下的數字（article/figure_numbers.json；Claude 寫，重跑文章擷取會拿掉）：
+    {"figures": {"圖1": [{"value": "4.58", "label": "兩年期殖利率，2023 年平均"}, …], "圖2": […]}}
+  圖號要是 article.json 列的圖；value＝圖上那一個數字（照圖上的寫法，字串）；label＝它在圖上是什麼（作者對照用，必填）。
 
 分鏡設定的推算宣告（shots.json 每個分鏡可選的 derived；parse_derived 驗證，錯誤繁中點名「分鏡 SH02 的 derived[0]」）：
     "derived": [{"value": "0.62", "formula": "4.58 - 3.96", "note": "兩年期減十年期"}]
@@ -72,6 +79,7 @@ if TYPE_CHECKING:
 __all__ = [
     "Article",
     "Derivation",
+    "FigureNumber",
     "FoundNumber",
     "NumberReport",
     "NumberSource",
@@ -81,6 +89,7 @@ __all__ = [
     "check_numbers",
     "default_sources",
     "find_numbers",
+    "load_figure_numbers",
     "number_review",
     "parse_derived",
     "read_article",
@@ -89,7 +98,7 @@ __all__ = [
 ]
 
 
-KIND_LABELS = {"article": "原文", "public": "公有數據", "derived": "推算", "none": "無出處"}
+KIND_LABELS = {"article": "原文", "figure": "原文圖表", "public": "公有數據", "derived": "推算", "none": "無出處"}
 
 
 # ---------------------------------------------------------------- 找數字（正規化）
@@ -476,6 +485,99 @@ def parse_derived(raw: Any, label: str) -> tuple[tuple[Derivation, ...], list[st
     return tuple(out), problems
 
 
+# ---------------------------------------------------------------- 原文圖表（Claude 讀圖記下的數字）
+
+FIGURE_NUMBERS_EXAMPLE = ('{"figures": {"圖1": [{"value": "4.58", "label": "兩年期殖利率，2023 年平均"}, '
+                          '{"value": "3.96", "label": "十年期殖利率，2023 年平均"}]}}')
+FIGURE_NUMBER_KEYS = ("value", "label")
+_FIGURE_KEY_RE = re.compile(r"^圖([1-9]\d*)$")
+_ITEM_EXAMPLE = '{"value": "4.58", "label": "兩年期殖利率，2023 年平均"}'
+
+
+@dataclass(frozen=True)
+class FigureNumber:
+    """Claude 看文章的某張圖（圖N）讀到的一個數字：文章文字裡沒有、只畫在圖上的數字，靠它對到出處（原文圖表）。"""
+
+    figure: str
+    """哪張圖：「圖1」（article.json 的圖號）。"""
+    number: FoundNumber
+    """讀到的數字（寫成圖上的樣子：圖上寫 4.50 就寫 "4.50"）。"""
+    label: str
+    """這個數字在圖上是什麼（例「兩年期殖利率，2023 年平均」），作者對照原圖用。"""
+
+    @property
+    def detail(self) -> str:
+        return f"原文圖表（{self.figure}，Claude 讀圖）：{self.label}，讀到 {self.number.text}"
+
+
+def _figure_labels(paths: ProjectPaths) -> list[str] | None:
+    """文章擷取清單（article.json）列的圖號；沒有清單（或讀不了）＝ None。"""
+    manifest = ArticlePaths(paths.article).manifest
+    if not manifest.is_file():
+        return None
+    try:
+        raw = json.loads(manifest.read_text(encoding="utf-8"))
+        return [str(im.get("label") or f"圖{im['n']}") for im in raw.get("images", [])]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def load_figure_numbers(paths: ProjectPaths) -> tuple[tuple[FigureNumber, ...], list[str]]:
+    """讀並驗證 article/figure_numbers.json（Claude 讀圖記的數字）。沒有這個檔＝沒有讀圖的數字。
+    回傳 (數字, 問題清單)；問題是繁中、點名「article/figure_numbers.json 的 圖1[0]」。"""
+    path = paths.figure_numbers
+    name = "article/figure_numbers.json"
+    if not path.is_file():
+        return (), []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        return (), [f"{name} 第 {e.lineno} 行第 {e.colno} 個字附近不是合法的 JSON（{e.msg}）"]
+    if not isinstance(raw, dict) or not isinstance(raw.get("figures"), dict):
+        return (), [f"{name} 要長這樣：{FIGURE_NUMBERS_EXAMPLE}"]
+    problems: list[str] = []
+    bad = [k for k in raw if k != "figures"]
+    if bad:
+        problems.append(f"{name} 有不認得的欄位「{'、'.join(bad)}」（只認 figures）")
+    labels = _figure_labels(paths)
+    out: list[FigureNumber] = []
+    for fig, items in raw["figures"].items():
+        where = f"{name} 的 {fig}"
+        if not _FIGURE_KEY_RE.match(fig):
+            problems.append(f"{name} 的「{fig}」不是圖號：照文章擷取的圖號寫，例「圖1」")
+            continue
+        if labels is None:
+            problems.append(f"{name} 寫了「{fig}」，可是專案裡沒有文章擷取的清單（article/article.json），對不到文章的圖")
+            continue
+        if fig not in labels:
+            have = "、".join(labels) if labels else "文章裡沒有圖"
+            problems.append(f"{name} 寫了「{fig}」，可是文章沒有這張圖（現有：{have}）")
+            continue
+        if not isinstance(items, list) or not items:
+            problems.append(f"{where} 要是讀到的數字清單，例 [{_ITEM_EXAMPLE}]")
+            continue
+        for k, item in enumerate(items):
+            at = f"{where}[{k}]"
+            if not isinstance(item, dict):
+                problems.append(f"{at} 要是物件，例 {_ITEM_EXAMPLE}")
+                continue
+            extra = [key for key in item if key not in FIGURE_NUMBER_KEYS]
+            if extra:
+                problems.append(f"{at} 有不認得的欄位「{'、'.join(extra)}」（只認 value、label）")
+            value_raw = item.get("value")
+            ok_type = isinstance(value_raw, (str, int, float)) and not isinstance(value_raw, bool)
+            nums = find_numbers(str(value_raw)) if ok_type else []
+            if len(nums) != 1:
+                problems.append(f"{at} 的 value 要是圖上的那一個數字，照圖上的寫法（例 \"4.58\"），現在是 {value_raw!r}")
+            label = item.get("label")
+            if not isinstance(label, str) or not label.strip():
+                problems.append(f"{at} 少了 label：這個數字在圖上是什麼（例「兩年期殖利率，2023 年平均」），作者要對照原圖")
+                continue
+            if len(nums) == 1:
+                out.append(FigureNumber(fig, nums[0], label.strip()))
+    return tuple(out), problems
+
+
 # ---------------------------------------------------------------- 上畫面的字
 
 
@@ -612,6 +714,8 @@ class NumberSource:
     """article（原文出現）／public（白名單公有數據）／derived（推算）／none（無出處）。"""
     detail: str
     """出處說明（原文第幾段＋前後文、公有數據的系列與日期、算式）或找不到的原因。"""
+    figure: str = ""
+    """原文圖表：讀自哪張圖（「圖1」）；其他種類是空字串。"""
 
     @property
     def label(self) -> str:
@@ -647,12 +751,23 @@ class NumberReport:
 
 
 class _Sources:
-    """數字可以對到的出處：文章（全專案共用）、這個分鏡畫的公有數據、這個分鏡宣告的推算。"""
+    """數字可以對到的出處：文章（全專案共用）、Claude 讀文章的圖記下的數字、這個分鏡畫的公有數據、這個分鏡宣告的推算。"""
 
-    def __init__(self, article: Article, public: Mapping[str, PublicChart]) -> None:
+    def __init__(self, article: Article, public: Mapping[str, PublicChart],
+                 figures: Sequence[FigureNumber] = ()) -> None:
         self.article = article
         self.entries = [(p, f) for p in article.paragraphs for f in find_numbers(p.text)]
         self.public = public
+        self.figures = figures
+
+    def figure_of(self, num: FoundNumber) -> FigureNumber | None:
+        """Claude 讀文章的圖記下的數字裡，照比對規則就是 num 的那一個。"""
+        return next((f for f in self.figures if num.sourced_by(f.number)), None)
+
+    def in_figure(self, num: FoundNumber) -> str | None:
+        """有讀圖記下的數字對得上 num 就回「原文圖表（圖N，Claude 讀圖）：…」。"""
+        f = self.figure_of(num)
+        return None if f is None else f.detail
 
     def in_article(self, num: FoundNumber) -> str | None:
         """文章裡有沒有一個數字，四捨五入到 num 寫的位數就是 num；有就回「原文第 N 段：…前後文…」。"""
@@ -687,6 +802,8 @@ class _Sources:
             return "public", hit
         if (hit := self.in_article(num)) is not None:
             return "article", hit
+        if (hit := self.in_figure(num)) is not None:
+            return "figure", hit
         return None
 
     def derived(self, num: FoundNumber, shown: str, shot_id: str,
@@ -700,7 +817,7 @@ class _Sources:
             missing = [x.text for x in d.inputs if found[x.text] is None and not _is_unit_constant(x)]
             if missing:
                 failure = (f"宣告的推算 {d.formula} 裡，{'、'.join(missing)} 找不到出處"
-                           "（算式裡的數字要在文章裡，或是這張圖的公有數據）")
+                           "（算式裡的數字要在文章裡、是讀圖記下的數字，或是這張圖的公有數據）")
                 continue
             if not num.rounds_from(d.result):
                 got = d.result_text.removeprefix("= ").removeprefix("≈ ")
@@ -727,7 +844,7 @@ def reconcile(plan: BuildPlan, *, sources: Sequence[ScreenTextSource] | None = N
 
     sources：要看哪些上畫面的字（預設 default_sources()：財經圖表；Vox 索引卡 #8 加進去）。"""
     article = read_article(plan.project.paths)
-    src = _Sources(article, plan.public_data)
+    src = _Sources(article, plan.public_data, plan.project.figure_numbers)
     texts = _own_texts(plan, default_sources() if sources is None else sources)
     shots: dict[str, list[NumberSource]] = {}
     notes: dict[str, list[str]] = {}
@@ -739,7 +856,7 @@ def reconcile(plan: BuildPlan, *, sources: Sequence[ScreenTextSource] | None = N
         for t in texts[shot.id]:
             for num in find_numbers(t.text):
                 shown = _shown_number(t, num)
-                kind, detail = "none", ""
+                kind, detail, figure = "none", "", ""
                 used.update(k for k, d in enumerate(decls) if num.rounds_from(d.value.value))
                 if (pub := src.in_public(num, shot.id, t.public)) is not None:
                     kind, detail = "public", pub
@@ -749,9 +866,13 @@ def reconcile(plan: BuildPlan, *, sources: Sequence[ScreenTextSource] | None = N
                     kind, detail = "article", found
                     if ok[1]:
                         notes.setdefault(shot.id, []).append(f"{shown}：{ok[1]}（文章裡有這個數字，以原文為準）")
+                elif (fig := src.figure_of(num)) is not None:
+                    kind, detail, figure = "figure", fig.detail, fig.figure
+                    if ok[1]:
+                        notes.setdefault(shot.id, []).append(f"{shown}：{ok[1]}（文章的圖上有這個數字，以原圖為準）")
                 else:
                     detail = ok[1] or _why_unsourced(article)
-                items.append(NumberSource(shot.id, shot.number, t.where, t.of, t.text, shown, kind, detail))
+                items.append(NumberSource(shot.id, shot.number, t.where, t.of, t.text, shown, kind, detail, figure))
                 if t.whole:
                     break
         for k, d in enumerate(decls):
@@ -765,14 +886,16 @@ def reconcile(plan: BuildPlan, *, sources: Sequence[ScreenTextSource] | None = N
 def _why_unsourced(article: Article) -> str:
     if article.path is None:
         return "專案裡還沒有文章文字（article/text.txt），對不到原文；也不是公有數據或宣告過的推算"
-    return "文章裡找不到這個數字，也不是公有數據或宣告過的推算"
+    return "文章裡找不到這個數字，也不是讀圖記下的數字、公有數據或宣告過的推算"
 
 
 # ---------------------------------------------------------------- 擋出片（build 的 preflight）
 
 
 FIX_HINT = (
-    "修法：改成文章裡寫的數字；推算出來的數字（差值、一年前的值…），在那個分鏡加 "
+    "修法：改成文章裡寫的數字；數字只在文章的圖上（文字裡沒有）：Read 那張圖（article/images/圖N.*），把讀到的數字記在 "
+    'article/figure_numbers.json，例 {"figures": {"圖1": [{"value": "4.58", "label": "兩年期殖利率，2023 年平均"}]}}；'
+    "推算出來的數字（差值、一年前的值…），在那個分鏡加 "
     '"derived": [{"value": "0.62", "formula": "4.58 - 3.96"}] 宣告算式（算式裡的數字要找得到出處）。'
     "預覽照樣可以出，審片頁上會標出這些數字。"
 )
@@ -811,20 +934,32 @@ def check_numbers(plan: BuildPlan) -> None:
 
 
 CARD_GROUP = 6
-"""同一個位置（例：數值）同一種出處的字超過這麼多個，卡片上併成一行（長的數列不要洗版）；無出處的一律逐個列。"""
+"""同一個位置（例：數值）同一種出處的字超過這麼多個，卡片上併成一行（長的數列不要洗版）；無出處、讀圖的一律逐個列。"""
+_CARD_STATUS = {"none": "block", "figure": "warn"}
+"""卡片上小標籤的顏色：無出處＝擋下出片；原文圖表＝要看一下（Claude 讀圖讀的，請作者對照原圖）；其他＝沒問題。"""
+
+
+def _figures_note(nums: Sequence[NumberSource]) -> str:
+    """給作者的一句：哪幾個數字是 Claude 從他文章的哪幾張圖讀的，請他對照原圖。沒有就空字串。"""
+    figs = list(dict.fromkeys(n.figure for n in nums if n.kind == "figure"))
+    if not figs:
+        return ""
+    count = sum(1 for n in nums if n.kind == "figure")
+    return (f"其中 {count} 個數字是 Claude 看你文章的{'、'.join(figs)}讀出來的（標「原文圖表」）："
+            f"請對照你的原圖，數字和它是什麼都要對。")
 
 
 def _card_items(nums: Sequence[NumberSource], public: PublicChart | None, CheckItem: Any) -> list:
     groups: dict[tuple[str, str], list[NumberSource]] = {}
     for n in nums:
-        if n.kind != "none":
+        if n.kind not in ("none", "figure"):  # 無出處、讀圖的數字一律逐個列：作者要一個一個看
             groups.setdefault((n.where, n.kind), []).append(n)
     big = {k for k, g in groups.items() if len({(n.context, n.of) for n in g}) > CARD_GROUP}
     out, done = [], set()
     for n in nums:
         key = (n.where, n.kind)
         if key not in big:
-            out.append(CheckItem(n.shown, detail=f"{n.place}｜{n.detail}", status="block" if n.kind == "none" else "ok",
+            out.append(CheckItem(n.shown, detail=f"{n.place}｜{n.detail}", status=_CARD_STATUS.get(n.kind, "ok"),
                                  label=n.label))
         elif key not in done:
             done.add(key)
@@ -849,23 +984,32 @@ def number_review(plan: BuildPlan) -> ReviewExtras:
         items = _card_items(rep.shots[sid], plan.public_data.get(sid), CheckItem)
         notes = list(rep.notes.get(sid, []))
         n_bad = sum(1 for n in rep.shots[sid] if n.kind == "none")
+        figures = _figures_note(rep.shots[sid])
+        if figures:
+            notes.insert(0, figures)
         if n_bad:
             notes.insert(0, f"有 {n_bad} 個數字找不到出處，擋下出片。")
         if not items:
             notes.append("沿用上一張的圖，數字記在上一張；這一張沒有新的數字。" if st.shot.continues
                          else "畫面上沒有數字。")
-        # 每個數字都對得到出處：安靜的一行，點開看每個數字的出處；有找不到出處的才整區攤開
-        summary = "" if n_bad else (f"畫面上 {len(rep.shots[sid])} 個數字都對得到出處" if items else " ".join(notes))
+        # 每個數字都對得到出處：安靜的一行，點開看每個數字的出處；有找不到出處、或有 Claude 讀圖讀的數字才整區攤開
+        summary = "" if n_bad or figures else (
+            f"畫面上 {len(rep.shots[sid])} 個數字都對得到出處" if items else " ".join(notes))
         cards[sid] = [CardSection("numbers", "畫面上的數字與出處", items, note=" ".join(notes), summary=summary)]
     bad = rep.unsourced
     if bad:
         page = [CardSection(
             "numbers", f"數字對帳：{len(bad)} 個數字找不到出處，不能出片",
             [CheckItem(f"分鏡 {n.shot_number}：{n.shown}", detail=n.place, status="block", label=n.label) for n in bad],
-            note="這些數字在你的文章裡找不到，也不是公有數據或寫明算式的推算。預覽可以先看，正式出片會被擋下。"
-                 "要怎麼改寫在那張卡上（例如改成文章裡的數字）；如果是算出來的，告訴 Claude 怎麼算的就好。",
+            note="這些數字在你的文章裡找不到（文字裡沒有，也不在 Claude 讀過的圖上），也不是公有數據或寫明算式的推算。"
+                 "預覽可以先看，正式出片會被擋下。要怎麼改寫在那張卡上（例如改成文章裡的數字）；"
+                 "如果是你文章某張圖上的數字，告訴 Claude 是哪張圖；如果是算出來的，告訴 Claude 怎麼算的就好。",
         )]
     else:
         total = sum(len(v) for v in rep.shots.values())
-        page = [CardSection("numbers", "數字對帳", [], summary=f"數字對帳：畫面上 {total} 個數字都有出處")]
+        read = [n for v in rep.shots.values() for n in v if n.kind == "figure"]
+        summary = f"數字對帳：畫面上 {total} 個數字都有出處"
+        if read:
+            summary += f"；其中 {len(read)} 個是 Claude 從你文章的圖讀的（卡片上標「原文圖表」），請對照你的原圖"
+        page = [CardSection("numbers", "數字對帳", [], summary=summary)]
     return ReviewExtras(cards=cards, page=page)

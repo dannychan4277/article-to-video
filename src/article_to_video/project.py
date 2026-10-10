@@ -11,7 +11,7 @@
       settings.json      設定快照（選填）：建置參數（配音層、段間留白、片尾卡秒數…）＋第一次建置時從使用者設定
                          複製來的頻道名、logo、品牌色、聲音、語速、配樂、預設比例（user_settings.py）
       logo.png           片尾卡的 logo（設定快照的一部分，從使用者資料位置複製進來；沒設 logo 就沒有）
-      article/           文章原檔、擷取文字與原圖（文章擷取那張票放）
+      article/           文章原檔、擷取文字與原圖（文章擷取那張票放）；figure_numbers.json＝Claude 讀圖記下的數字（原文圖表）
       public_data/       公有數據快照（<系列代號>.json：數字＋擷取日期）；抓過之後重建不用網路，刪掉就重抓
       box_checks.json    Claude 核對過的 Vox 框（依框的內容雜湊記，見 boxes.py）；不在 build/ 裡，刪 build/ 不會掉
       check_log.json     獨立審片每一輪的結果、每個問題的處理（改好了／接受不改；見 check_log.py）；刪 build/ 不會掉
@@ -207,6 +207,13 @@ class ProjectPaths:
         return self.root / "public_data"
 
     @property
+    def figure_numbers(self) -> Path:
+        """Claude 看文章的圖讀到的數字（原文圖表；數字對帳用，見 numbers.load_figure_numbers）。Claude 寫，不是擷取產生的。"""
+        from article_to_video.article import ArticlePaths  # 避免循環匯入
+
+        return ArticlePaths(self.article).figure_numbers
+
+    @property
     def box_checks(self) -> Path:
         """Claude 核對過的 Vox 框（依框的內容雜湊記；框改了雜湊就變，要重新核對）。"""
         return self.root / "box_checks.json"
@@ -336,6 +343,9 @@ class Project:
     segments: dict[str, str]
     shots: list[Shot]
     settings: Settings = field(default_factory=Settings)
+    figure_numbers: tuple = ()
+    """Claude 讀文章的圖記下的數字（numbers.FigureNumber，article/figure_numbers.json）：數字只在圖上、文字裡沒有時，
+    數字對帳靠它對到「原文圖表」。"""
 
     @property
     def root(self) -> Path:
@@ -386,11 +396,16 @@ def load_project(root: str | Path, *, overrides: Mapping[str, Any] | None = None
     segments = _load_segments(_read_json(paths.narration, "旁白稿"), problems)
     settings = _load_settings(_read_json(paths.settings, "設定快照", required=False), overrides or {}, problems)
     shots = _load_shots(_read_json(paths.shots, "分鏡設定"), segments, problems)
+    from article_to_video.numbers import load_figure_numbers  # 避免循環匯入
+
+    figure_numbers, found = load_figure_numbers(paths)
+    for msg in found:
+        problems.add(msg)
     problems.raise_if_any()
     _check_continuations(shots, problems)
     _check_vox_boxes(shots, problems)
     problems.raise_if_any()
-    return Project(paths=paths, segments=segments, shots=shots, settings=settings)
+    return Project(paths=paths, segments=segments, shots=shots, settings=settings, figure_numbers=figure_numbers)
 
 
 def load_narration(root: str | Path, *, overrides: Mapping[str, Any] | None = None) -> Project:

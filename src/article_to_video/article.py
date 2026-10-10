@@ -8,7 +8,8 @@
       images/圖1.png …  文章裡的原圖，完整解析度，依出現順序編號（JPEG 原檔位元組照搬）
       article.json      清單：來源、段落（編號＋文字＋頁碼）、每張圖的編號／檔案／像素大小／頁碼／圖說／前後段落
 
-重跑會整個換掉 article/ 裡這幾樣（其他檔案不動）。擷取不下去時丟 ArticleError（繁中、直接給作者看），
+重跑會整個換掉 article/ 裡這幾樣（其他檔案不動）；Claude 讀上一份的圖記下的數字（figure_numbers.json，原文圖表）
+也一起拿掉，圖換了就要重讀。擷取不下去時丟 ArticleError（繁中、直接給作者看），
 這時 article/ 完全不動。
 """
 
@@ -71,6 +72,11 @@ class ArticlePaths:
     @property
     def manifest(self) -> Path:
         return self.root / "article.json"
+
+    @property
+    def figure_numbers(self) -> Path:
+        """Claude 看圖讀到的數字（原文圖表，numbers.load_figure_numbers）。不是擷取產生的，但重跑擷取會拿掉：圖換了就不算數。"""
+        return self.root / "figure_numbers.json"
 
     def source(self, suffix: str) -> Path:
         return self.root / f"source{suffix}"
@@ -381,7 +387,7 @@ def _replace_outputs(stage: ArticlePaths, paths: ArticlePaths) -> None:
     for old in paths.root.glob("source.*"):
         old.unlink()
     shutil.rmtree(paths.images, ignore_errors=True)
-    for f in (paths.text, paths.manifest):
+    for f in (paths.text, paths.manifest, paths.figure_numbers):  # 讀舊圖記下的數字：圖換了就不算數
         f.unlink(missing_ok=True)
     for item in stage.root.iterdir():
         os.replace(item, paths.root / item.name)
