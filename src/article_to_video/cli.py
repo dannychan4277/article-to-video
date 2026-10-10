@@ -390,10 +390,22 @@ def _after_build_hint(plan, data_dir) -> str:
             " 打開審片頁給作者看；作者點頭之後 publish --version <他看的那一版> 才是出片。")
 
 
+def _open_must_fixes(plan, data_dir) -> str:
+    """build 之後：還沒處理的必修（自動檢查 fail＋獨立審片必修）。build 不擋（改了要重建來驗證），出片（publish）才擋。"""
+    from article_to_video.auto_checks import blocking_problems, resolve_hint
+
+    bad = blocking_problems(plan)
+    if not bad:
+        return ""
+    return (f"注意：還有 {len(bad)} 項必修還沒處理——這份成片可以拿來驗證改得對不對，但出片（publish）會被擋下：\n"
+            + "\n".join(f"  {line}" for _, line in bad) + "\n"
+            + resolve_hint(plan.project.root, [t for t, _ in bad], data_dir=data_dir))
+
+
 def _build(args: argparse.Namespace) -> int:
-    """建置審片用的成片（還不是出片）。正式出片前先數字對帳；自動檢查、獨立審片查出的必修還沒處理（沒改掉、也沒明確
-    接受）也擋。被擋下時審片頁照這一版重寫（沒有成片、被擋的原因標在卡上），作者打開看到的就是現況。"""
-    from article_to_video.auto_checks import require_checks_cleared
+    """建置審片用的成片（還不是出片）。先數字對帳（對不上就擋，審片頁照這一版重寫、被擋的原因標在卡上）。
+    自動檢查、獨立審片查出的必修還沒處理時照樣建置——改了分鏡要重建才驗證得了——只把它們清楚列出來；
+    擋的是出片（publish）。"""
     from article_to_video.build import build_project
     from article_to_video.numbers import check_numbers
     from article_to_video.review import default_contributors, make_review
@@ -402,12 +414,14 @@ def _build(args: argparse.Namespace) -> int:
 
     def body(log: Log) -> int:
         res = build_project(args.project, tts=args.tts, jobs=args.jobs, fmt=args.aspect, data_dir=args.data_dir,
-                            preflight=[check_numbers, require_checks_cleared], log=log)
+                            preflight=[check_numbers], log=log)
         print(f"完成：{res.video}（{res.duration:.2f} 秒）")
         print(f"字幕檔：{res.srt}")
         failed[0] = "成片做好了，但審片頁沒更新"
         review = make_review(res.plan, video=res.video, contributors=default_contributors(args.data_dir),
                              jobs=args.jobs, log=log)
+        if must := _open_must_fixes(res.plan, args.data_dir):
+            print(must)
         print(_after_build_hint(res.plan, args.data_dir))
         _show_review(review.page, no_open=args.no_open, version=review.version)
         return 0

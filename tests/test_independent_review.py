@@ -177,20 +177,30 @@ def test_a_malformed_answer_is_explained_and_nothing_is_recorded(project):
     assert not (project / "check_log.json").exists()
 
 
-def test_an_unhandled_must_fix_blocks_the_final_build_until_fixed_or_accepted(project):
+def test_an_unhandled_must_fix_is_reported_by_build_and_blocks_only_publishing(project, tmp_path):
+    """示範：必修還開著時 build 拒跑，Claude 只好先把必修標成改好了才能重建驗證。改成：build（審片用的成片）照跑、
+    清楚列出還沒處理的必修；擋的只有 publish（出片），改掉或接受之前不出片。"""
     video = project / "成片.mp4"
     before = video.stat().st_mtime_ns
     assert record(project, REVIEW).returncode == 0
 
-    blocked = run_cli("build", str(project), "--tts", "fake")
+    built = run_cli("build", str(project), "--tts", "fake")  # 改了分鏡要重建來驗證：不擋
+    assert built.returncode == 0, built.stdout + built.stderr
+    assert "1 項必修還沒處理" in built.stdout and "R1-1" in built.stdout and "標註壓到柱上的數值" in built.stdout
+    assert "publish" in built.stdout and "resolve" in built.stdout  # 出片會被擋、處理完怎麼記
+    assert "R1-2" not in built.stdout  # 該修只在審片頁提醒
+
+    out = tmp_path / "出片"
+    blocked = run_cli("publish", str(project), "--version", "1", "--tts", "fake", "--out", str(out))
     assert blocked.returncode == 1 and "Traceback" not in blocked.stderr
     assert "R1-1" in blocked.stderr and "標註壓到柱上的數值" in blocked.stderr and "resolve" in blocked.stderr
-    assert "R1-2" not in blocked.stderr  # 該修只提醒，不擋
-    assert video.stat().st_mtime_ns == before
+    assert "R1-2" not in blocked.stderr
+    assert not out.exists() and video.stat().st_mtime_ns == before  # 渲染前就擋下
 
     fixed = run_cli("resolve", str(project), "R1-1", "--fixed", "標註改放柱子上方")
     assert fixed.returncode == 0, fixed.stderr
-    assert run_cli("build", str(project), "--tts", "fake").returncode == 0
+    rebuilt = run_cli("build", str(project), "--tts", "fake")
+    assert rebuilt.returncode == 0 and "R1-1" not in rebuilt.stdout and "必修還沒處理" not in rebuilt.stdout
     from test_review_page import read_review
 
     page = read_review(project)  # 處理過的收起來（點開才看），還沒處理的照樣攤開
@@ -199,15 +209,18 @@ def test_an_unhandled_must_fix_blocks_the_final_build_until_fixed_or_accepted(pr
     assert "第一根柱子比旁白早出現" in page.page_slots["review"] and "第一根柱子比旁白早出現" not in page.page_folded
     assert "標註壓到柱上的數值" in page.page_folded
 
-    # 下一輪審片說沒修好：重新打開，又擋；作者決定不改就記下接受
+    # 下一輪審片說沒修好：重新打開，出片又擋；作者決定不改就記下接受，才出得了片
     assert run_cli("review-prep", str(project), "--tts", "fake").returncode == 0
     material = json.loads((project / KIT / "material.json").read_text(encoding="utf-8"))
     assert material["round"] == 2 and {p["id"]: p["status"] for p in material["previous"]}["R1-1"] == "做片的說改好了"
     again = record(project, {"items": [], "previous": [{"id": "R1-1", "status": "沒修好", "note": "還是壓到"}]})
     assert again.returncode == 0, again.stderr
-    assert run_cli("build", str(project), "--tts", "fake").returncode == 1
+    reopened = run_cli("publish", str(project), "--version", "1", "--tts", "fake", "--out", str(out))
+    assert reopened.returncode == 1 and "R1-1" in reopened.stderr
     assert run_cli("resolve", str(project), "R1-1", "--accept", "作者覺得看得清楚", "--by", "作者").returncode == 0
-    assert run_cli("build", str(project), "--tts", "fake").returncode == 0
+    published = run_cli("publish", str(project), "--version", "1", "--tts", "fake", "--out", str(out))
+    assert published.returncode == 0, published.stdout + published.stderr
+    assert any(out.glob("*.mp4"))
     log = json.loads((project / "check_log.json").read_text(encoding="utf-8"))
     assert log["resolutions"]["R1-1"]["status"] == "accepted" and log["resolutions"]["R1-1"]["by"] == "作者"
 

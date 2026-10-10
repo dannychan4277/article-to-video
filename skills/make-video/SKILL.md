@@ -162,14 +162,15 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-prep "<
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-record "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-必修改好之後記下來。你覺得不用改的要留給作者決定（第 8 步問他）；還有沒處理的必修時 build 會被擋，
-這時先做第 8 步（審片頁用靜態圖給他看），他決定了再回來 build：
+必修：改分鏡（改了旁白就回到第 4 步配音、看秒數、調錨點；只改分鏡就回到第 6 步預覽、看改到的靜態圖）→ 再 build、checks，
+**看過改好了才記下來**。必修還開著時 build 照樣會跑（最後會列出「還有 N 項必修還沒處理」）——擋的只有出片，
+所以不要為了重建先把它記成改好了。
 
 ```
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video resolve "<專案>" R1-2 --fixed "怎麼改的" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-改了旁白就回到第 4 步（配音，看秒數、調錨點），只改分鏡就回到第 6 步（預覽、看改到的靜態圖），再 build、checks；改得多再審一輪。
+你覺得不用改的要留給作者決定（第 8 步問他，他說不改才 `--accept "…" --by 作者`）。改得多再審一輪。
 
 ## 8. 打開審片頁給作者看
 

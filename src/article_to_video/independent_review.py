@@ -16,7 +16,7 @@
                                每一項編號 R<輪>-<第幾項>；previous 裡「沒修好／部分修好」的舊問題重新打開。
 
 審片頁：review_contributor(data_dir) 每張卡列這個分鏡的問題，頁首一區總評。必修沒處理（resolve 沒標改好、也沒接受）
-擋正式出片：auto_checks.require_checks_cleared 會問 unresolved_must()。
+擋出片：publish 的 auto_checks.require_checks_cleared 會問 unresolved_must()（build 只列出來，不擋）。
 預設開著；使用者設定 independent_review 可以關（settings set --independent-review 關）。
 """
 
