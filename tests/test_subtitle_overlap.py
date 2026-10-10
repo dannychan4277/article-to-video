@@ -23,6 +23,10 @@ from article_to_video.timeline import VideoFormat
 
 from test_vox import SMALL, new_project
 
+pytestmark = pytest.mark.usefixtures("internal_vox")
+"""Vox 分鏡只在內部開關打開時讀得到（docs/adr/0001-只用財經圖表風格.md）；這個模組測的就是 Vox 本身。"""
+
+
 HIGH_SUBS = VideoFormat(name="test360hi", width=640, height=360, fps=30, safe_bottom=47, sub_size=18,
                         sub_margin_v=224, sub_margin_lr=20, sub_pad=4)
 """跟 SMALL 一樣的畫面（同一份片段 spec），只有燒字幕的位置往上移到剪報第一行字上。"""

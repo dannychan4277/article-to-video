@@ -7,8 +7,6 @@ allowed-tools:
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video feedback *)
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video lint *)
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video preview *)
-  - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video boxes *)
-  - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video confirm-box *)
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video open-review *)
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video build *)
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video checks *)
@@ -25,8 +23,6 @@ allowed-tools:
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video feedback *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video lint *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video preview *)
-  - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video boxes *)
-  - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video confirm-box *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video open-review *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video build *)
   - Bash(~/.local/bin/uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video checks *)
@@ -46,7 +42,8 @@ allowed-tools:
 
 作者看過審片頁了。這裡做三件事：照他的話改（只改他說的）、給他看新的一版、他點頭就出片。
 跟他講話用口語，不講指令、JSON、代號。找不到 `uv` 就把指令開頭的 `uv` 換成 `~/.local/bin/uv`。
-規則與格式都在 `${CLAUDE_PLUGIN_ROOT}/skills/make-video/references/`：narration-rules.md、storyboard-rules.md、vox-rules.md、formats.md、checks-and-review.md。
+規則與格式都在 `${CLAUDE_PLUGIN_ROOT}/skills/make-video/references/`：narration-rules.md、storyboard-rules.md、formats.md、checks-and-review.md。
+整支片只用財經圖表：講到他文章裡的圖，就照圖上的數字重畫成圖表（storyboard-rules.md「文章裡的圖」）。
 
 預先核准只在叫出這個 skill 的那一回合有效：作者每次回覆、你要繼續跑指令時，先再叫一次這個 skill。
 
@@ -79,7 +76,11 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video feedback "<專
 
 ## 2. 改
 
-- **畫面**（標題、標註、換圖型、換剪報、框、時間點）：改 `<專案>/shots.json` 裡那個 id 的分鏡，照 storyboard-rules.md、vox-rules.md。
+- **畫面**（標題、標註、換圖型、時間點、把他文章的某張圖重畫出來）：改 `<專案>/shots.json` 裡那個 id 的分鏡，照 storyboard-rules.md。
+- **讀圖讀錯的數字**（「我圖上寫的是 3.96」）：先 Read 那張原圖確認，改 `<專案>/article/figure_numbers.json` 裡那個數字，
+  再改分鏡上的數字。他說的跟圖上看到的不一樣，就問他是哪一個（可能他想改的是文章，不是片）。
+- **舊的片裡有貼原圖的分鏡**（以前的版本會把文章原圖直接貼進片裡）：預覽會擋下那幾個分鏡、說現在只用財經圖表。
+  照 storyboard-rules.md 把它們重畫成圖表（圖上的數字照 make-video 第 2 步記進 figure_numbers.json），跟他說一聲為什麼那幾張變了。
 - **旁白**（「旁白改成…」「這句太長」）：只改 feedback 列出的那幾個旁白段（`<專案>/narration.json`），照 narration-rules.md；
   被錨點用到的詞改掉了，分鏡的錨點跟著改。改完跑：
 
@@ -87,7 +88,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video feedback "<專
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video lint "<專案>"
 ```
 
-  再配音（只重配改到的段），看新的秒數調錨點、框和下一件的間隔：
+  再配音（只重配改到的段），看新的秒數調錨點：
 
 ```
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video narrate "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
@@ -108,15 +109,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video preview "<專�
 ```
 
 - 只有改到的分鏡重渲靜態圖、只有改到的旁白段重新配音，幾秒鐘。它會印這是**第幾版**和這版改了哪些分鏡的靜態圖路徑：每一張都 Read 看過。
-- 數字對帳那行有「找不到出處」就先改好。改到 Vox 框（或框所在那句旁白）要重新核對：
-
-```
-uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video boxes "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
-```
-
-```
-uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video confirm-box "<專案>" SH05:1@xxxxxxxx --note "框在哪個數字上" --data-dir ${CLAUDE_PLUGIN_DATA}
-```
+- 數字對帳那行有「找不到出處」就先改好（文章裡的數字；他圖上的數字記進 figure_numbers.json；算出來的宣告 `derived`）。
 
 - 改得很多（大約三分之一以上的分鏡，或整段旁白重寫）：照 checks-and-review.md 再 build、checks、審一輪，再給他看。
 
@@ -148,7 +141,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video publish "<專�
 
 - **版本對不上、改過還沒給他看**：先預覽、給他看新的一版，他點頭再出片。不要自己換版號硬出。
 - **還沒做過獨立審片**：照 checks-and-review.md 做一輪再出片。
-- **自動檢查查出必修、數字對帳、框核對**：照訊息改 → 預覽 → 給他看 → 他點頭 → 出片。
+- **自動檢查查出必修、數字對帳**：照訊息改 → 預覽 → 給他看 → 他點頭 → 出片。
   你覺得不用改的必修要問他，他說不改才記下（代號照訊息抄）：
 
 ```

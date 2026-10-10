@@ -1,7 +1,7 @@
 [project]
 name = "article-to-video"
 version = "0.1.0"
-description = "把作者自己的財經文章做成解說影片的 Claude Code 外掛（財經圖表、Vox 剪報、zh-TW AI 配音）"
+description = "把作者自己的財經文章做成解說影片的 Claude Code 外掛（財經圖表、zh-TW AI 配音）"
 requires-python = ">=3.11"
 dependencies = [
     "certifi>=2024",

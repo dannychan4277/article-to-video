@@ -29,7 +29,7 @@ END_CARD_ID = "end.card"
 """片尾卡的片段 id（檔名 specs/end.card.json、clips/end.card.mp4）。有句點，分鏡 id 不會跟它撞名。"""
 END_CARD_GRAMMAR = GRAMMAR_END_CARD
 NOTES = ("僅供教育，非投資建議", "配音為 AI 合成")
-_PREFIX_RE = re.compile(r"^\s*(?:資料來源|数据来源|資料出處|來源|来源|出處|出处|sources?)\s*[:：]\s*", re.IGNORECASE)
+_PREFIX_RE = re.compile(r"^\s*(?:資料來源|数据来源|資料出處|資料|资料|來源|来源|出處|出处|sources?)\s*[:：]\s*", re.IGNORECASE)
 _GROUP_RE = re.compile(r"^(?P<name>[^（(]+?)\s*[（(](?P<items>[^（()）]+)[）)](?P<rest>.*)$")
 
 
@@ -58,7 +58,7 @@ def _format_references(items: list[str]) -> str:
 def merge_sources(texts: Iterable[str]) -> list[str]:
     """圖上的來源列 → 片尾卡的來源清單。
 
-    - 拿掉「來源：」「資料來源：」這類前綴（卡上統一有「資料來源」小標）。一列就是一個出處
+    - 拿掉「來源：」「資料來源：」「資料：」這類前綴（卡上統一有「資料來源」小標）。一列就是一個出處
       （公有數據自動寫的來源行用「；」分欄：「FRED，聯準會（DGS10）；月平均；2026-10-09 擷取」，不拆）。
     - 一模一樣的只留一個，順序照第一次出現。
     - 同一個出處、括號裡只列代號／圖號／段號的合併（括號後面的說明要一樣）：「FRED（DGS2）」＋「FRED（DGS10）」→

@@ -1,7 +1,8 @@
 """數字對帳（#5）：畫面上的每個數字對回出處（原文、公有數據、宣告過的推算），對不到的擋下正式出片。
 
 切點：
-1. reconcile(plan_build(專案)) → 每個分鏡上畫面的數字與出處（不渲染，很快）。
+1. reconcile(plan_build(專案)) → 每個分鏡上畫面的數字與出處（不渲染，很快）；數字只在文章的圖上時，
+   Claude 讀圖記下的數字（article/figure_numbers.json）讓它對到「原文圖表」，審片頁請作者對照原圖。
 2. 正式出片：CLI build 被擋（繁中訊息點名分鏡與數字）、審片頁卡片標出來；預覽照樣能出。
 
 測試專案的文章（tests/fixtures/mini_project/article/text.txt）是自己寫的假文章，數字是 FRED 公有領域數據
@@ -20,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from article_to_video.build import plan_build
-from article_to_video.numbers import number_review, reconcile
+from article_to_video.numbers import check_numbers, number_review, reconcile, summary_line
 from article_to_video.project import ProjectError
 
 from conftest import MINI_PROJECT
@@ -314,4 +315,97 @@ def test_bad_derived_declarations_are_explained_in_chinese(tmp_path, derived, ne
         plan_build(make_project(tmp_path, edit), tts="fake")
     msg = str(e.value)
     for needle in ["分鏡 SH02", *needles]:
+        assert needle in msg, f"錯誤訊息少了「{needle}」：{msg}"
+
+
+# ---------------------------------------------------------------- 原文圖表：數字只在文章的圖上，Claude 讀圖記下來
+
+
+def with_figure(root: Path, figures: dict | None) -> Path:
+    """文章擷取的清單（article.json）：一段文字＋兩張圖；figures 不是 None 就寫 article/figure_numbers.json（Claude 讀圖記的）。"""
+    paragraphs = [{"n": 1, "text": "2023 年，美國兩年期公債殖利率平均是 4.58%，十年期平均只有 3.96%。", "page": 1}]
+    images = [{"n": n, "label": f"圖{n}", "file": f"images/圖{n}.png", "width": 800, "height": 600} for n in (1, 2)]
+    (root / "article" / "article.json").write_text(
+        json.dumps({"version": 1, "text": "text.txt", "paragraphs": paragraphs, "images": images}, ensure_ascii=False),
+        encoding="utf-8")
+    if figures is not None:
+        (root / "article" / "figure_numbers.json").write_text(json.dumps(figures, ensure_ascii=False), encoding="utf-8")
+    return root
+
+
+def redrawn_figure(shots: dict) -> None:
+    """SH01 改成重畫文章的圖1：兩根柱的數字（5.12、4.21）只在圖上，文章文字裡沒有。"""
+    data = shots["shots"][0]["chart"]["data"]
+    data["series"] = [{"label": "兩年期", "value": 5.12}, {"label": "十年期", "value": 4.21}]
+    data["unit"] = "美國公債殖利率，%"
+    data["source"] = "來源：作者原文（圖1）"
+
+
+FIG1 = {"figures": {"圖1": [{"value": "5.12", "label": "兩年期殖利率，去年高點"},
+                            {"value": "4.21", "label": "十年期殖利率，去年高點"}]}}
+
+
+def test_numbers_claude_read_off_an_article_figure_are_sourced_to_that_figure(tmp_path):
+    root = with_figure(make_project(tmp_path, redrawn_figure), FIG1)
+    plan = plan_build(root, tts="fake")
+    check_numbers(plan)  # 不擋出片
+    assert "原文圖表 2" in summary_line(plan)  # preview 印給 Claude 看的那行
+    rep = reconcile(plan)
+    got = {n.shown: n for n in rep.shots["SH01"]}
+    assert got["5.12%"].kind == "figure" and got["4.21%"].kind == "figure"
+    assert got["5.12%"].label == "原文圖表"
+    assert "原文圖表（圖1，Claude 讀圖）" in got["5.12%"].detail and "兩年期殖利率，去年高點" in got["5.12%"].detail
+    assert rep.unsourced == []
+
+
+def test_without_the_figure_reading_those_numbers_still_block(tmp_path):
+    root = with_figure(make_project(tmp_path, redrawn_figure), None)
+    plan = plan_build(root, tts="fake")
+    assert {n.shown for n in reconcile(plan).unsourced} == {"5.12%", "4.21%"}
+    with pytest.raises(ProjectError) as e:
+        check_numbers(plan)
+    assert "figure_numbers.json" in str(e.value)  # 修法告訴 Claude：讀圖、記下來
+
+
+def test_the_review_card_asks_the_author_to_check_figure_numbers_against_his_figure(tmp_path):
+    """讀圖是 Claude 讀的，作者要對一下：那一區攤開（不縮成一行）、每個數字標「原文圖表」、寫是哪張圖、圖上的什麼。"""
+    root = with_figure(make_project(tmp_path, redrawn_figure), FIG1)
+    review = number_review(plan_build(root, tts="fake"))
+    [section] = review.cards["SH01"]
+    assert section.summary == ""  # 不收起來
+    assert "圖1" in section.note and "對照" in section.note
+    figure_items = [it for it in section.items if it.label == "原文圖表"]
+    assert {it.text for it in figure_items} == {"5.12%", "4.21%"}
+    assert all("圖1" in it.detail and "Claude 讀圖" in it.detail for it in figure_items)
+    assert all(it.status == "warn" for it in figure_items)  # 要看一下，不是擋下出片
+    [page] = review.page
+    assert "原文圖表" in page.summary + page.note + page.title
+
+
+def test_a_difference_of_two_figure_numbers_can_be_declared(tmp_path):
+    def edit(shots: dict) -> None:
+        redrawn_figure(shots)
+        highlight_with("長天期低 0.91 個百分點", {"value": "0.91", "formula": "5.12 - 4.21"})(shots)
+
+    root = with_figure(make_project(tmp_path, edit), FIG1)
+    [n] = reconcile(plan_build(root, tts="fake")).shots["SH02"]
+    assert n.kind == "derived" and "5.12 − 4.21 = 0.91" in n.detail
+    assert "5.12：原文圖表（圖1，Claude 讀圖）" in n.detail
+
+
+@pytest.mark.parametrize("figures, needles", [
+    ({"圖1": [{"value": "5.12", "label": "兩年期"}]}, ["figures"]),                       # 少了外層 figures
+    ({"figures": {"圖3": [{"value": "5.12", "label": "兩年期"}]}}, ["圖3", "圖1、圖2"]),  # 文章沒有這張圖
+    ({"figures": {"第一張": [{"value": "5.12", "label": "兩年期"}]}}, ["第一張", "圖號"]),
+    ({"figures": {"圖1": [{"value": "5.12"}]}}, ["圖1[0]", "label"]),                       # 作者要知道這是什麼數字
+    ({"figures": {"圖1": [{"value": "很高", "label": "兩年期"}]}}, ["圖1[0]", "value", "很高"]),
+    ({"figures": {"圖1": [{"value": "5.12", "label": "兩年期", "unit": "%"}]}}, ["圖1[0]", "unit"]),
+    ({"figures": {"圖1": []}}, ["圖1", "清單"]),
+])
+def test_mistakes_in_the_figure_reading_are_explained_in_chinese(tmp_path, figures, needles):
+    root = with_figure(make_project(tmp_path, redrawn_figure), figures)
+    with pytest.raises(ProjectError) as e:
+        plan_build(root, tts="fake")
+    msg = str(e.value)
+    for needle in ["article/figure_numbers.json", *needles]:
         assert needle in msg, f"錯誤訊息少了「{needle}」：{msg}"
