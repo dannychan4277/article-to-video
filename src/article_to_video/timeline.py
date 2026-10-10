@@ -51,6 +51,9 @@ __all__ = [
 
 CONTINUATION_AT = -3.0
 """接續分鏡沿用的 cue 改成這個時間（或更早，見 _carry）：引擎在 t=0 之前就把它們畫完。"""
+OPENING_TITLE_AT = -1.0
+"""影片第一個分鏡的 title cue（寫在第 0 秒的）改成這個時間：版式、標題、格線在第一幀就到位（引擎的版式 0.6 秒、
+格線再 0.6 秒），成片第一幀不是一片空白。後面的分鏡照舊在切進來之後淡入。"""
 DEFAULT_AXIS_NOTE = "縱軸未從 0 開始"
 
 
@@ -504,6 +507,13 @@ def _chain_layout(project: Project, members: list[int]) -> dict[str, Any]:
     return {"highlights": highlights, "number": number}
 
 
+def _opening_at(cue: CueTiming, st: ShotTiming) -> float:
+    """給引擎的 at：影片開頭那個分鏡的 title cue 落在第一幀時，提早到 OPENING_TITLE_AT（第一幀就讀得到）。"""
+    if st.start_frame == 0 and cue.kind == "title" and not cue.carried and cue.at <= 0:
+        return OPENING_TITLE_AT
+    return cue.at
+
+
 def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_16x9) -> list[ClipPlan]:
     fps = fmt.fps
     chains = _push_chains(timeline)
@@ -530,7 +540,7 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
         rate = total_push / chain_secs if total_push is not None else min(0.004, 0.06 / chain_secs)
         data["pushFrom"] = round(rate * (st.start_frame - g0) / fps, 6)
         data["push"] = round(rate * st.frames / fps, 6)
-        cues = [{**c.fields, "at": c.at} for c in st.cues]
+        cues = [{**c.fields, "at": _opening_at(c, st)} for c in st.cues]
         spec = {
             "grammar": GRAMMAR_CHART,
             "duration": st.frames / fps,

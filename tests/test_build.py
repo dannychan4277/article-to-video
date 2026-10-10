@@ -134,10 +134,11 @@ def test_every_cue_appears_on_its_anchor_word(built_project):
 
     for shot, expected in _expected_cues().items():
         spec = json.loads((vdir / "specs" / f"{shot}.json").read_text(encoding="utf-8"))
-        own = [c for c in spec["cues"] if c["at"] >= 0]
+        # 影片第一個分鏡的標題提早到負時間（第一幀就畫好），仍算它自己的 cue；接續沿用的 cue 也是負時間，不算
+        own = [c for c in spec["cues"] if c["at"] >= 0 or (starts[shot] == 0 and c["kind"] == "title")]
         assert [c["kind"] for c in own] == [k for k, _ in expected]
         for cue, (_, t) in zip(own, expected):
-            frame = starts[shot] + cue["at"] * FPS
+            frame = starts[shot] + max(0.0, cue["at"]) * FPS
             assert abs(frame - t * FPS) <= 1, f"{shot} {cue}：在第 {frame} 幀，應該在 {t * FPS:.1f}"
 
 

@@ -269,3 +269,27 @@ def test_a_bar_with_its_own_colour_keeps_it_when_another_bar_is_labelled(chain, 
     """「乙」寫了 color（綠）：標註在別根柱上時，沒寫顏色的柱淡成灰，乙還是綠的（顏色是作者指定的身分，不是強調）。"""
     green = int((np.abs(chain.last(sid) - GREEN).max(axis=-1) <= 12).sum())
     assert green > 1500, f"{sid} 標註出現後，乙的綠色只剩 {green} 個像素"
+
+
+# ---------------------------------------------------------------- 6. 影片第一幀就讀得到
+
+
+SAFE_TOP = {"16x9": 0, "9x16": 240}
+
+
+def title_ink(chain: Chain, img: np.ndarray) -> int:
+    """標題那一帶（內容框頂端往下 200 像素）的深色字有幾個像素。"""
+    top = SAFE_TOP[chain.aspect]
+    return int((img[top: top + 200].max(axis=-1) < 80).sum())
+
+
+def test_first_frame_of_the_video_already_shows_the_title(chain):
+    """成片第 0 幀就是第一個分鏡的第 0 幀：標題、副標已經在（原本標題正在淡入，第一幀幾乎全白）。"""
+    first, settled = title_ink(chain, chain.at("SH01", 0.0)), title_ink(chain, chain.last("SH01"))
+    assert first > 2000, f"第一幀標題那一帶只有 {first} 個深色像素"
+    assert first >= 0.95 * settled
+
+
+def test_later_charts_still_animate_their_title_in(chain):
+    """不是第一個、也不接續的分鏡（SH04），標題照舊在切進來之後才淡入（第 0 幀還沒有字）。"""
+    assert title_ink(chain, chain.at("SH04", 0.0)) < 200
