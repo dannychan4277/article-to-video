@@ -87,7 +87,7 @@ return {
       const vmax = Math.max(...vals), need = 170 * u * fs0;
       for (;;) {
         L = { S, F, xs, slot, zeroBased, ticks, yS: CH.lin(...dom(), F.y + F.h, F.y) }; placeLineText(ctx, c);
-        if (hls.every(h => { const co = placeLineLabel(ctx, c, h); return co && co.clean; })) break;
+        if (hls.filter(h => S[h.index]).every(h => { const co = placeLineLabel(ctx, c, h); return co && co.clean; })) break;
         if ((ticks[ticks.length - 1] - vmax) / (ticks[ticks.length - 1] - ticks[0]) * F.h >= need) break;
         roomFor(need); ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
       }
