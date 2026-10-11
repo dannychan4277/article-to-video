@@ -141,9 +141,7 @@ CASES = {
     "接續分鏡的 line cue": (line_cue_in_a_continuation, ["分鏡 SH02", "chart.cues[1]", "沒有作用", "line"]),
     "bar cue 標到不存在的柱": (bar_cue_past_the_bars, ["分鏡 SH01", "chart.cues[3]", "第 4 根", "只有 2 根"]),
     "柱的錨點在下一個分鏡": (bar_cue_anchored_in_the_next_shot,
-                    ["分鏡 SH01", "chart.cues[3].at", "之後", "接續分鏡 SH02", "bar cue 搬到"]),
-    # 計時實測 R1-1、R1-3：大數字卡的 at 寫在數字唸完（edge: end），落定 0.4 秒就切走
-    "大數字落定後停太短": (_card_then_chart("end"), ["分鏡 SH01", "chart.cues[1]", "只停", "1.5 秒", "開頭"]),
+                    ["分鏡 SH01", "chart.cues[3].at", "之後", "唸到「倒掛」的那個分鏡（接續分鏡）", "bar cue 搬到"]),
 }
 
 
@@ -169,11 +167,9 @@ def _no_label_on_chain_head(shots, _):
     cues[:] = [c for c in cues if c["kind"] != "highlight"]
 
 
-def _number_on_continuation_only(shots, narration):
-    # 數字落定後要停 1.5 秒（timeline.NUMBER_HOLD）：落在旁白最後一個詞會被擋，所以後面多半句
-    narration["segments"]["s02"] = "十年期只有三點九六，曲線倒掛，這種情況不常見。"
+def _number_on_continuation_only(shots, _):
     sh(shots, "SH02")["chart"]["cues"].append(
-        {"at": {"segment": "s02", "word": "曲線"}, "kind": "number", "text": "差", "data": {"value": 1}})
+        {"at": {"segment": "s02", "word": "倒掛"}, "kind": "number", "text": "差", "data": {"value": 1}})
 
 
 def _bar_cued_in_the_continuation(shots, _):
@@ -193,6 +189,38 @@ def test_a_continuation_may_differ_in_labels_or_big_number(tmp_path, edit):
     from article_to_video.build import plan_build
 
     plan_build(make_project(tmp_path, edit), tts="fake")
+
+
+def test_a_number_cut_away_right_after_it_settles_is_flagged_in_the_preview(tmp_path):
+    """計時實測 R1-1、R1-3：大數字卡的 at 照舊範例寫在數字唸完（edge: end），落定 0.4 秒就切走，審片判必修。
+    preview／build 印一行「提醒：」點名分鏡與 cue、說怎麼改（不擋：舊片照舊建得出來）；at 寫在詞的開頭就停得夠久、不提醒。"""
+    from article_to_video.build import plan_build
+
+    late, early = [], []
+    plan_build(make_project(tmp_path / "唸完", _card_then_chart("end")), tts="fake", log=late.append)
+    plan_build(make_project(tmp_path / "開頭", _card_then_chart("start")), tts="fake", log=early.append)
+    notes = [line for line in late if line.startswith("提醒：")]
+    assert len(notes) == 1, late
+    for needle in ["分鏡 SH01", "chart.cues[1]", "只停", "1.5 秒", "開頭"]:
+        assert needle in notes[0], f"提醒少了「{needle}」：\n{notes[0]}"
+    assert not [line for line in early if line.startswith("提醒：")]
+
+
+def test_a_second_bar_cue_without_an_index_is_flagged_as_doing_nothing(tmp_path):
+    """同一個分鏡寫兩個沒帶 index 的 bar cue（兩個「其他柱一起長」的時刻）：引擎只看時間最早的那一個，後面那個寫了也沒作用。
+    preview／build 印一行「提醒：」點名是哪一個（照真正的時間排，不是照寫的順序）；不擋（快推的自動檢查也會抓到畫面沒動）。"""
+    from article_to_video.build import plan_build
+
+    def edit(shots, _):
+        sh(shots, "SH01")["chart"]["cues"] += [{"at": {"segment": "s01", "word": "四點五八"}, "kind": "bar"},
+                                               {"at": {"segment": "s01", "word": "平均"}, "kind": "bar"}]
+
+    lines: list[str] = []
+    plan_build(make_project(tmp_path, edit), tts="fake", log=lines.append)
+    notes = [line for line in lines if line.startswith("提醒：")]
+    assert len(notes) == 1, lines
+    for needle in ["分鏡 SH01 的 chart.cues[4]", "沒有作用", "chart.cues[5]", "data.index"]:
+        assert needle in notes[0], f"提醒少了「{needle}」：\n{notes[0]}"
 
 
 def _y_range(value):

@@ -304,4 +304,7 @@ def test_the_card_and_comparison_example_in_formats_md_is_a_valid_project(tmp_pa
         ("SH01", False, "number"), ("SH02", False, "compare"), ("SH03", True, None)]
     from article_to_video.build import plan_build
 
-    plan_build(tmp_path, tts="fake")  # 時間軸也排得出來：數字落定後停得夠久（計時實測：照舊範例寫，數字 0.4 秒就切走）
+    lines: list[str] = []
+    plan_build(tmp_path, tts="fake", log=lines.append)  # 時間軸也排得出來
+    # 數字落定後停得夠久、沒有提醒（計時實測：照舊範例寫在數字唸完，排出來只停 0.10 秒）
+    assert not [line for line in lines if line.startswith("提醒：")], lines

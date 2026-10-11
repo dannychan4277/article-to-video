@@ -1047,16 +1047,15 @@ def _index_list(v: Any) -> list[int] | None:
 def _check_data_cues(shots: list[Shot], problems: _Problems) -> None:
     """柱、線的 cue 寫了也沒作用的，擋下來（整串一起看：第一個分鏡＋接續它的）：
     - 帶 data.index 的 bar cue＝那幾根柱在這一刻才長（可以寫在接續分鏡：前面的分鏡不畫它們）；同一根柱整串只能長一次。
-    - 沒帶 index 的 bar cue＝其他柱一起長的時刻，line／candle cue＝線、K 線長出來的時刻：整串只能有一個，寫在第一個分鏡。
+    - 沒帶 index 的 bar cue＝其他柱一起長的時刻，line／candle cue＝線、K 線長出來的時刻：寫在第一個分鏡。
       接續分鏡沿用的圖第一幀就畫好了，在那裡寫等於沒寫。
     柱的根數要等公有數據抓到才知道，標到不存在的柱在建置時查（timeline._check_highlight_points）。"""
     grown: dict[int, tuple[Shot, Cue]] = {}
-    main: tuple[Shot, Cue] | None = None
     for i, shot in enumerate(shots):
         if shot.chart is None:
             continue
         if _layout_head(shots, i) == i:
-            grown, main = {}, None
+            grown = {}
         layout = shots[_layout_head(shots, i)].chart.data.get("chart")
         if layout in ("number", "compare"):
             continue  # 這兩種版面不收柱、線（_check_layouts）
@@ -1086,11 +1085,8 @@ def _check_data_cues(shots: list[Shot], problems: _Problems) -> None:
                         else "這一句要有新東西就換標註（highlight）")
                 problems.add(f"{cue.where} 沒有作用：{shot.label} 是接續分鏡，沿用的圖第一幀就畫好了，"
                              f"{what}的時刻只能寫在這一串的第一個分鏡。{hint}")
-            elif main is not None:
-                problems.add(f"{cue.where} 沒有作用：{main[1].where} 已經是{'柱一起長' if cue.kind == 'bar' else '圖長出來'}的時刻，"
-                             f"一個分鏡只看第一個。拿掉這個 cue" + ("；要某根柱另外在這一刻長，寫 data.index" if cue.kind == "bar" else ""))
-            else:
-                main = (shot, cue)
+            # 同一個分鏡寫了兩個主生長（沒帶 index 的 bar、line）：引擎只看時間最早的那個，要排好時間才知道是哪一個，
+            # 所以在建置時提醒（timeline._dead_main_cues），不擋——快推的自動檢查也會抓到「寫了畫面事件、畫面沒動」
 
 
 def _check_layouts(shots: list[Shot], problems: _Problems) -> None:

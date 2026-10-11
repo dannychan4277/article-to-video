@@ -11,6 +11,7 @@
   寫在接續分鏡 SH09。SH08 唸完乙標「不到一半」（乙旁邊有高一倍多的甲：標註放在乙的正上方）。
 - SH10～SH11：第一個分鏡沒寫 bar cue（柱在版式之後自己長），接續分鏡才寫第三根柱的 bar cue。
 - SH12：先長「子」（帶 index 的 bar cue），其他柱等沒帶 index 的 bar cue（寫在後面）才一起長。
+- SH13～SH14：先標甲，切點前 0.2 秒才換標乙（還在換），下一句就切到接續分鏡（什麼 cue 都沒寫）。
 
 整串的第一個分鏡寫 push 0（不慢推），同一串裡不同時刻的畫面可以逐像素比；慢推的連續性另有測試（test_build.py）。
 """
@@ -43,6 +44,7 @@ NARRATION = {
     "s10": "先放兩組。",
     "s11": "第三組，最後才來。",
     "s12": "先看子組，其他幾組隨後。",
+    "s13": "先看甲，再看乙最高，接著換下一句。",
 }
 # 自製的月資料（跟 test_render_clip.py 的 DIP 同一組）：先倒掛、谷底在第 9 個月、回正
 DIP = [0.80, 0.55, 0.30, 0.10, -0.15, -0.40, -0.60, -0.75, -0.85, -0.80, -0.70, -0.55,
@@ -117,10 +119,21 @@ SHOTS = [
                  "series": [{"label": "子", "value": 2}, {"label": "丑", "value": 3}, {"label": "寅", "value": 4}]},
         "cues": [{"at": 0, "kind": "title"}, {"at": _a("s12", "子組"), "kind": "bar", "data": {"index": 0}},
                  {"at": _a("s12", "其他"), "kind": "bar"}]}},
+    # 標註在切點前 0.4 秒才開始（還沒長完），下一句就切到接續分鏡
+    {"id": "SH13", "start": _a("s13"), "chart": {
+        "data": {"title": "標註還沒長完就切", "unit": "示意數據", "source": SOURCE, "chart": "bar", "decimals": 1, "push": 0,
+                 "series": [{"label": "甲", "value": 2}, {"label": "乙", "value": 3}],
+                 "highlight": {"index": 1, "text": "乙最高"}},
+        "cues": [{"at": 0, "kind": "title"}, {"at": _a("s13", "甲"), "kind": "bar"},
+                 {"at": _a("s13", "先看甲", "end"), "kind": "highlight", "text": "先看甲", "data": {"index": 0}},
+                 {"at": _a("s13", "最高"), "kind": "highlight"}]}},
+    {"id": "SH14", "start": _a("s13", "高"), "continues": True, "chart": {"cues": []}},
 ]
 
 LAST = -1.0
 """時刻寫 LAST＝這個分鏡的最後一幀。"""
+NEXT = -2.0
+"""時刻寫 NEXT＝這個分鏡照自己的時間再往後一幀（＝下一個分鏡第一幀的那一刻）：切點時還在動的東西，拿它跟下一個分鏡的第一幀比。"""
 AFTER_BAR = {"乙剛長": (1, 0.15), "乙長完": (1, 0.9)}
 """時刻寫這些名字＝那根柱（index）的 bar cue 之後幾秒：乙在 0.7 秒裡長完，0.15 秒時柱上的數字（照往上數）才到八成。"""
 STILLS = {
@@ -136,6 +149,8 @@ STILLS = {
     "SH10": [LAST],
     "SH11": [0.0, LAST],
     "SH12": [0.85, LAST],   # 0.85 秒：唸過「子組」、還沒唸到「其他」
+    "SH13": [NEXT],
+    "SH14": [0.0],
 }
 
 
@@ -166,6 +181,8 @@ def chain(request, tmp_path_factory) -> Chain:
     def when(spec: dict, t: float | str) -> float:
         if t == LAST:
             return round(spec["duration"] - 1 / FPS, 4)
+        if t == NEXT:
+            return round(spec["duration"], 4)
         if isinstance(t, str):
             index, dt = AFTER_BAR[t]
             [at] = [q["at"] for q in spec["cues"] if q["kind"] == "bar" and (q.get("data") or {}).get("index") == index]
@@ -432,3 +449,12 @@ def test_a_bar_lower_than_the_one_before_shows_its_number_without_counting_up(ch
     9.8、11.6…，計時實測 R1-5），長出來時就寫 12.5。量的是剛長出來時（往上數的話才到 9.8）數字的寬度。"""
     early, settled = bar_label_width(chain.at("SH08", "乙剛長"), 1), bar_label_width(chain.at("SH08", "乙長完"), 1)
     assert early >= settled - 3, f"乙剛長出來時柱上的數字比長完窄（{early} vs {settled} 像素）：還在往上數"
+
+
+def test_a_label_still_animating_at_the_cut_keeps_going_in_the_continuation(chain):
+    """切點前 0.2 秒才從甲換標乙（舊的還在淡出、柱還在換顏色），下一句就切到接續分鏡：接續分鏡第一幀接著上一幀。
+    原本沿用過來的 cue 一律放在 −3 秒（第一幀已經畫完），而且只沿用最後一個標註：切點前還在動的標註直接跳成長完的樣子，
+    淡掉的柱從「沒有前一個標註」重來、閃回原色（計時實測的專案改成一句一個分鏡時量到）。"""
+    # 還在動，相鄰兩幀本來就不一樣：拿 SH13 照自己的時間再往後一幀（同一刻）跟 SH14 第一幀比
+    cut = changed(chain.at("SH13", NEXT), chain.at("SH14", 0.0))
+    assert cut < 400, f"SH13 切點那一刻跟 SH14 第一幀有 {cut} 個像素不一樣"

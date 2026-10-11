@@ -210,6 +210,8 @@ def plan_build(
         f"時間軸（{fmt.label}）：{len(timeline.shots)} 個分鏡，總長 {timeline.duration:.2f} 秒"
         f"（旁白到 {timeline.narration_end:.2f} 秒，片尾 {timeline.outro.frames / timeline.fps:.2f} 秒）"
     )
+    for note in timeline.notes:
+        log("提醒：" + note)
     return BuildPlan(project=project, format=fmt, audio=audio, timeline=timeline, clips=clips, public_data=public_data,
                      vox=vox)
 

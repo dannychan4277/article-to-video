@@ -28,8 +28,9 @@ from __future__ import annotations
 
 import bisect
 import math
+import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -222,6 +223,8 @@ class Timeline:
     narration_end: float
     outro: Outro
     total_frames: int
+    notes: tuple[str, ...] = ()
+    """提醒（不擋建置）：preview／build 印出來給 Claude 改，例數字落定後停不到 NUMBER_HOLD 秒。"""
 
     @property
     def duration(self) -> float:
@@ -382,6 +385,8 @@ def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: Vid
     shots: list[ShotTiming] = []
     last_vox: CueTiming | None = None
     """同一張 Vox 桌面上一個 cue（檢查照出場順序寫）。"""
+    own_frame: dict[str, int] = {}
+    """分鏡自己寫的 cue（where）在成片裡第一次出現的幀：沿用到接續分鏡時照真正的時刻排（見 _carried_at）。"""
     for n, shot in enumerate(project.shots):
         f0 = starts[n]
         f1 = starts[n + 1] if n + 1 < len(starts) else outro_start
@@ -405,8 +410,14 @@ def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: Vid
             for cue in eff:
                 ct = _cue_timing(cue, f0, f1, segs, s.lead, fps, problems, shot,
                                  shot_at=lambda f: project.shots[bisect.bisect_right(starts, f) - 1])
-                if ct is not None:
-                    cues.append(ct)
+                if ct is None:
+                    continue
+                if ct.carried:
+                    ct = _carried_at(ct, own_frame, f0, fps)
+                else:
+                    own_frame[ct.where] = ct.frame
+                cues.append(ct)
+            cues = _carry_label_in_transition(project.shots, n, cues, own_frame, f0, fps)
         elif shot.vox is not None:
             head = vox_head(project.shots, n)
             clip_f0 = starts[head]
@@ -425,18 +436,65 @@ def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: Vid
                 cues.append(ct)
         shots.append(ShotTiming(shot, f0, f1, cues))
 
-    if not problems:
-        _check_number_holds(shots, fps, outro_start, problems)
     if problems:
         raise ProjectError(problems, title="時間軸對不起來")
     return Timeline(fps=fps, segments=segs, shots=shots, narration_end=narration_end,
                     outro=Outro(start_frame=outro_start, frames=total - outro_start),
-                    total_frames=total)
+                    total_frames=total, notes=tuple(_dead_main_cues(shots) + _number_holds(shots, fps, outro_start)))
 
 
-def _check_number_holds(shots: list[ShotTiming], fps: int, outro_start: int, problems: list[str]) -> None:
-    """每個數字（number cue）落定之後在畫面上停滿 NUMBER_HOLD 秒。數字留到它那一串結束（接續分鏡沿用）；
-    圖上右上角的大數字被後面接續分鏡自己的大數字換掉時，留到那個分鏡切入。"""
+def _carried_at(ct: CueTiming, own_frame: Mapping[str, int], f0: int, fps: int) -> CueTiming:
+    """沿用到接續分鏡的 cue：原本放在 CONTINUATION_AT（−3 秒，第一幀已經畫完）。原本的 cue 在切點前不到那麼久才開始的
+    （標註、柱、數字切點時還在動），改成它真正的時刻（相對這個片段，負的）：動畫接著跑，切點不跳。更早的照舊（spec 不變、不重渲）。"""
+    origin = own_frame.get(re.sub(r"(（沿用）)+$", "", ct.where))
+    if origin is None:
+        return ct
+    real = round((origin - f0) / fps, 6)
+    return replace(ct, at=real) if ct.at < real < 0 else ct
+
+
+def _dead_main_cues(shots: list[ShotTiming]) -> list[str]:
+    """提醒（不擋）：一個分鏡寫了兩個以上的主生長（沒帶 index 的 bar、line、candle）：引擎照時間最早的那個長（沒有自己時刻的柱
+    跟著它），後面的寫了也沒作用。照真正的時間排（不是照寫的順序）。接續分鏡裡的主生長在載入時就擋了（project._check_data_cues）。"""
+    notes: list[str] = []
+    for st in shots:
+        if st.shot.chart is None:
+            continue
+        mains = sorted((c for c in st.cues if not c.carried and c.kind in DATA_KINDS and not (c.kind == "bar" and bar_indices(c))),
+                       key=lambda c: c.frame)
+        for c in mains[1:]:
+            what = "其他柱一起長" if mains[0].kind == "bar" else "圖長出來"
+            notes.append(f"{c.where} 沒有作用：{mains[0].where.removeprefix(st.shot.label + ' 的 ')} 比它早，已經是{what}的時刻"
+                         "（一張圖只看時間最早的那一個）。拿掉這個 cue"
+                         + ("；要某根柱另外在這一刻才長，寫 data.index（第幾根，0 起算）" if c.kind == "bar" else ""))
+    return notes
+
+
+LABEL_SETTLE = 1.0
+"""換標註要多久才換完（秒）：淡掉的柱 0.4 秒、舊標註淡出 0.25 秒、新標註的字 0.7 秒，取整留一點餘裕。"""
+
+
+def _carry_label_in_transition(shots: list[Shot], n: int, cues: list[CueTiming], own_frame: Mapping[str, int],
+                               f0: int, fps: int) -> list[CueTiming]:
+    """接續分鏡沿用的標註在切點時還在換（上一個分鏡最後一個標註開始不到 LABEL_SETTLE 秒）：它前面那一個標註也沿用過來。
+    引擎照順序疊：舊標註淡出、淡掉的柱從舊標註的樣子過渡，切點接得上。只沿用最後一個的話，柱從「沒有標註」開始淡、閃回原色。"""
+    last = next((c for c in reversed(cues) if c.carried and c.kind == "highlight"), None)
+    if last is None or last.at <= -LABEL_SETTLE:
+        return cues
+    p_data, p_cues = effective_chart(shots, n - 1)
+    labels = [c for c in p_cues if c.kind == "highlight"]
+    if len(labels) < 2:
+        return cues
+    q = _carry_highlight(labels[-2], p_data)
+    extra = _carried_at(CueTiming(q.where, q.kind, q.at, f0, None, dict(q.fields), True), own_frame, f0, fps)
+    k = cues.index(last)
+    return cues[:k] + [extra] + cues[k:]
+
+
+def _number_holds(shots: list[ShotTiming], fps: int, outro_start: int) -> list[str]:
+    """提醒（不擋）：每個數字（number cue）落定之後要在畫面上停滿 NUMBER_HOLD 秒。數字留到它那一串結束（接續分鏡沿用）；
+    圖上右上角的大數字被後面接續分鏡自己的大數字換掉時，留到那個分鏡切入。只提醒不擋：舊片照舊建得出來，preview／build 印出來給 Claude 改。"""
+    notes: list[str] = []
     i = 0
     while i < len(shots):
         if shots[i].shot.chart is None:
@@ -457,12 +515,13 @@ def _check_number_holds(shots: list[ShotTiming], fps: int, outro_start: int, pro
                 hold = (end - c.frame) / fps
                 if hold < NUMBER_HOLD - 1e-9:
                     then = "旁白就唸完了" if end >= outro_start else "就切走"
-                    problems.append(
+                    notes.append(
                         f"{c.where}（數字）在 {c.frame / fps:.2f} 秒落定，{end / fps:.2f} 秒{then}，只停 {max(hold, 0):.2f} 秒："
-                        f"落定後至少要停 {NUMBER_HOLD:g} 秒，觀眾才看得清楚（不然看到的是滾到一半的數）。"
+                        f"落定後要停 {NUMBER_HOLD:g} 秒以上，觀眾才看得清楚（不然看到的是滾到一半的數，審片會判必修）。"
                         "把 at 改到唸到這個數字的那個詞的開頭（edge 用 start，數字在 at 之前就開始滾，唸到時已經落定），"
                         "或把下一個分鏡的切入點往後移、讓旁白在數字後面多半句")
         i = j
+    return notes
 
 
 def vox_head(shots: list[Shot], i: int) -> int:
@@ -473,13 +532,14 @@ def vox_head(shots: list[Shot], i: int) -> int:
 
 
 def _later_bar_hint(cue: Cue, owner: Shot) -> str:
-    """柱的錨點落在後面的分鏡：告訴做片的人把 bar cue 搬過去（接續分鏡的 bar cue＝那根柱在那一句才長）。"""
-    if cue.kind != "bar":
+    """柱的錨點落在後面的分鏡：告訴做片的人把 bar cue 搬過去（接續分鏡的 bar cue＝那根柱在那一句才長）。
+    不寫那個分鏡的 id（回報問題會把訊息裡的分鏡都當成出錯的分鏡），用錨點的詞指路。"""
+    if cue.kind != "bar" or not isinstance(cue.at, Anchor):
         return ""
+    where = f"唸到「{cue.at.word}」的那個分鏡" if cue.at.word else f"從 {cue.at.segment} 開頭的那個分鏡"
     if owner.continues:
-        return f"。要這根柱在那一句才長，把這個 bar cue 搬到接續分鏡 {owner.id} 的 chart.cues（前面的分鏡就不會先畫它）"
-    return (f"。要這根柱在那一句才長，把 {owner.id} 改成接續分鏡（\"continues\": true），再把這個 bar cue 搬到"
-            "它的 chart.cues")
+        return f"。要這根柱在那一句才長，把這個 bar cue 搬到{where}（接續分鏡）的 chart.cues，前面的分鏡就不會先畫它"
+    return f"。要這根柱在那一句才長，把{where}改成接續分鏡（\"continues\": true），再把這個 bar cue 搬過去"
 
 
 def _cue_timing(cue: Cue, f0: int, f1: int, segs: Mapping[str, SegmentTiming], lead: float, fps: int,
