@@ -196,7 +196,9 @@ def test_the_reviewers_long_explanations_stay_folded_until_the_author_opens_them
     page.close()
 
 
-SHOWN_LIMIT = 9999
+SHOWN_LIMIT = 600
+"""這個測試專案（兩張卡、三項審片問題）改之前預設攤開 2,006 字，改完約 500 字。
+示範片（25 張卡、三輪審片）改之前 13,044 字、改完不到 2,900 字（量法見 item-7 交接筆記）。"""
 
 
 def test_what_the_author_sees_before_opening_anything_stays_short(project, browser):
@@ -211,7 +213,6 @@ def test_what_the_author_sees_before_opening_anything_stays_short(project, brows
     n = char_count(shown_text(page))
     page.close()
     assert n <= SHOWN_LIMIT, f"審片頁預設看得到 {n} 字（上限 {SHOWN_LIMIT}）"
-    print("SHOWN", n)
 
 
 def test_the_top_of_the_page_lists_what_needs_fixing_and_leaves_nice_to_haves_on_their_cards(project):

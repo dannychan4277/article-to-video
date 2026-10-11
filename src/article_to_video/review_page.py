@@ -8,8 +8,15 @@
     .slot[data-slot="numbers"]   數字對帳（#5 填）      .slot[data-slot="checks"]  自動檢查（#11 填）
     textarea.comment[data-shot-id]
   .page-slots .slot[data-slot=…]   整片層級的檢查結果（例：獨立審片）
-  textarea#overall.overall、#menu（能加什麼）、#copy-btn／#copy-status／#copy-out（複製給 Claude）
+  textarea#overall.overall、#menu（能加什麼；內容在預設收起來的 details.menu-fold 裡）、
+  #copy-btn／#copy-status／#copy-out（複製給 Claude）
   <script id="review-data" type="application/json">  給 review.js 的資料（片名、版本、分鏡編號與 id）
+  每一區裡的一行（li）：.mark（小標籤）＋.text（主要那行）＋.detail（補充）。有 more 或代號時 .text 是
+  details.more 的 summary：點那一行才展開 more 與 .codes（「給 Claude：代號」）。
+  沒問題的整區是 .slot.quiet（一行；有細節的是 details.fold）；攤開的幾行後面收起來的其他行是 details.fold.rest。
+
+作者預設看得到的字要少（示範片從一萬三千字降到三千字以內，見 tests 的 SHOWN_LIMIT）：給 Claude 的代號、
+審片員的長段說明、對得到出處的數字、已處理的問題都收起來；Claude 要細節讀 checks.json、check_log.json。
 
 後面的票往卡片加東西：做一個 CardSection（slot、標題、幾個 CheckItem），經 review.make_review(contributors=…) 傳進來，
 這裡負責排版與跳脫（不吃 HTML，只吃文字）。
