@@ -1,8 +1,8 @@
 """獨立審片：build 好審片用的成片之後、作者看審片頁之前（出片之前），Claude Code 另外派一個 agent，只看成片審一輪。Python 不派 agent，這裡只做三件事：
 
   prepare_review_kit(plan)     從成片準備審片素材（指令列 review-prep）：build/<比例>/independent-review/
-                                 material.json   目錄：成片長度、每個分鏡的編號與時段、字幕帶位置、畫面事件時刻、
-                                                 靜止片段（freezedetect）、上一輪的問題、抽幀指令
+                                 material.json   目錄：這輪審的範圍、成片長度、要審的分鏡編號與時段、字幕帶位置、
+                                                 畫面事件時刻、靜止片段（freezedetect）、上一輪要核的問題、抽幀指令
                                  overview-NN.png 每秒一格（4×4，一張 16 秒），格子下面是時間碼、分鏡、那一刻的字幕
                                  cues-NN.png     每個畫面事件出現後 CUE_SETTLE 秒那一格
                                  subtitles.srt   字幕檔（＝旁白逐句與時間碼）
@@ -14,6 +14,17 @@
   extract_review_frames(...)   抽全解析度單幀、或一段每 0.25 秒一幀（指令列 review-frames，agent 自己用）。
   record_review(plan, data)    驗證 agent 的回答、記成新的一輪（指令列 review-record）：<專案>/check_log.json 的 rounds，
                                每一項編號 R<輪>-<第幾項>；previous 裡「沒修好／部分修好」的舊問題重新打開。
+
+每一輪審多少（next_round；示範片三輪整片審了 28 分鐘，所以變輕）：
+  - 第一輪審整支片（scope "full"）。
+  - 整片審的那一輪有必修：改好之後整支片再審一輪核對——整片最多 MAX_FULL_ROUNDS 輪。
+  - 其他時候再審只看改過的分鏡（scope "changed"）：跟上一輪審的那份成片比，分鏡內容雜湊（review._shot_hashes：
+    分鏡自己的畫面＋長度＋它唸的旁白；前面變長、它往後挪不算）不一樣、新加的、或前一個分鏡換了（換鏡變了）。
+    素材只做這幾個分鏡前後各 CONTEXT_SECONDS 秒的總覽、它們的畫面事件；上一輪的問題只帶這幾個分鏡的。
+  - 上一輪沒有必修（或必修都核過了）就不用再審（needed=False）：Claude 改了該修，自己看改到的靜態圖、checks 確認。
+    作者要求大改時 Claude 照 skill 再審一輪，這時也只看改過的分鏡。
+  每一輪記下審的範圍（scope）和那份成片每個分鏡的內容雜湊（shotHashes），下一輪拿來比「改過」。
+  舊的紀錄沒有 shotHashes：比不出改了哪些，就整支片審。
 
 審片頁：review_contributor(data_dir) 每張卡列這個分鏡的問題，頁首一區總評。必修沒處理（resolve 沒標改好、也沒接受）
 擋出片：publish 的 auto_checks.require_checks_cleared 會問 unresolved_must()（build 只列出來，不擋）。
@@ -49,11 +60,15 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BRIEF",
+    "MAX_FULL_ROUNDS",
+    "SCOPES",
     "SEVERITIES",
+    "NextRound",
     "ReviewKit",
     "extract_review_frames",
     "find_kit",
     "item_where",
+    "next_round",
     "parse_time_arg",
     "prepare_review_kit",
     "record_review",
@@ -75,6 +90,12 @@ SHEET_ROWS = 4
 FREEZE_NOISE = "-35dB"
 FREEZE_SECONDS = 5
 """靜止片段：字幕帶以外連續這麼久幾乎不動（審片學到：−35 dB 才抓得到慢推的靜止，−40 dB 會被騙）。"""
+FULL, CHANGED = "full", "changed"
+SCOPES = {FULL: "整支片", CHANGED: "只看改過的分鏡"}
+MAX_FULL_ROUNDS = 2
+"""整支片最多審幾輪（第一輪＋有必修時的核對輪）；之後的必修改好只審改過的分鏡。"""
+CONTEXT_SECONDS = 1.0
+"""只看改過的分鏡時，總覽多做前後各幾秒（看換鏡那一下有沒有閃、接不接得上）。"""
 
 
 # ---------------------------------------------------------------- 設定
@@ -170,18 +191,35 @@ def _extract_small(video: Path, frames: Sequence[int], out_dir: Path, *, size: t
     return out
 
 
+BURST_GAP = 60
+"""抽全解析度幀時，幀號相隔不到這麼多幀的併成一段、只跳一次、一路解碼挑出來（連續幀每張各跳一次太慢：
+審片員要 4 秒的連續幀＝17 次跳轉）；隔得遠的各跳一次，免得為了兩張圖解碼一大段。"""
+
+
 def _extract_full(video: Path, frames: Sequence[int], fps: int, out_dir: Path, ffmpeg: Path) -> dict[int, Path]:
-    """照幀號抽全解析度圖：每張各跳一次（-ss 在 -i 前面＝跳到那個時間點之後的第一幀，往前讓 0.25 幀確保是這一幀）。"""
+    """照幀號抽全解析度圖。每一段跳一次（-ss 在 -i 前面＝跳到那個時間點之後的第一幀，往前讓 0.25 幀確保是那一段的
+    第一幀），之後解碼出來的第 k 幀就是第「段首＋k」幀，用 select 挑要的。"""
     out: dict[int, Path] = {}
     out_dir.mkdir(parents=True, exist_ok=True)
+    groups: list[list[int]] = []
     for n in sorted(set(frames)):
-        dest = out_dir / f"{n:06d}.png"
-        proc = subprocess.run([str(ffmpeg), "-v", "error", "-y", "-ss", f"{max(0.0, (n - 0.25) / fps):.4f}",
-                               "-i", str(video), "-frames:v", "1", str(dest)],
+        if groups and n - groups[-1][-1] <= BURST_GAP:
+            groups[-1].append(n)
+        else:
+            groups.append([n])
+    for group in groups:
+        first = group[0]
+        pick = "+".join(f"eq(n\\,{n - first})" for n in group)
+        pattern = out_dir / f"g{first:06d}-%03d.png"
+        proc = subprocess.run([str(ffmpeg), "-v", "error", "-y", "-ss", f"{max(0.0, (first - 0.25) / fps):.4f}",
+                               "-i", str(video), "-vf", f"select='{pick}'", "-fps_mode", "passthrough",
+                               "-frames:v", str(len(group)), str(pattern)],
                               capture_output=True, text=True, encoding="utf-8", errors="replace")
-        if proc.returncode != 0 or not dest.is_file():
-            raise ProjectError(f"從成片抽圖失敗（第 {n} 幀）：{proc.stderr.strip()[-300:]}", title="抽不了幀")
-        out[n] = dest
+        for k, n in enumerate(group, start=1):
+            dest = out_dir / f"g{first:06d}-{k:03d}.png"
+            if proc.returncode != 0 or not dest.is_file():
+                raise ProjectError(f"從成片抽圖失敗（第 {n} 幀）：{proc.stderr.strip()[-300:]}", title="抽不了幀")
+            out[n] = dest
     return out
 
 
@@ -248,18 +286,156 @@ def _shot_of(plan: BuildPlan, t: float) -> int | None:
     return None
 
 
-def prepare_review_kit(plan: BuildPlan, *, log: Log = quiet) -> ReviewKit:
-    """從成片做審片素材（見模組說明）。成片不是現在這份分鏡設定做出來的（改過還沒重新出片）就丟 ProjectError。"""
+# ---------------------------------------------------------------- 這一輪審多少
+
+
+def _shot_content_hashes(plan: BuildPlan) -> dict[str, str]:
+    """每個分鏡的內容雜湊（跟審片頁「這版改過」同一套：分鏡自己的畫面＋長度＋它唸的旁白）。"""
+    from article_to_video.review import _shot_hashes, shot_narration  # 避免循環匯入
+
+    return _shot_hashes(plan, shot_narration(plan.timeline))
+
+
+def _rounds_of(book: dict[str, Any], aspect: str) -> list[dict[str, Any]]:
+    return [r for r in book["rounds"] if isinstance(r, dict) and r.get("aspect") == aspect]
+
+
+def _scope_of(rnd: dict[str, Any]) -> str:
+    return CHANGED if rnd.get("scope") == CHANGED else FULL  # 舊紀錄沒有 scope：當時都是整支片
+
+
+def _confirmed(res: dict[str, Any] | None) -> bool:
+    """獨立審片核過、說已修好。"""
+    return res is not None and res.get("status") == "fixed" and str(res.get("by", "")).startswith("獨立審片")
+
+
+def _pending_must(book: dict[str, Any], rounds: Sequence[dict[str, Any]]) -> list[tuple[dict, dict]]:
+    """(那一輪, 必修)：還沒有被下一輪審片核過的必修（沒處理、被重新打開、或只是做片的說改好了）。接受不改的不算。"""
+    out = []
+    for rnd in rounds:
+        for it in rnd.get("items") or []:
+            if it.get("severity") != "必修":
+                continue
+            res = resolution(book, it["id"])
+            if res is not None and (res.get("status") == "accepted" or _confirmed(res)):
+                continue
+            out.append((rnd, it))
+    return out
+
+
+@dataclass(frozen=True)
+class NextRound:
+    """下一輪獨立審片審多少（next_round）。"""
+
+    scope: str
+    """FULL 整支片、CHANGED 只看改過的分鏡。"""
+    reason: str
+    needed: bool
+    """照規則要不要再審；False＝可以不審（Claude 自己看改到的靜態圖確認），硬要審就照 scope。"""
+    changed: tuple[str, ...] = ()
+    """跟上一輪審的成片比，改過的分鏡 id（照片中順序）。"""
+    since: int | None = None
+    """拿來比的是第幾輪。"""
+
+
+def _changed_shots(plan: BuildPlan, hashes: dict[str, str], baseline: list[dict[str, Any]]) -> tuple[str, ...]:
+    """改過的分鏡：內容雜湊不一樣、新加的，或前一個分鏡換了（拿掉、插入、換順序：換鏡那一下變了）。"""
+    then = {s.get("id"): s.get("hash") for s in baseline if isinstance(s, dict)}
+    order_then = [s.get("id") for s in baseline if isinstance(s, dict)]
+    prev_then = {sid: (order_then[i - 1] if i else None) for i, sid in enumerate(order_then)}
+    order = [st.shot.id for st in plan.timeline.shots]
+    out = []
+    for i, sid in enumerate(order):
+        before = order[i - 1] if i else None
+        if then.get(sid) != hashes[sid] or prev_then.get(sid, "?") != before:
+            out.append(sid)
+    return tuple(out)
+
+
+def next_round(plan: BuildPlan) -> NextRound:
+    """照規則（見模組說明）決定下一輪審整支片還是只看改過的分鏡、需不需要再審。不寫任何檔案。"""
+    book = load_log(plan.project.root)
+    rounds = _rounds_of(book, plan.format.name)
+    if not rounds:
+        return NextRound(FULL, "第一輪審整支片", True)
+    fulls = sum(1 for r in rounds if _scope_of(r) == FULL)
+    pending = _pending_must(book, rounds)
+    from_full = [it["id"] for rnd, it in pending if _scope_of(rnd) == FULL]
+    last = rounds[-1]
+    baseline = last.get("shotHashes")
+    since = last.get("round") if isinstance(baseline, list) else None
+    changed = _changed_shots(plan, _shot_content_hashes(plan), baseline) if since is not None else ()
+    if from_full and fulls < MAX_FULL_ROUNDS:
+        return NextRound(FULL, f"整支片審的那一輪有必修（{'、'.join(from_full)}），改好之後整支片再審一輪核對", True,
+                         changed, since)
+    if since is None:
+        return NextRound(FULL, f"第 {last.get('round')} 輪的紀錄沒有記分鏡內容，比不出改了哪些，整支片審", bool(pending))
+    if pending:
+        ids = "、".join(it["id"] for _, it in pending)
+        if not changed:
+            return NextRound(CHANGED, f"還有必修沒改（{ids}）：改好、重建之後再審改過的分鏡", False, changed, since)
+        why = (f"還有必修要核對（{ids}）；整支片已經審過 {fulls} 輪，這輪只看改過的分鏡" if fulls >= MAX_FULL_ROUNDS
+               else f"還有必修要核對（{ids}），只看改過的分鏡")
+        return NextRound(CHANGED, why, True, changed, since)
+    return NextRound(CHANGED, f"第 {since} 輪之後沒有必修要核對：改過的分鏡自己看靜態圖確認就好；"
+                              "改得多（約三分之一以上的分鏡、或整段旁白重寫）才審一輪改過的分鏡",
+                     False, changed, since)
+
+
+def _shot_label(plan: BuildPlan, ids: Sequence[str]) -> str:
+    nums = {st.shot.id: st.shot.number for st in plan.timeline.shots}
+    return "、".join(f"分鏡 {nums[i]}" for i in ids if i in nums)
+
+
+def _ranges(plan: BuildPlan, ids: Sequence[str]) -> list[tuple[float, float]]:
+    """改過的分鏡在成片裡的時段，前後各多 CONTEXT_SECONDS 秒，重疊的併起來。"""
+    fps, duration = plan.timeline.fps, plan.timeline.duration
+    spans = sorted((max(0.0, st.start_frame / fps - CONTEXT_SECONDS), min(duration, st.end_frame / fps + CONTEXT_SECONDS))
+                   for st in plan.timeline.shots if st.shot.id in set(ids))
+    out: list[tuple[float, float]] = []
+    for a, b in spans:
+        if out and a <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def _seconds(a: float, b: float, duration: float) -> list[float]:
+    """總覽格子的時刻：從 a 起每秒一格，到 b（不含最後 0.05 秒）。"""
+    end = min(b, duration) - 0.05
+    return [round(a + k, 3) for k in range(math.floor(end - a) + 1)] if end >= a else []
+
+
+def prepare_review_kit(plan: BuildPlan, *, scope: str | None = None, log: Log = quiet) -> ReviewKit:
+    """從成片做審片素材（見模組說明）。scope：None＝照 next_round 的規則；FULL／CHANGED＝硬要這樣審。
+    成片不是現在這份分鏡設定做出來的（改過還沒重新出片）、或只看改過的分鏡卻沒有改過的，丟 ProjectError。"""
     from article_to_video.auto_checks import current_video
 
     video = current_video(plan)
+    root, aspect = plan.project.root, aspect_args(plan.format.name)
     if video is None:
         raise ProjectError(
             "成片還沒做、或分鏡改過之後還沒重新出片",
             title="獨立審片要看最新的成片",
-            hint=f"先跑 build（{cli_command('build', plan.project.root, *aspect_args(plan.format.name), '--no-open')}），"
+            hint=f"先跑 build（{cli_command('build', root, *aspect, '--no-open')}），"
                  "出片成功再準備審片素材。",
         )
+    nr = next_round(plan)
+    if scope == CHANGED and nr.since is None:
+        raise ProjectError("還沒有能拿來比的審片紀錄（第一輪、或舊的紀錄沒記分鏡內容）", title="比不出改了哪些分鏡",
+                           hint=f"這輪審整支片：{cli_command('review-prep', root, *aspect)}")
+    scope = scope or nr.scope
+    hashes = _shot_content_hashes(plan)
+    if scope == CHANGED:
+        if not nr.changed:
+            raise ProjectError(f"這份成片跟第 {nr.since} 輪審的比，沒有改過的分鏡", title="不用再審",
+                               hint=f"真的要整支片再審一輪：{cli_command('review-prep', root, *aspect, '--full')}")
+        covered = set(nr.changed)
+        why = nr.reason if nr.scope == CHANGED else f"指定只看改過的分鏡（照規則是{SCOPES[nr.scope]}：{nr.reason}）"
+    else:
+        covered = {st.shot.id for st in plan.timeline.shots}
+        why = nr.reason if nr.scope == FULL else "指定審整支片"
     ffmpeg = find_ffmpeg()
     fmt, tl = plan.format, plan.timeline
     fps = tl.fps
@@ -275,9 +451,12 @@ def prepare_review_kit(plan: BuildPlan, *, log: Log = quiet) -> ReviewKit:
     shutil.copyfile(BRIEF, kit / "brief.md")
 
     duration = tl.duration
-    overview = list(range(0, math.floor(duration - 0.05) + 1))
+    ranges = [(0.0, duration)] if scope == FULL else _ranges(plan, sorted(covered))
+    overview = [t for a, b in ranges for t in _seconds(a, b, duration)]
     cues: list[tuple[float, int]] = []
     for st in tl.shots:
+        if st.shot.id not in covered:
+            continue
         last = st.end_frame - 1
         for c in st.cues:
             if not c.carried:
@@ -300,19 +479,41 @@ def prepare_review_kit(plan: BuildPlan, *, log: Log = quiet) -> ReviewKit:
         cue_sheets = _sheets([tile(t, n) for t, n in cues], kit, "cues", tile_w)
 
     band_top = fmt.height - fmt.safe_bottom
-    freeze = _freeze(video, band_top, fmt.width, ffmpeg)
-    book = load_log(plan.project.root)
-    said = {"fixed": "做片的說改好了", "accepted": "作者或做片的決定不改"}
-    previous = [
-        {"id": it["id"], "round": rnd.get("round"), "severity": it.get("severity"), "shot": it.get("shot"),
-         "time": it.get("time"), "title": it.get("title"),
-         "status": said.get((resolution(book, it["id"]) or {}).get("status"), "還沒處理")}
-        for rnd in book["rounds"] for it in rnd.get("items") or [] if it.get("severity") in ("必修", "該修")
-    ]
+    freeze = [f for f in _freeze(video, band_top, fmt.width, ffmpeg)
+              if any(f["start"] < b and (f["end"] is None or f["end"] > a) for a, b in ranges)]
+    book = load_log(root)
+    numbers = {st.shot.id: st.shot.number for st in tl.shots}
+
+    def in_scope(it: dict[str, Any]) -> bool:
+        if scope == FULL:
+            return True
+        sid = it.get("shotId")
+        if sid:
+            return sid in covered
+        t = it.get("time")
+        return t is not None and any(a <= float(t) <= b for a, b in ranges)
+
+    previous, known = [], []
+    for rnd in book["rounds"]:
+        for it in rnd.get("items") or []:
+            if it.get("severity") not in ("必修", "該修") or not in_scope(it):
+                continue
+            res = resolution(book, it["id"])
+            if _confirmed(res):
+                continue  # 之前的審片核過、已修好：不用再核
+            row = {"id": it["id"], "round": rnd.get("round"), "severity": it.get("severity"),
+                   "shot": numbers.get(it.get("shotId"), it.get("shot")), "time": it.get("time"),
+                   "title": it.get("title")}
+            if res is not None and res.get("status") == "accepted":
+                known.append(row)
+            else:
+                previous.append({**row, "status": "做片的說改好了" if res is not None else "還沒處理"})
     material = {
         "version": 1,
         "preparedAt": now(),
         "round": len(book["rounds"]) + 1,
+        "scope": scope,
+        "scopeNote": SCOPES[scope] + "：" + why,
         "aspect": fmt.name,
         "video": str(video),
         "videoKey": _final_key(plan),
@@ -322,34 +523,55 @@ def prepare_review_kit(plan: BuildPlan, *, log: Log = quiet) -> ReviewKit:
         "height": fmt.height,
         "subtitleBand": {"top": band_top, "note": f"燒錄字幕在 y ≥ {band_top} px 這一條（含直式的平台介面區）"},
         "shots": [{"number": st.shot.number, "start": round(st.start_frame / fps, 3), "end": round(st.end_frame / fps, 3)}
-                  for st in tl.shots],
+                  for st in tl.shots if st.shot.id in covered],
+        "ranges": [{"start": round(a, 3), "end": round(b, 3)} for a, b in ranges],
+        "changedShots": [numbers[i] for i in nr.changed if i in numbers] if nr.since is not None else None,
         "endCard": {"start": round(tl.outro.start_frame / fps, 3), "end": round(duration, 3)},
         "cues": [{"time": round(t, 3), "shot": n} for t, n in cues],
         "sheets": {"overview": overview_sheets, "cues": cue_sheets},
         "subtitles": "subtitles.srt",
         "freeze": freeze,
         "previous": previous,
-        "frameCommand": cli_command("review-frames", plan.project.root, *aspect_args(fmt.name)),
+        "known": known,
+        "frameCommand": cli_command("review-frames", root, *aspect),
         "brief": "brief.md",
         "answer": "review.json",
+        "shotHashes": [{"id": st.shot.id, "hash": hashes[st.shot.id]} for st in tl.shots],
     }
     (kit / "material.json").write_text(json.dumps(material, ensure_ascii=False, indent=1), encoding="utf-8")
     (kit / "prompt.txt").write_text(_prompt(kit, material), encoding="utf-8")
-    log(f"審片素材（{fmt.label}，第 {material['round']} 輪）：總覽 {len(overview_sheets)} 張、畫面事件 {len(cue_sheets)} 張、"
-        f"靜止片段 {len(freeze)} 段 → {kit}")
+    what = "整支片" if scope == FULL else f"只看改過的分鏡（{_shot_label(plan, [st.shot.id for st in tl.shots if st.shot.id in covered])}）"
+    log(f"審片素材（{fmt.label}，第 {material['round']} 輪，{what}）：總覽 {len(overview_sheets)} 張、"
+        f"畫面事件 {len(cue_sheets)} 張、靜止片段 {len(freeze)} 段、要核的上一輪問題 {len(previous)} 項 → {kit}")
+    log(f"為什麼{SCOPES[scope]}：{why}")
     return ReviewKit(kit, material)
 
 
+def _span(m: dict[str, Any]) -> str:
+    return "、".join(f"{timecode(r['start'])}–{timecode(r['end'])}" for r in m["ranges"])
+
+
 def _prompt(kit: Path, m: dict[str, Any]) -> str:
-    second = "這是第 {0} 輪：先逐條核 material.json 的 previous（上一輪的問題），再找新問題。\n".format(m["round"]) \
-        if m["previous"] else ""
+    if m.get("scope") == CHANGED:
+        nums = "、".join(f"分鏡 {s['number']}" for s in m["shots"])
+        scope = (f"這是第 {m['round']} 輪，只看改過的分鏡：{nums}（成片 {_span(m)}，前後各多 1 秒看換鏡）。"
+                 "其他分鏡上一輪審過、之後沒改，不用看。"
+                 + ("先逐條核 material.json 的 previous（這幾個分鏡上一輪的問題），再看這幾段有沒有新問題——修 A 常帶出新問題 B。"
+                    if m["previous"] else "看這幾段有沒有新問題——修 A 常帶出新問題 B。") + "\n")
+    elif m["previous"]:
+        changed = m.get("changedShots")
+        scope = (f"這是第 {m['round']} 輪（整支片）：先逐條核 material.json 的 previous（上一輪的問題），再找新問題。"
+                 + (f"上一輪之後改過的是{'、'.join(f'分鏡 {n}' for n in changed)}，那幾段看仔細一點。" if changed else "")
+                 + "\n")
+    else:
+        scope = ""
     return (
         "你是這支財經解說影片的獨立審片員，只看成片，用觀眾的眼睛找問題。\n\n"
         f"1. 先讀審片說明：{kit / 'brief.md'}\n"
         f"2. 素材在 {kit}（material.json 是目錄）；成片是 {m['video']}。\n"
         f"3. 要看全解析度單幀或每 0.25 秒一幀：{m['frameCommand']} --at 秒數（或 --from 秒 --to 秒 --step 0.25），"
         f"抽出來的圖在 {kit / 'frames'}。\n"
-        f"{second}"
+        f"{scope}"
         f"4. 審完照說明裡的 JSON 格式寫到 {kit / 'review.json'}，最後只回一行「審完了：必修 N、該修 N、可改 N」。\n\n"
         "只讀上面這個素材資料夾和成片；不要讀專案資料夾裡的其他檔案（分鏡設定、旁白稿、文章），也不要改任何檔案"
         "（review.json 除外）。\n"
@@ -397,8 +619,8 @@ def parse_time_arg(s: str) -> float:
     return t
 
 
-def extract_review_frames(kit: ReviewKit, times: Sequence[float]) -> tuple[list[Path], Path | None]:
-    """成片的全解析度幀（frames/t<秒>.png）；超過一張另外拼一張總覽（frames/burst-<起>-<迄>.png）。"""
+def extract_review_frames(kit: ReviewKit, times: Sequence[float]) -> tuple[list[Path], list[Path]]:
+    """成片的全解析度幀（frames/t<秒>.png）；超過一張另外拼總覽（frames/burst-<起>-<迄>-NN.png，16 格一張，一格都不漏）。"""
     m = kit.material
     video, fps, duration = Path(m["video"]), int(m["fps"]), float(m["duration"])
     if not video.is_file():
@@ -416,14 +638,14 @@ def extract_review_frames(kit: ReviewKit, times: Sequence[float]) -> tuple[list[
             dest = out / f"t{n / fps:07.2f}.png"
             shutil.copyfile(by_frame[n], dest)
             paths.append(dest)
-    sheet = None
+    sheets: list[Path] = []
     if len(paths) > 1:
         subs = _parse_srt(kit.dir / m.get("subtitles", "subtitles.srt")) if (kit.dir / "subtitles.srt").is_file() else []
         tiles = [(p, f"{timecode(n / fps)}（{n / fps:.2f} 秒）", _subtitle_at(subs, n / fps)) for p, n in zip(paths, nums)]
-        name = _sheets(tiles[:SHEET_COLS * SHEET_ROWS], out, f"burst-{nums[0] / fps:.2f}-{nums[-1] / fps:.2f}",
-                       480 if int(m["width"]) >= int(m["height"]) else 270)[0]
-        sheet = out / name
-    return paths, sheet
+        names = _sheets(tiles, out, f"burst-{nums[0] / fps:.2f}-{nums[-1] / fps:.2f}",
+                        480 if int(m["width"]) >= int(m["height"]) else 270)
+        sheets = [out / name for name in names]
+    return paths, sheets
 
 
 # ---------------------------------------------------------------- 記錄
@@ -514,11 +736,16 @@ def record_review(plan: BuildPlan, answer: Any, kit: ReviewKit) -> dict[str, Any
         raise ProjectError(problems, title="審片結果格式不對，沒有記下來",
                            hint=f"格式見 {kit.dir / 'brief.md'} 的「回答格式」。改好 review.json 再跑一次 review-record。")
 
+    m = kit.material
     rnd = {
         "round": rnd_no, "aspect": plan.format.name, "recordedAt": now(),
-        "videoKey": kit.material.get("videoKey", ""), "preparedAt": kit.material.get("preparedAt"),
+        "videoKey": m.get("videoKey", ""), "preparedAt": m.get("preparedAt"),
+        "scope": CHANGED if m.get("scope") == CHANGED else FULL,
+        "shots": [s.get("number") for s in m.get("shots") or [] if isinstance(s, dict)],
         "score": score, "summary": str(answer.get("summary") or "").strip(), "items": items, "previous": prev_out,
     }
+    if isinstance(m.get("shotHashes"), list):  # 審的那份成片每個分鏡的內容雜湊：下一輪拿來比「改過」
+        rnd["shotHashes"] = m["shotHashes"]
     book["rounds"].append(rnd)
     for p in prev_out:
         book["resolutions"][p["id"]] = {"status": PREVIOUS[p["status"]], "note": p["note"] or p["status"],

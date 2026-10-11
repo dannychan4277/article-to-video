@@ -115,7 +115,8 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video preview "<專�
   每一張都 Read 看過。`--no-open` 的預覽是你自己檢查，不算一版：自己改幾輪都一樣，下一步打開給他看才是新的一版。
 - 數字對帳那行有「找不到出處」就先改好（文章裡的數字；他圖上的數字記進 figure_numbers.json；算出來的宣告 `derived`）。
 
-- 改得很多（大約三分之一以上的分鏡，或整段旁白重寫）：照 checks-and-review.md 再 build、checks、審一輪，再給他看。
+- 他要求的修改不用再派審片員：他自己會看改過的那幾張。改得很多（大約三分之一以上的分鏡，或整段旁白重寫）才照
+  checks-and-review.md 再 build、checks、審一輪（review-prep 會只看改過的分鏡），再給他看。
 
 ## 4. 給他看新的一版
 

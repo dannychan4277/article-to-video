@@ -149,7 +149,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video checks "<專�
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings show --json --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-`independent_review` 是 true 才做獨立審片：
+`independent_review` 是 true 才做獨立審片。第一輪審整支片（review-prep 自己選範圍、印出為什麼）：
 
 ```
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-prep "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
@@ -170,7 +170,12 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-record 
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video resolve "<專案>" R1-2 --fixed "怎麼改的" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-你覺得不用改的要留給作者決定（第 8 步問他，他說不改才 `--accept "…" --by 作者`）。改得多再審一輪。
+你覺得不用改的要留給作者決定（第 8 步問他，他說不改才 `--accept "…" --by 作者`）。
+
+**再審幾輪**（細節在 checks-and-review.md「再審幾輪、審哪些」；build 最後印的「下一步」會照規則說要不要再審）：
+- 整支片審的那一輪有必修 → 改好、build、checks 之後，再跑一次上面的 review-prep → 派 agent → review-record：
+  它會整支片再審一輪核對（整支片最多 2 輪；之後還有必修就只看改過的分鏡）。
+- 沒有必修 → 不再派審片員。值得改的該修改掉，自己看改到的靜態圖、build、checks 確認，記 `--fixed`，就到第 8 步。
 
 ## 8. 打開審片頁給作者看
 
@@ -201,4 +206,4 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video open-review "<
 - 配音：3 分鐘的旁白第一次十幾秒（要連網），之後只重配改到的段。
 - 預覽：第一次 20 個分鏡約 15 秒，之後只改幾個分鏡幾秒鐘。
 - 第一次建置 3 分鐘的片：幾分鐘（圖表片段一個約 5 秒）。
-- 自動檢查第一次約 1 分鐘；獨立審片素材約 10 秒，加上審片員看片的時間。
+- 自動檢查第一次約 1 分鐘；獨立審片素材約 10 秒，加上審片員看片的時間（2 分鐘的片整支約十分鐘；有必修時再整支看一輪）。
