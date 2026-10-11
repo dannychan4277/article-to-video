@@ -23,11 +23,11 @@ const DOT_R = 9, NEG_DOT = 2 * DOT_R + 16;
 const LEADER_MIN = 40;
 // [article-to-video 內嵌修改] 品牌色：data.colors.brand 取代「當品牌用的紅」（頂端色條、小旗、角標、標註圓點、大數字、折線預設色）；
 // 沒寫就是原本的紅。K 線的漲跌紅綠是語意色，不跟品牌走。#RRGGBB／#RGB 換成 rgba（折線下方漸層、角標底色用）。
-// [article-to-video 內嵌修改] B 鏡頭（data.camera，建置給的）：快推的曲線＝Emil Kowalski 的強 ease-out cubic-bezier(0.23, 1, 0.32, 1)。
+// [article-to-video 內嵌修改] 快推（data.camera，建置給的）：曲線＝Emil Kowalski 的強 ease-out cubic-bezier(0.23, 1, 0.32, 1)。
 // 鏡頭是在回應「標註出現」這個事件：ease-out 一開始就動（觀眾眼睛正看著圓點彈出的那一刻），後段慢慢停穩；
-// ease-in-out 前幾幀幾乎不動，看起來像遲到的運鏡。時長由 spec 給（建置的 SNAP_DUR）。
+// ease-in-out 前幾幀幾乎不動，看起來像鏡頭遲到了。時長由 spec 給（建置的 SNAP_DUR）。
 const SNAP_EASE = MO.bezier(0.23, 1, 0.32, 1);
-const CAM_SIDE = 12;                                                      // B 鏡頭推近後，字離畫面左右邊至少這麼多（×u）
+const CAM_SIDE = 12;                                                      // 快推推近後，字離畫面左右邊至少這麼多（×u）
 // [article-to-video 內嵌修改] 柱寬：一格的 BAR_FILL（原版 0.62），最寬 BAR_MAX（×u；原版 150）。見 init 的 xs
 const BAR_FILL = 0.62, BAR_MAX = 240;
 // [article-to-video 內嵌修改] 大數字卡、兩數對比的動畫時間與顏色（說明在 cardInit 上面）
@@ -149,7 +149,7 @@ return {
     const qt = ctx.of('title')[0] || { at: 0 }, lt = ctx.lt(t, qt.at);
     if (!ctx.alpha) { c.fillStyle = '#FFFFFF'; c.fillRect(0, 0, W, H); }
     c.save();
-    if (L.cam) { const [s, tx, ty] = camAt(ctx, t); c.translate(tx, ty); c.scale(s, s); }   // [article-to-video 內嵌修改] B 鏡頭：停住，標註出現時快推
+    if (L.cam) { const [s, tx, ty] = camAt(ctx, t); c.translate(tx, ty); c.scale(s, s); }   // [article-to-video 內嵌修改] 快推：停住，標註出現時推一下
     else if (d.push) { const s = 1 + (d.pushFrom || 0) + d.push * clamp(t / ctx.dur); c.translate(W / 2, H / 2); c.scale(s, s); c.translate(-W / 2, -H / 2); }   // [Danny 本机改] data.push：整镜匀速矢量慢推（语法卡 ③「图表镜头匀速慢推 1→1.03」），默认 0 不推
     // ---- 版式：顶红线 → 小旗 → 标题 → 副标题（单位/口径）→ 来源 → 角标 ----
     if (lt > 0) {
@@ -353,7 +353,7 @@ function compareInit(ctx, c, cw, y0, y1) {
   for (const q of ctx.of('number')) [].concat((q.data || {}).index ?? []).forEach(i => { if (at[i] == null) at[i] = q.at; });
   L.cmp = { cells, at, pre, suf, capSz, hl: ctx.of('highlight').map(q => hlOf(q, d, S.length)).filter(h => S[h.index]),
     gap: gq && { at: gq.at, verb, pre: gpre, str: gStr, suf: gsuf, G, x: mL, x1: Math.max(...cells.map(e => e.right)), ruleY, by: ruleY + 2 * u + 0.28 * capH + G.capH, word: gWord } };
-  L.focus = i => { const e = cells[i]; return [e.x + e.P.w / 2, e.by - capH / 2]; };   // B 鏡頭快推時不動的點：被強調的那個數字中間
+  L.focus = i => { const e = cells[i]; return [e.x + e.P.w / 2, e.by - capH / 2]; };   // 快推時不動的點：被強調的那個數字中間
 }
 function drawCard(c, t, ctx) {
   const { u } = ctx;
@@ -402,7 +402,7 @@ function drawCompare(c, t, ctx) {
     c.restore();
   }
 }
-// [article-to-video 內嵌修改] B 鏡頭的關鍵幀（init 算好）。cam = {dur, box: [左, 上, 右, 下]（佔畫面比例：內容推近後可以到的範圍，
+// [article-to-video 內嵌修改] 快推的關鍵幀（init 算好）。cam = {dur, box: [左, 上, 右, 下]（佔畫面比例：內容推近後可以到的範圍，
 // 畫面扣掉平台介面區與字幕帶）, snaps: [{at, zoom（推到多大，1.04＝推近 4%）, index（標哪一點）}]}：整串到這個片段為止的每一下，
 // 之前分鏡的 at 是負的，所以接續分鏡從同一個鏡頭接著走。鏡頭＝畫面座標 = s × 原座標 + (tx, ty)：
 // 每一下以被標註的點為固定點（它在畫面上不動、其他東西往外推開）；放大量夾在「點不動、內容框推近後還在 box 裡」以內

@@ -14,9 +14,9 @@
   錨點落在分鏡開始前一點點（不超過 lead＋1 幀，通常是段落開頭的詞被提早）就夾到 0；更早或落在分鏡結束之後都報錯。
 - 接續分鏡（continues: true）：沿用上一個分鏡的 data（自己只能改 highlight），上一個分鏡的 cue 除了標註（highlight）
   全部改成負時間（第一幀就畫好），再加上自己的 cue。一個不接續的分鏡加上後面接續它的分鏡＝一串，共用一個鏡頭：
-  - 設定 camera = "slow"（A，等速慢推）：每秒推近 min(0.4%, 6% ÷ 整串秒數)（或整串第一個分鏡 data.push 指定的總量），
+  - 設定 camera = "slow"（慢推，等速）：每秒推近 min(0.4%, 6% ÷ 整串秒數)（或整串第一個分鏡 data.push 指定的總量），
     每個片段的 pushFrom 從上一個推到的地方接著推。
-  - 設定 camera = "snap"（B，停住、標註出現時快推）：鏡頭平常不動；整串每個「新的」標註（highlight cue，不算沿用過來的、
+  - 設定 camera = "snap"（快推，停住、標註出現時推一下）：鏡頭平常不動；整串每個「新的」標註（highlight cue，不算沿用過來的、
     跟上一個一模一樣的）出現那一刻推近一下（SNAP_DUR 秒，引擎用強 ease-out），推完停住。整串總共推近 SNAP_TOTAL
     （或第一個分鏡 data.push），平均分給每個標註、每下最多 SNAP_STEP。大數字（number）不推。每個片段的 data.camera.snaps
     列出整串到這個分鏡為止的每一下（時刻相對這個片段，之前分鏡的是負的），引擎從頭重算，切點不跳。
@@ -68,12 +68,12 @@ NUMBER_HOLD = 1.5
 計時實測：大數字卡的 at 寫在數字唸完、切點緊跟在後，數字落定 0.4 秒就切走，觀眾看到的是滾到一半的數（獨立審片兩項必修）。
 跟 Vox 的框推近停住後要停 vox.MIN_HOLD 同一類規則。"""
 SNAP_DUR = 0.3
-"""B 鏡頭（camera = snap）每一下快推多久（秒）。標註的圓點 0.45 秒彈出、字 0.3 秒後才開始淡入：鏡頭在字出來之前就停穩，
+"""快推（camera = snap）每一下推多久（秒）。標註的圓點 0.45 秒彈出、字 0.3 秒後才開始淡入：鏡頭在字出來之前就停穩，
 讀字時畫面不動。0.3 秒＝30 fps 的 9 幀；曲線（強 ease-out）在引擎 t3_finance_chart.js 的 SNAP_EASE。"""
 SNAP_STEP = 0.04
-"""B 鏡頭每一下最多推近多少（4%）。"""
+"""快推每一下最多推近多少（4%）。"""
 SNAP_TOTAL = 0.06
-"""B 鏡頭整串總共推近多少（6%，跟 A 慢推整串最多推的一樣；第一個分鏡寫了 data.push 就用它）。引擎另外照版面夾一個上限
+"""快推整串總共推近多少（6%，跟慢推整串最多推的一樣；第一個分鏡寫了 data.push 就用它）。引擎另外照版面夾一個上限
 （內容框推近後不出 camera.box，左右再留一點邊）：一般約 7～9%；直式又是點很多的折線時，x 軸兩端的名字超出邊距，只剩約 3%。
 再多標題、來源行、x 軸名字就會被切掉、貼到畫面邊，或推進字幕帶與平台介面區。"""
 
@@ -121,7 +121,7 @@ class VideoFormat:
         return self._nonzero(top=self.ui_top, bottom=self.ui_bottom, right=self.ui_right)
 
     def camera_box(self) -> list[float]:
-        """B 鏡頭推近時內容可以到的範圍（佔畫面寬高的比例 [左, 上, 右, 下]）：畫面扣掉平台介面區（ui_*）與字幕帶
+        """快推推近時內容可以到的範圍（佔畫面寬高的比例 [左, 上, 右, 下]）：畫面扣掉平台介面區（ui_*）與字幕帶
         （safe_bottom）。用比例：qa 縮小渲的時候不用跟著換算。"""
         w, h = self.width, self.height
         return [0.0, round(self.ui_top / h, 6), round(1 - self.ui_right / w, 6), round(1 - self.safe_bottom / h, 6)]
@@ -720,7 +720,7 @@ def _snap_events(project: Project, timeline: Timeline, members: list[int]) -> li
 
 def _snap_camera(st: ShotTiming, events: list[tuple[int, float, int]], upto: int, total: float | None,
                  fmt: VideoFormat) -> dict[str, Any]:
-    """B 鏡頭給引擎的 data.camera：整串到第 upto 個分鏡為止的每一下快推（時刻相對這個片段）。"""
+    """快推給引擎的 data.camera：整串到第 upto 個分鏡為止的每一下快推（時刻相對這個片段）。"""
     total = SNAP_TOTAL if total is None else float(total)
     step = min(SNAP_STEP, total / len(events)) if events else 0.0
     t0 = st.start_frame / fmt.fps
