@@ -40,7 +40,7 @@ allowed-tools:
 **他第一次打開審片頁之前，數字、畫面、自動檢查、獨立審片你都要先處理完**——他不該當除錯員。
 跟他講話用口語，不講指令、JSON、代號；指令印出來的錯誤，你轉成白話。
 
-**整支片只用一種畫面：財經圖表**（柱狀、折線、大數字、標註）。講到作者文章裡的某張圖，就照那張圖的數字重畫成財經圖表，
+**整支片只用一種畫面：財經圖表**（柱狀、折線、大數字卡、兩數對比、標註）。講到作者文章裡的某張圖，就照那張圖的數字重畫成財經圖表，
 不把原圖貼上畫面——風格才一致。
 
 ## 開始前
@@ -109,7 +109,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video narrate "<專�
 
 ## 5. 寫分鏡
 
-照 `${CLAUDE_PLUGIN_ROOT}/skills/make-video/references/storyboard-rules.md`（一句一張圖、圖型有變化、標註寫意思、
+照 `${CLAUDE_PLUGIN_ROOT}/skills/make-video/references/storyboard-rules.md`（一句一張圖、版面有變化（大數字卡、兩數對比穿插在柱和線之間）、標註寫意思、
 文章的圖怎麼重畫…）寫 `<專案>/shots.json`，格式見 `formats.md`。每個分鏡都是財經圖表（`chart`）。
 用公有數據畫走勢時第一次要連網。
 
