@@ -1,4 +1,4 @@
-"""數字對帳（#5）：畫面上的每個數字對回出處（原文、公有數據、宣告過的推算），對不到的擋下正式出片。
+"""數字對帳（#5）：畫面上的每個數字、旁白唸的每個數字對回出處（原文、公有數據、宣告過的推算），對不到的擋下正式出片。
 
 切點：
 1. reconcile(plan_build(專案)) → 每個分鏡上畫面的數字與出處（不渲染，很快）；數字只在文章的圖上時，
@@ -53,8 +53,8 @@ def test_every_number_on_screen_is_traced_to_the_article(tmp_path):
     root = make_project(tmp_path)
     rep = reconcile(plan_build(root, tts="fake"))
     # 畫面上（SH01）：副標「美國公債殖利率，2023 年平均，%」、柱上數值 4.58% 3.96%；類目名「兩年期」「十年期」是天期的名字，
-    # 詞裡的中文數字不算數字
-    assert {(n.where, n.shown, n.kind) for n in rep.shots["SH01"]} == {
+    # 詞裡的中文數字不算數字（旁白唸的數字另外測）
+    assert {(n.where, n.shown, n.kind) for n in rep.shots["SH01"] if n.where != "旁白"} == {
         ("副標", "2023", "article"),
         ("數值", "4.58%", "article"),
         ("數值", "3.96%", "article"),
@@ -89,7 +89,7 @@ def test_numbers_match_after_normalizing_how_they_are_written(tmp_path):
         encoding="utf-8")
 
     rep = reconcile(plan_build(root, tts="fake"))
-    got = {(n.where, n.shown): n for n in rep.shots["SH01"]}
+    got = {(n.where, n.shown): n for n in rep.shots["SH01"] if n.where != "旁白"}
     expected = {
         ("副標", "2023"): "article",      # 二〇二三
         ("數值", "4.58%"): "article",     # 百分之四點五八
@@ -242,7 +242,7 @@ def test_a_long_public_series_is_one_line_on_the_card(tmp_path, fred):
     [section] = number_review(plan).cards["SH01"]
     lines = {(it.label, it.text) for it in section.items}
     assert ("公有數據", "數值 18 個") in lines and ("公有數據", "類目名 18 個") in lines
-    assert len(section.items) == 2
+    assert len([it for it in section.items if not it.detail.startswith("旁白")]) == 2  # 旁白唸的數字另外測
 
 
 # ---------------------------------------------------------------- 推算：分鏡設定宣告算式
@@ -392,9 +392,9 @@ def test_only_the_numbers_the_author_must_check_are_spread_out_on_the_card(tmp_p
     root = with_figure(make_project(tmp_path, edit), FIG1)
     [section] = number_review(plan_build(root, tts="fake")).cards["SH01"]
     assert {it.text for it in section.items} == {"5.12%", "4.21%"}
-    assert "2023" in {it.text for it in section.rest}
+    assert {it.text for it in section.rest} == {"2023", "四點五八", "三點九六"}  # 後兩個是旁白唸的，對到原文
     assert all(it.status == "ok" for it in section.rest)
-    assert "1 個" in section.rest_summary and "出處" in section.rest_summary
+    assert "3 個" in section.rest_summary and "出處" in section.rest_summary
 
 
 def test_years_on_a_redrawn_figures_axis_point_to_the_figure_reading(tmp_path):
@@ -447,3 +447,89 @@ def test_mistakes_in_the_figure_reading_are_explained_in_chinese(tmp_path, figur
     msg = str(e.value)
     for needle in ["article/figure_numbers.json", *needles]:
         assert needle in msg, f"錯誤訊息少了「{needle}」：{msg}"
+
+
+# ---------------------------------------------------------------- 旁白唸的數字
+
+
+def with_narration(root: Path, **segments: str) -> Path:
+    path = root / "narration.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["segments"].update(segments)
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return root
+
+
+def test_a_number_the_narration_says_is_reconciled_like_one_on_screen(tmp_path):
+    """旁白唸的數字（寫成唸法）也要找得到出處：畫面上的 3.96 對過帳，旁白把它唸成「三點六九」卻沒人核。"""
+    root = with_narration(make_project(tmp_path), s02="十年期只有三點六九，曲線倒掛。")
+    plan = plan_build(root, tts="fake")
+    rep = reconcile(plan)
+    # 「十年期只有三點六九，」在 SH02 切進來（「曲線」）之前唸完，算 SH01 的旁白
+    assert {(n.shown, n.kind) for n in rep.shots["SH01"] if n.where == "旁白"} == {
+        ("四點五八", "article"),
+        ("三點六九", "none"),
+    }
+    with pytest.raises(ProjectError) as e:
+        check_numbers(plan)
+    msg = str(e.value)
+    assert "分鏡 SH01" in msg and "旁白" in msg and "三點六九" in msg
+
+
+@pytest.mark.parametrize("phrase", ["低一點", "這一點很關鍵", "記住兩點", "差一點點"])
+def test_everyday_words_with_a_dot_are_not_numbers_in_the_narration(tmp_path, phrase):
+    """口語的「一點」「兩點」（一些、幾個重點）不是數字；「點」只有接在小數後面、或前面是大一點的數（跌了三百點）才是。"""
+    root = with_narration(make_project(tmp_path), s02=f"十年期只有三點九六，{phrase}，曲線倒掛。")
+    rep = reconcile(plan_build(root, tts="fake"))
+    assert {n.shown for n in rep.shots["SH01"] if n.where == "旁白"} == {"四點五八", "三點九六"}
+
+
+def test_index_points_in_the_narration_are_still_numbers(tmp_path):
+    root = with_narration(make_project(tmp_path), s02="十年期只有三點九六，指數跌了三百點，曲線倒掛。")
+    rep = reconcile(plan_build(root, tts="fake"))
+    assert ("三百", "none") in {(n.shown, n.kind) for n in rep.shots["SH01"] if n.where == "旁白"}
+
+
+def test_a_derived_number_the_narration_says_uses_the_formula_of_the_shot_on_screen(tmp_path):
+    """旁白唸的差值，用它唸的時候畫面上那個分鏡宣告的算式；只有旁白講、畫面上沒放，照舊提醒（推算的數字畫面上要放）。"""
+    def edit(shots: dict) -> None:
+        shots["shots"][0]["derived"] = [{"value": "0.62", "formula": "4.58 - 3.96"}]
+
+    root = with_narration(make_project(tmp_path, edit), s02="十年期只有三點九六，低零點六二個百分點，曲線倒掛。")
+    rep = reconcile(plan_build(root, tts="fake"))
+    [n] = [n for n in rep.shots["SH01"] if n.shown == "零點六二"]
+    assert (n.where, n.kind) == ("旁白", "derived") and "4.58 − 3.96 = 0.62" in n.detail
+    assert any("畫面上沒有這個數字" in note for note in rep.notes["SH01"])
+
+
+def spoken(rep, shot: str) -> set[tuple[str, str]]:
+    """這個分鏡期間旁白唸的數字：{(數字, 出處種類)}。"""
+    return {(n.shown, n.kind) for n in rep.shots[shot] if n.where == "旁白"}
+
+
+@pytest.mark.parametrize("phrase", ["一點一點往上漲", "一點一滴累積", "記住一兩點", "兩三個月", "利率一成不變",
+                                    "一碼歸一碼", "這是兩碼事"])
+def test_everyday_idioms_with_digits_are_not_numbers_in_the_narration(tmp_path, phrase):
+    """口語的成語、約數不是數字：一點一點、一點一滴、一成不變、一碼歸一碼、兩碼事；相鄰兩個數字（一兩、兩三）是「大約幾個」。
+    真的數字照算：降息一碼、三成、一點五倍（下一條測試）。"""
+    root = with_narration(make_project(tmp_path), s02=f"十年期只有三點九六，{phrase}，曲線倒掛。")
+    assert spoken(reconcile(plan_build(root, tts="fake")), "SH01") == {("四點五八", "article"), ("三點九六", "article")}
+
+
+def test_real_numbers_next_to_those_idioms_still_count(tmp_path):
+    root = with_narration(make_project(tmp_path), s02="十年期只有三點九六，降息一碼，三成，一點五倍，曲線倒掛。")
+    shown = {n for n, _ in spoken(reconcile(plan_build(root, tts="fake")), "SH01")}
+    assert {"一", "三", "一點五"} <= shown
+
+
+def test_a_derived_number_said_during_a_continued_shot_uses_the_formula_of_the_same_chart(tmp_path):
+    """接續分鏡沿用同一張圖：SH01 畫面上放了 0.62、宣告了算式，旁白在 SH02（接續 SH01）期間唸「零點六二」，
+    畫面上一直看得到它，用 SH01 的算式就對得到；不用在 SH02 再宣告一次，也不會提醒「畫面上沒有這個數字」。"""
+    def edit(shots: dict) -> None:
+        shots["shots"][0]["chart"]["data"]["title"] = "短天期高 0.62 個百分點"
+        shots["shots"][0]["derived"] = [{"value": "0.62", "formula": "4.58 - 3.96"}]
+
+    root = with_narration(make_project(tmp_path, edit), s02="十年期只有三點九六，曲線倒掛，差零點六二個百分點。")
+    rep = reconcile(plan_build(root, tts="fake"))
+    assert spoken(rep, "SH02") == {("零點六二", "derived")}
+    assert not any("畫面上沒有" in note for notes in rep.notes.values() for note in notes)

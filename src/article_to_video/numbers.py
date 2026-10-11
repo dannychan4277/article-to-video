@@ -1,11 +1,11 @@
-"""數字對帳：列出每個分鏡上畫面的數字，對回出處；對不到的擋下正式出片。
+"""數字對帳：列出每個分鏡上畫面的數字和那段時間旁白唸的數字，對回出處；對不到的擋下正式出片。
 
   reconcile(plan) → NumberReport        每個分鏡的數字與出處（不渲染、不連網，plan_build 之後幾毫秒）
   check_numbers(plan)                   build 的 preflight：有無出處就丟 ProjectError（繁中，點名分鏡 id、審片頁編號、數字）
   number_review(plan)                   審片頁的 Contributor：每張卡的「numbers」欄＋頁首摘要
   summary_line(plan)                    指令列預覽印的一行摘要（給 Claude 看）
 
-上畫面的字（ScreenTextSource，每個分鏡一份；預設 default_sources()）：
+要對帳的字（ScreenTextSource，每個分鏡一份；預設 default_sources()：上畫面的字＋旁白）：
   財經圖表（chart_texts）：標題、副標（單位那行；自訂的縱軸說明也算）、角標、數值（柱上／線頭的數字，照 decimals、
   prefix、suffix 格式化成畫面上的樣子；柱上文字覆寫生效時看覆寫的字；折線、K 線每個點都算）、類目名（x 軸標籤，
   全部都算，不管引擎有沒有抽稀）、標註（text、sub）、大數字（number cue 的值與說明）。
@@ -13,6 +13,9 @@
   不算：來源行（data.source，那是出處本身）、預設的縱軸說明「縱軸未從 0 開始」、刻度值（引擎依數據範圍排的尺，
   不是主張；數據本身已經對過帳）、片尾卡（不是分鏡：頻道名、彙整的來源行、固定的免責聲明，都是出處或固定字）。
   Vox 分鏡（內部開關打開時才有，ADR 0001）的標題卡、索引卡、圖說、剪報：vox.vox_texts，也在 default_sources()。
+  旁白（narration_texts）：這個分鏡期間唸的旁白（一個字歸給開始唸它的那一刻所在的分鏡），唸法寫的數字（四點五八、
+  零點六二個百分點）照同一套找出處；推算的數字用唸的時候畫面上那張圖的 derived（這個分鏡和它接續的前幾個分鏡宣告的）。
+  也在 default_sources()。只有旁白唸、畫面上沒放的推算數字，照舊提醒「這個分鏡畫面上沒有這個數字」。
 
 出處分類（每個數字照順序找，找到就停）：
   public   白名單公有數據：這個分鏡的公有數據圖畫的值、期間標籤、系列名稱（附系列、期間、擷取日期）。
@@ -37,7 +40,9 @@
     畫面只寫 3.2 也對得上）、百分之（百分之四點五八＝4.58%）。
   - 正負號是數字的一部分：緊貼在數字前面的 −／-（前面不是數字或英文字母；「2019-2024」是範圍），或「負」。
   - 中文數字只有像數量的才算：有小數（四點五八）、百分之、萬億兆（一萬兩千）、一串像年份的數字（二〇二三），
-    或後面接了單位（%、個百分點、基點、碼、倍、成、元、點）。其他是詞的一部分，不是數字：十年期、兩年期、一季、一年前。
+    或後面接了單位（%、個百分點、基點、碼、倍、成、元、點）。其他是詞的一部分，不是數字：十年期、兩年期、一季、一年前；
+    「點」前面只有一個中文數字的也不算（口語的高一點、這一點、記住兩點；指數點數是跌了三百點）；相鄰兩個數字是約數
+    （一兩點、兩三成）；帶數字的成語整個跳過（一點一點、一點一滴、一成不變、一碼歸一碼、兩碼事；_IDIOMS）。
   - 「10 年期」「2 年期」（阿拉伯數字＋年期／天期）是天期的名字，也不算數字。
   - 單位：數字旁邊寫的「%」（含百分之）或「個百分點」記下來比對用；其他單位不比。
 
@@ -70,7 +75,7 @@ from typing import TYPE_CHECKING, Any
 from article_to_video.article import ArticlePaths
 from article_to_video.project import ProjectError, ProjectPaths
 from article_to_video.public_data import WHITELIST, PublicChart
-from article_to_video.timeline import ShotTiming, effective_chart, resolve_highlight
+from article_to_video.timeline import ShotTiming, Timeline, effective_chart, resolve_highlight
 
 if TYPE_CHECKING:
     from article_to_video.build import BuildPlan
@@ -85,11 +90,13 @@ __all__ = [
     "NumberSource",
     "ScreenText",
     "ScreenTextSource",
+    "NARRATION",
     "chart_texts",
     "check_numbers",
     "default_sources",
     "find_numbers",
     "load_figure_numbers",
+    "narration_texts",
     "number_review",
     "parse_derived",
     "read_article",
@@ -180,8 +187,11 @@ _CHINESE_RE = re.compile(
 )
 _TENOR_RE = re.compile(r"\s*[年天]期")
 """「10 年期」「2 年期」：天期的名字，不是數量。"""
+_IDIOMS = re.compile("一點一點|一點一滴|一成不變|一碼歸一碼|一碼事|兩碼事")
+"""口語裡帶數字、但不是數量的詞（後面的點、成、碼會被當成單位或小數點）：整個詞跳過。"""
 _CN_UNIT_RE = re.compile(r"\s*(?:%|個百分點|个百分点|百分點|百分点|基點|基点|碼|码|倍|成|美元|元|點|点)")
-"""中文數字後面接這些單位才是數量（「降息三碼」）；沒有單位、沒有小數點的中文整數是詞的一部分（十年期、兩年期、一季）。"""
+"""中文數字後面接這些單位才是數量（「降息三碼」）；沒有單位、沒有小數點的中文整數是詞的一部分（十年期、兩年期、一季）。
+「點」前面只有一個中文數字的不算（口語的高一點、這一點；_chinese_is_number）。"""
 
 
 def _unit(written: str | None) -> str:
@@ -200,11 +210,16 @@ def _chinese_is_number(m: re.Match[str], norm: str) -> bool:
     run = m.group("int")
     if run[0] not in _CN_DIGITS and run[0] != "十":
         return False
+    if len(run) == 2 and all(c in _CN_DIGITS for c in run):
+        return False  # 相鄰兩個數字是約數：一兩點、兩三成、三五個月
     if m.group("frac") or m.group("pct") or any(c in _CN_BIG for c in run):
         return True
     if len(run) >= 3 and all(c in _CN_DIGITS for c in run):
         return True
-    return _CN_UNIT_RE.match(norm, m.end()) is not None
+    unit = _CN_UNIT_RE.match(norm, m.end())
+    if unit is not None and unit.group(0).strip() in ("點", "点") and len(run) == 1:
+        return False  # 口語的「高一點」「這一點」「記住兩點」；指數的點數是「跌了三百點」
+    return unit is not None
 
 
 def _chinese_int(s: str) -> tuple[int, int] | None:
@@ -249,6 +264,9 @@ def find_numbers(text: str) -> list[FoundNumber]:
             mult *= _MULT[c]
         found.append(FoundNumber(text[m.start():end].strip(), sign * value * mult, quantum * mult, m.start(), end,
                                  bare=sign * value if mult != 1 else None, unit=_unit(m.group("pct"))))
+    for m in _IDIOMS.finditer(norm):
+        for i in range(m.start(), m.end()):
+            taken[i] = True
     for m in _CHINESE_RE.finditer(norm):
         if any(taken[m.start():m.end()]) or not _chinese_is_number(m, norm):
             continue
@@ -583,10 +601,10 @@ def load_figure_numbers(paths: ProjectPaths) -> tuple[tuple[FigureNumber, ...], 
 
 @dataclass(frozen=True)
 class ScreenText:
-    """一個分鏡上畫面的一段字。"""
+    """一個分鏡上畫面的一段字，或這個分鏡期間唸的一段旁白。"""
 
     where: str
-    """在哪裡：標題、副標、角標、數值、柱上文字、類目名、標註、大數字、大數字說明、索引卡…"""
+    """在哪裡：標題、副標、角標、數值、柱上文字、類目名、標註、大數字、大數字說明、索引卡…；旁白是 NARRATION。"""
     text: str
     """畫面上的字（數值是格式化之後的樣子，例「4.58%」）。"""
     of: str = ""
@@ -598,7 +616,7 @@ class ScreenText:
 
 
 ScreenTextSource = Callable[["BuildPlan", ShotTiming], list[ScreenText]]
-"""一個分鏡 → 它上畫面的字。財經圖表是 chart_texts；Vox 分鏡（#8）寫一個加進 default_sources()。"""
+"""一個分鏡 → 它要對帳的字。財經圖表是 chart_texts、Vox 分鏡（#8）是 vox_texts、旁白是 narration_texts。"""
 
 
 def _fmt(v: float, decimals: int) -> str:
@@ -674,11 +692,31 @@ def chart_texts(plan: BuildPlan, st: ShotTiming) -> list[ScreenText]:
     return out
 
 
+NARRATION = "旁白"
+"""旁白唸的字在數字對帳裡的位置名（ScreenText.where）。"""
+
+
+_narration_cache: tuple[Timeline, dict[str, list[ScreenText]]] | None = None
+"""上一次分好的旁白：(時間軸, 分鏡 id → 旁白的字)。對帳一個分鏡問一次，整份旁白只分一次（30 個分鏡從約 200 毫秒變幾毫秒）。"""
+
+
+def narration_texts(plan: BuildPlan, st: ShotTiming) -> list[ScreenText]:
+    """這個分鏡期間唸的旁白（review.shot_narration：一個字歸給開始唸它的那一刻所在的分鏡）。"""
+    from article_to_video.review import shot_narration  # 避免循環匯入
+
+    global _narration_cache
+    if _narration_cache is None or _narration_cache[0] is not plan.timeline:  # 留著時間軸本身，is 比對不會認錯
+        pieces = shot_narration(plan.timeline)
+        _narration_cache = (plan.timeline,
+                            {sid: [ScreenText(NARRATION, p.text) for p in ps] for sid, ps in pieces.items()})
+    return list(_narration_cache[1][st.shot.id])
+
+
 def default_sources() -> list[ScreenTextSource]:
-    """數字對帳預設看哪些字：財經圖表、Vox 分鏡（標題卡、索引卡、圖說、原文剪報；vox.vox_texts）。"""
+    """數字對帳預設看哪些字：財經圖表、Vox 分鏡（標題卡、索引卡、圖說、原文剪報；vox.vox_texts）、旁白。"""
     from article_to_video.vox import vox_texts  # 避免循環匯入
 
-    return [chart_texts, vox_texts]
+    return [chart_texts, vox_texts, narration_texts]
 
 
 def _own_texts(plan: BuildPlan, sources: Sequence[ScreenTextSource]) -> dict[str, list[ScreenText]]:
@@ -701,12 +739,12 @@ def _own_texts(plan: BuildPlan, sources: Sequence[ScreenTextSource]) -> dict[str
 
 @dataclass(frozen=True)
 class NumberSource:
-    """畫面上的一個數字和它的出處。"""
+    """畫面上（或旁白唸）的一個數字和它的出處。"""
 
     shot_id: str
     shot_number: int
     where: str
-    """在畫面哪裡（標題、副標、數值、類目名、標註、大數字…）。"""
+    """在畫面哪裡（標題、副標、數值、類目名、標註、大數字…），或旁白（NARRATION）。"""
     of: str
     """屬於哪一個（數值屬於哪個類目），沒有就空字串。"""
     context: str
@@ -745,7 +783,7 @@ class NumberSource:
 @dataclass(frozen=True)
 class NumberReport:
     shots: dict[str, list[NumberSource]]
-    """分鏡 id → 這個分鏡上畫面的數字（照畫面上出現的欄位順序）。"""
+    """分鏡 id → 這個分鏡上畫面的數字（照畫面上出現的欄位順序），接著是這段時間旁白唸的數字。"""
     article: Article
     notes: dict[str, list[str]] = field(default_factory=dict)
     """分鏡 id → 給作者看的補充提醒。"""
@@ -826,7 +864,7 @@ class _Sources:
                 continue
             if not num.rounds_from(d.result):
                 got = d.result_text.removeprefix("= ").removeprefix("≈ ")
-                failure = f"宣告的算式 {d.formula} 算出來 {got}，跟畫面上的 {shown} 對不上"
+                failure = f"宣告的算式 {d.formula} 算出來 {got}，跟 {shown} 對不上"
                 continue
             inputs = "；".join(f"{x.text}：{hit[1]}" for x in d.inputs if (hit := found[x.text]) is not None)
             note = f"（{d.note}）" if d.note else ""
@@ -845,28 +883,33 @@ def _shown_number(t: ScreenText, num: FoundNumber) -> str:
 
 
 def reconcile(plan: BuildPlan, *, sources: Sequence[ScreenTextSource] | None = None) -> NumberReport:
-    """數字對帳：每個分鏡上畫面的每個數字 → 出處。不渲染、不連網。
+    """數字對帳：每個分鏡上畫面的每個數字、那段時間旁白唸的每個數字 → 出處。不渲染、不連網。
 
-    sources：要看哪些上畫面的字（預設 default_sources()：財經圖表；Vox 索引卡 #8 加進去）。"""
+    sources：要看哪些字（預設 default_sources()：財經圖表、Vox 分鏡、旁白）。"""
     article = read_article(plan.project.paths)
     src = _Sources(article, plan.public_data, plan.project.figure_numbers)
     texts = _own_texts(plan, default_sources() if sources is None else sources)
     shots: dict[str, list[NumberSource]] = {}
     notes: dict[str, list[str]] = {}
+    # 同一張圖（這個分鏡和它接續的前幾個）宣告的推算：旁白唸的時候，畫面上沿用的數字一直看得到
+    chart_decls: tuple[Derivation, ...] = ()
     for st in plan.timeline.shots:
         shot = st.shot
         redraws = _redrawn_figures(plan, st)
         decls: tuple[Derivation, ...] = tuple(shot.derived)
+        chart_decls = (chart_decls if shot.continues else ()) + decls
         used: set[int] = set()
         items: list[NumberSource] = []
         for t in texts[shot.id]:
+            spoken = t.where == NARRATION
             for num in find_numbers(t.text):
                 shown = _shown_number(t, num)
                 kind, detail, figure = "none", "", ""
-                used.update(k for k, d in enumerate(decls) if num.rounds_from(d.value.value))
+                if not spoken:  # 推算的數字畫面上要放：只有旁白講的照樣提醒
+                    used.update(k for k, d in enumerate(decls) if num.rounds_from(d.value.value))
                 if (pub := src.in_public(num, shot.id, t.public)) is not None:
                     kind, detail = "public", pub
-                elif (ok := src.derived(num, shown, shot.id, decls))[0] is not None:
+                elif (ok := src.derived(num, shown, shot.id, chart_decls if spoken else decls))[0] is not None:
                     kind, detail = "derived", ok[0]
                 elif (found := src.in_article(num)) is not None:
                     kind, detail = "article", found
@@ -931,7 +974,8 @@ def _figure_hint(n: NumberSource) -> str:
 
 
 FIX_HINT = (
-    "修法：改成文章裡寫的數字；數字只在文章的圖上（文字裡沒有；重畫的圖的橫軸年份、類目名也算）："
+    "修法：改成文章裡寫的數字（旁白唸的：改 narration.json 那一段，再 narrate 重配那一段）；"
+    "數字只在文章的圖上（文字裡沒有；重畫的圖的橫軸年份、類目名也算）："
     "Read 那張圖（article/images/圖N.*），把讀到的數字記在 "
     'article/figure_numbers.json，例 {"figures": {"圖1": [{"value": "4.58", "label": "兩年期殖利率，2023 年平均"}]}}；'
     "推算出來的數字（差值、一年前的值…），在那個分鏡加 "
@@ -946,7 +990,7 @@ def summary_line(plan: BuildPlan) -> str:
     items = [n for v in rep.shots.values() for n in v]
     counts = "、".join(f"{label} {sum(1 for n in items if n.kind == k)}" for k, label in KIND_LABELS.items()
                        if any(n.kind == k for n in items))
-    line = f"數字對帳：畫面上 {len(items)} 個數字" + (f"（{counts}）" if counts else "")
+    line = f"數字對帳：畫面和旁白 {len(items)} 個數字" + (f"（{counts}）" if counts else "")
     bad = rep.unsourced
     if bad:
         line += "；找不到出處、正式出片會被擋下：" + "；".join(
@@ -965,7 +1009,7 @@ def check_numbers(plan: BuildPlan) -> None:
         hint = "專案裡還沒有文章文字（article/text.txt）：先用 extract 擷取文章，數字才對得到原文。\n" + hint
     raise ProjectError(
         [f"{n.shot_label}的{n.place}：{n.shown} 找不到出處{_figure_hint(n)}" for n in bad],
-        title=f"數字對帳沒過，不能出片：畫面上有 {len(bad)} 個數字找不到出處",
+        title=f"數字對帳沒過，不能出片：畫面和旁白有 {len(bad)} 個數字找不到出處",
         hint=hint,
     )
 
@@ -1014,7 +1058,7 @@ def _card_items(nums: Sequence[NumberSource], public: PublicChart | None, CheckI
 
 
 def number_review(plan: BuildPlan) -> ReviewExtras:
-    """審片頁的數字對帳：每張卡列出這個分鏡畫面上的數字與出處；有無出處的，頁首也列出來。"""
+    """審片頁的數字對帳：每張卡列出這個分鏡畫面上和旁白唸的數字與出處；有無出處的，頁首也列出來。"""
     from article_to_video.review import CardSection, CheckItem, ReviewExtras  # 避免循環匯入
 
     rep = reconcile(plan)
@@ -1032,17 +1076,17 @@ def number_review(plan: BuildPlan) -> ReviewExtras:
         if not items and st.shot.continues and not notes:
             continue  # 接續上一張、沒有新的數字：卡上已經掛著「接續上一張」，數字記在上一張
         if not items:
-            notes.append("沿用上一張的數字" if st.shot.continues else "畫面上沒有數字")
+            notes.append("沿用上一張的數字" if st.shot.continues else "畫面和旁白都沒有數字")
         if n_bad or figures:
             # 有找不到出處、或有 Claude 讀圖讀的數字：只攤開這些（作者要一個一個看），其他對得到出處的收成一行
             ok = sum(1 for n in rep.shots[sid] if n.kind not in ("none", "figure"))
-            cards[sid] = [CardSection("numbers", "畫面上的數字與出處", [it for it in items if it.status != "ok"],
+            cards[sid] = [CardSection("numbers", "畫面和旁白的數字與出處", [it for it in items if it.status != "ok"],
                                       note=" ".join(notes), rest=[it for it in items if it.status == "ok"],
                                       rest_summary=f"其他 {ok} 個數字都對得到出處")]
             continue
         # 每個數字都對得到出處：安靜的一行，點開看每個數字的出處
         summary = "數字都有出處" if items else " ".join(notes)
-        cards[sid] = [CardSection("numbers", "畫面上的數字與出處", items, note=" ".join(notes), summary=summary)]
+        cards[sid] = [CardSection("numbers", "畫面和旁白的數字與出處", items, note=" ".join(notes), summary=summary)]
     bad = rep.unsourced
     if bad:
         page = [CardSection(
@@ -1055,7 +1099,7 @@ def number_review(plan: BuildPlan) -> ReviewExtras:
     else:
         total = sum(len(v) for v in rep.shots.values())
         read = [n for v in rep.shots.values() for n in v if n.kind == "figure"]
-        summary = f"數字對帳：畫面上 {total} 個數字都有出處"
+        summary = f"數字對帳：畫面和旁白 {total} 個數字都有出處"
         if read:
             summary += f"；其中 {len(read)} 個是 Claude 從你文章的圖讀的（卡片上標「原文圖表」），請對照你的原圖"
         page = [CardSection("numbers", "數字對帳", [], summary=summary)]

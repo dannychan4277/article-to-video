@@ -175,7 +175,7 @@ def test_first_preview_is_checked_before_the_author_sees_it(walk):
     pv = walk.steps["preview"]
     assert pv.code == 0, pv.err
     assert "第 1 版" in pv.out
-    assert "數字對帳：畫面上" in pv.out and "無出處" not in pv.out
+    assert "數字對帳：畫面和旁白" in pv.out and "無出處" not in pv.out
     for sid in ("SH01", "SH02"):  # 每個分鏡的靜態圖路徑都印出來，Claude 逐張看
         assert f"（{sid}）：" in pv.out
     review = str(walk.project / "審片頁.html")
