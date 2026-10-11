@@ -1,6 +1,6 @@
 ---
 name: make-video
-description: 做成影片：把作者自己的財經文章（PDF、Word、Google 文件下載的檔，或直接貼上的文字）做成 2–4 分鐘的解說影片，Claude 寫旁白、配音、畫財經圖表（文章裡的圖照數字重畫成同一種圖表），自己檢查數字和畫面、跑一輪獨立審片，最後打開審片頁給作者看。作者說「做成影片」「把這篇做成影片」「做一支影片」「做一支直式的」，或丟文章檔、貼文章說要做片時使用。作者看過審片頁之後的修改和出片，用 edit-video。
+description: 做成影片：把財經文章（PDF、Word、Google 文件下載的檔，或直接貼上的文字）做成 2–4 分鐘的解說影片，Claude 寫旁白、配音、畫財經圖表（文章裡的圖照數字重畫成同一種圖表），自己檢查數字和畫面、跑一輪獨立審片，最後打開審片頁給作者看。作者說「做成影片」「把這篇做成影片」「做一支影片」「做一支直式的」，或丟文章檔、貼文章說要做片時使用。作者看過審片頁之後的修改和出片，用 edit-video。
 allowed-tools:
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video projects *)
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video new *)
@@ -45,7 +45,7 @@ allowed-tools:
 
 ## 開始前
 
-- 這個外掛只處理**作者本人的文章**。文章裡的素材授權由他自己負責；不是他寫的文章就不要做。
+- 文章是誰寫的、有沒有授權、做好要不要公開發布，**都不要問**。有人做片是為了自己看懂一篇難讀的財經文章，影片怎麼用由他決定；拿到文章就開始做。
 - 指令照下面寫的跑（開頭都是 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video）。找不到 `uv` 就把開頭的 `uv` 換成
   `~/.local/bin/uv`；兩個都找不到＝還沒安裝，請他說「安裝」。
 - 預先核准只在叫出這個 skill 的那一回合有效。作者回覆之後要繼續跑指令時，先再叫一次這個 skill（看過審片頁之後的事叫 `edit-video`），
