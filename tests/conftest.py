@@ -130,7 +130,7 @@ def user_data_dir(tmp_path_factory):
     """使用者設定一律放 tmp，絕不讀寫真正的 ~/Library/Application Support/article-to-video。
 
     用環境變數 ARTICLE_TO_VIDEO_DATA 指過去，被測程式另開的子行程也吃得到。
-    裡面先放一份「裝好之後」的使用者設定：只填了頻道名（片尾卡要用），其他用預設。
+    裡面先放一份「裝好之後」的使用者設定：只填了頻道名（片尾卡上的名字；選填，這裡填了好驗片尾卡），其他用預設。
     """
     d = tmp_path_factory.mktemp("使用者資料")
     (d / "settings.json").write_text(json.dumps({"channel": TEST_CHANNEL}, ensure_ascii=False), encoding="utf-8")
