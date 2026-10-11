@@ -11,6 +11,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -177,6 +179,43 @@ def test_changing_one_project_leaves_the_user_settings_alone(tmp_path):
     assert plan.project.settings.voice == "zh-TW-HsiaoYuNeural"
     assert plan.project.settings.music == "none"
     assert show(data)["voice"] == "zh-TW-HsiaoChenNeural"
+
+
+def test_the_chart_camera_is_snapshotted_and_can_be_switched_for_one_video(tmp_path):
+    """圖表鏡頭：等速慢推（slow）或停住、標註出現時快推（snap）。跟其他設定一樣進設定快照，`settings set --project` 改一支片。"""
+    from article_to_video.build import plan_build
+    from article_to_video.project import DEFAULT_CAMERA, ProjectError
+
+    data = tmp_path / "plugin-data"
+    assert run("settings", "set", "--data-dir", str(data), "--channel", "小明").returncode == 0
+    root = _new_project(tmp_path)
+    plan_build(root, tts="fake", data_dir=data)
+    assert json.loads((root / "settings.json").read_text(encoding="utf-8"))["camera"] == DEFAULT_CAMERA
+
+    proc = run("settings", "set", "--project", str(root), "--camera", "快推")
+    assert proc.returncode == 0, proc.stderr
+    assert "圖表鏡頭：停住，標註出現時快推一下" in proc.stdout
+    assert plan_build(root, tts="fake", data_dir=data).project.settings.camera == "snap"
+    assert show(data)["camera"] == DEFAULT_CAMERA  # 使用者設定不動
+
+    bad = run("settings", "set", "--project", str(root), "--camera", "飛來飛去")
+    assert bad.returncode == 1 and "Traceback" not in bad.stderr
+    assert "圖表鏡頭「飛來飛去」" in bad.stderr and "慢推" in bad.stderr and "快推" in bad.stderr
+
+    (root / "settings.json").write_text(json.dumps({"channel": "小明", "camera": "亂寫"}), encoding="utf-8")
+    with pytest.raises(ProjectError, match="settings.json 的 camera：圖表鏡頭「亂寫」看不懂"):
+        plan_build(root, tts="fake", data_dir=data)
+
+
+def test_a_video_snapshotted_before_the_camera_setting_existed_keeps_the_slow_push(tmp_path):
+    """舊片（設定快照是有這個設定之前做的，那時一律等速慢推）：之後預設改成快推，重建出來也照舊。"""
+    from article_to_video.build import plan_build
+
+    data = tmp_path / "plugin-data"
+    assert run("settings", "set", "--data-dir", str(data), "--camera", "快推").returncode == 0
+    root = _new_project(tmp_path)
+    (root / "settings.json").write_text(json.dumps({"gap": 0.4, "tail": 1.2, "channel": "小明"}), encoding="utf-8")
+    assert plan_build(root, tts="fake", data_dir=data).project.settings.camera == "slow"
 
 
 def _png(w: int, h: int, rgb: tuple[int, int, int] = (20, 90, 180)) -> bytes:

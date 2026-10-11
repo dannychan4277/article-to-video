@@ -1,4 +1,4 @@
-"""使用者設定：頻道名、logo、品牌色、聲音、語速、配樂、預設比例、配音層（edge／elevenlabs／google，各有自己的聲音）。
+"""使用者設定：頻道名、logo、品牌色、聲音、語速、配樂、預設比例、圖表鏡頭、配音層（edge／elevenlabs／google，各有自己的聲音）。
 
 存在外掛資料夾以外，更新外掛不受影響（${CLAUDE_PLUGIN_DATA} 在最後一個 scope 解除安裝時會被刪掉，除非加 --keep-data）：
 
@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from article_to_video.music import TRACKS
-from article_to_video.project import SETTINGS_FILE, ZH_TW_VOICES, Settings
+from article_to_video.project import CAMERAS, SETTINGS_FILE, ZH_TW_VOICES, Settings
 from article_to_video.tts_providers import GOOGLE_TW_VOICES
 
 __all__ = [
@@ -50,7 +50,7 @@ __all__ = [
 
 DATA_ENV = "ARTICLE_TO_VIDEO_DATA"
 FALLBACK_DATA_DIR = Path("Library") / "Application Support" / "article-to-video"
-SNAPSHOT_KEYS = ("channel", "logo", "brand_color", "voice", "rate", "music", "aspect",
+SNAPSHOT_KEYS = ("channel", "logo", "brand_color", "voice", "rate", "music", "aspect", "camera",
                  "tts", "elevenlabs_voice", "elevenlabs_model", "google_voice")
 USER_ONLY_KEYS = ("independent_review",)
 """只在使用者設定、不進每支片設定快照的鍵（做片流程的開關，不影響成片長什麼樣子）。"""
@@ -60,6 +60,8 @@ ASPECTS = {"16x9": "橫式 16:9", "9x16": "直式 9:16"}
 _ASPECT_ALIASES = {"16x9": "16x9", "16:9": "16x9", "橫式": "16x9", "横式": "16x9",
                    "9x16": "9x16", "9:16": "9x16", "直式": "9x16"}
 _NONE_WORDS = {"", "none", "無", "不要", "沒有", "null"}
+_CAMERA_ALIASES = {"slow": "slow", "a": "slow", "慢推": "slow", "等速慢推": "slow", "等速": "slow",
+                   "snap": "snap", "b": "snap", "快推": "snap", "停住": "snap", "停住快推": "snap"}
 _TTS_ALIASES = {"edge": "edge", "edge-tts": "edge", "微軟": "edge", "免費": "edge",
                 "elevenlabs": "elevenlabs", "11labs": "elevenlabs",
                 "google": "google", "google-tts": "google", "谷歌": "google", "fake": "fake"}
@@ -92,6 +94,8 @@ class UserSettings:
     """配樂（music.TRACKS 的名字）或 "none"。"""
     aspect: str = Settings.aspect
     """預設比例："16x9" 或 "9x16"。"""
+    camera: str = Settings.camera
+    """財經圖表的鏡頭："slow"（等速慢推）或 "snap"（停住，標註出現時快推一下）。預設是 project.DEFAULT_CAMERA。"""
     tts: str = Settings.tts
     """配音層：edge（免費，預設）、elevenlabs、google（付費，要 API key；key 不存在設定裡，見 tts_providers.py）。"""
     elevenlabs_voice: str = Settings.elevenlabs_voice
@@ -183,6 +187,12 @@ def normalize_value(key: str, value: Any) -> Any:
         v = _ASPECT_ALIASES.get(value.strip() if isinstance(value, str) else value)
         if v is None:
             raise SettingsError(f"預設比例「{value}」看不懂，只能是 16:9（橫式）或 9:16（直式）")
+        return v
+    if key == "camera":
+        v = _CAMERA_ALIASES.get("".join(value.split()).lower()) if isinstance(value, str) else None
+        if v is None:
+            raise SettingsError(f"圖表鏡頭「{value}」看不懂，可以選：慢推（slow，{CAMERAS['slow']}）、"
+                                f"快推（snap，{CAMERAS['snap']}）")
         return v
     if key == "tts":
         v = _TTS_ALIASES.get("".join(value.split()).lower()) if isinstance(value, str) else None
@@ -347,10 +357,12 @@ def snapshot_into_project(project_dir: str | os.PathLike, data_dir: str | os.Pat
         return []
     d = resolve_data_dir(data_dir)
     user = load_user_settings(d)
-    before_paid_voices = "channel" in raw  # 快照是能選配音層之前做的（那時一律 edge）
+    old_snapshot = "channel" in raw  # 快照是能選配音層、圖表鏡頭之前做的（那時一律 edge、一律等速慢推）
     for key in missing:
-        if key == "tts" and before_paid_voices:  # 照舊用 edge：之後改用付費配音的使用者設定不影響這支片
+        if key == "tts" and old_snapshot:  # 照舊用 edge：之後改用付費配音的使用者設定不影響這支片
             raw["tts"] = Settings.tts
+        elif key == "camera" and old_snapshot:  # 照舊等速慢推：之後預設或使用者設定改成快推，舊片重建出來也一樣
+            raw["camera"] = "slow"
         elif key == "logo":
             raw["logo"] = _copy_logo(d / user.logo, root) if user.logo and (d / user.logo).is_file() else None
         else:

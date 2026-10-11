@@ -50,7 +50,9 @@ from article_to_video.tts_providers import DEFAULT_ELEVENLABS_MODEL, DEFAULT_ELE
 
 __all__ = [
     "CHART_CUE_KINDS",
+    "CAMERAS",
     "CHART_DATA_KEYS",
+    "DEFAULT_CAMERA",
     "INTERNAL_VOX_ENV",
     "SETTINGS_KEYS",
     "ZH_TW_VOICES",
@@ -76,6 +78,15 @@ ZH_TW_VOICES = {
     "zh-TW-YunJheNeural": "雲哲",
 }
 
+CAMERAS = {
+    "slow": "等速慢推（整串分鏡一直慢慢推近）",
+    "snap": "停住，標註出現時快推一下",
+}
+"""財經圖表的鏡頭（設定 camera）：slow＝A、snap＝B。怎麼動見 timeline.py 開頭與 engine/clips/t3_finance_chart.js。"""
+DEFAULT_CAMERA = "slow"
+"""新做的片預設用哪一種鏡頭。**要換預設只改這一行**（再改 skills/make-video/references/formats.md「圖表鏡頭」一節的「預設」字樣）：
+使用者設定沒寫 camera 的、新專案第一次建置時，都從這裡拿；已經有設定快照的舊片照舊（見 user_settings.snapshot_into_project）。"""
+
 # t3_finance_chart 認得的 data 欄位（pushFrom 由建置自己算，不讓人寫）＋ publicData（公有數據：
 # 寫系列名稱取代 series 與 source，建置時抓數據換成實際數列、自動寫來源行，見 public_data.py）
 CHART_DATA_KEYS = frozenset({
@@ -90,7 +101,7 @@ INTERNAL_VOX_ENV = "ARTICLE_TO_VIDEO_INTERNAL_VOX"
 """內部開關：這個環境變數是 "1" 才讀得到 Vox 分鏡（只給 Vox 模組自己的測試用）。作者的流程只用財經圖表
 （docs/adr/0001-只用財經圖表風格.md），沒開時分鏡設定裡有 vox 一律擋下。"""
 SETTINGS_KEYS = frozenset({"voice", "rate", "tts", "gap", "lead", "tail",
-                           "channel", "logo", "brand_color", "music", "aspect",
+                           "channel", "logo", "brand_color", "music", "aspect", "camera",
                            "elevenlabs_voice", "elevenlabs_model", "google_voice"})
 
 _KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
@@ -286,6 +297,8 @@ class Settings:
     """配樂（music.TRACKS 的名字）或 "none"。"""
     aspect: str = "16x9"
     """預設比例（直式那張票用）。"""
+    camera: str = DEFAULT_CAMERA
+    """財經圖表的鏡頭：slow（等速慢推）或 snap（停住，標註出現時快推一下）。見 CAMERAS。"""
 
     def tts_voice(self, engine: str | None = None) -> str:
         """這個配音層（預設：設定的 tts）用的聲音：每家有自己的聲音欄位，edge 和 fake 用 voice。"""
@@ -488,7 +501,8 @@ def _load_settings(raw: Any, overrides: Mapping[str, Any], problems: _Problems) 
             problems.add(f"settings.json 的 {name} 要是 {lo:g}～{hi:g} 之間的秒數（現在是 {v!r}）")
     from article_to_video.user_settings import SettingsError, normalize_value  # 避免循環匯入
 
-    for name in ("channel", "brand_color", "music", "aspect", "elevenlabs_voice", "elevenlabs_model", "google_voice"):
+    for name in ("channel", "brand_color", "music", "aspect", "camera", "elevenlabs_voice", "elevenlabs_model",
+                 "google_voice"):
         v = getattr(s, name)
         try:
             if normalize_value(name, v) != v:

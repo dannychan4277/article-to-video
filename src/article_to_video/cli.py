@@ -42,7 +42,8 @@
   reproduce-issue <zip> [--out 資料夾] [--shot 分鏡]…   （維護者用）從回報的 zip 重渲出錯的分鏡
   settings show [--json] [--data-dir D] [--project P]               看使用者設定（或某支片的設定快照）
   settings set [--channel …] [--logo 圖檔|none] [--brand-color #RRGGBB|none] [--voice 曉臻|曉雨|雲哲]
-               [--rate +5%] [--music calm|pulse|minimal|none] [--aspect 16:9|9:16] [--independent-review 開|關]
+               [--rate +5%] [--music calm|pulse|minimal|none] [--aspect 16:9|9:16] [--camera 慢推|快推]
+               [--independent-review 開|關]
                [--tts edge|elevenlabs|google] [--elevenlabs-voice 代號] [--elevenlabs-model 模型] [--google-voice 聲音]
                [--data-dir D] [--project P]
                                                                      改使用者設定；加 --project 只改那支片的快照
@@ -104,6 +105,7 @@ _SET_OPTIONS = {  # 選項 → 設定鍵
     "rate": "語速，例 +5%、-10%",
     "music": "配樂：calm（沉穩鋼琴）、pulse（新聞脈動）、minimal（極簡電子）、none",
     "aspect": "預設比例：16:9（橫式）或 9:16（直式）",
+    "camera": "圖表鏡頭：慢推（整串分鏡等速慢慢推近）或 快推（畫面停住，標註出現時快推一下）",
     "tts": "配音：edge（微軟，免費，預設）、elevenlabs、google（這兩家付費、要 API key，key 放哪裡見 docs/maintaining.md）",
     "elevenlabs_voice": "ElevenLabs 的聲音代號（voice_id，一串英數字）",
     "elevenlabs_model": "ElevenLabs 的模型（預設 eleven_multilingual_v2）",
@@ -772,6 +774,7 @@ def _reproduce_issue(args: argparse.Namespace) -> int:
 
 def _describe(values: dict) -> str:
     from article_to_video.music import TRACKS
+    from article_to_video.project import CAMERAS
     from article_to_video.user_settings import ASPECTS
 
     from article_to_video.tts_providers import GOOGLE_TW_VOICES
@@ -791,6 +794,7 @@ def _describe(values: dict) -> str:
         f"語速：{values.get('rate')}",
         f"配樂：{'不要配樂' if music == 'none' else f'{TRACKS[music].label}（{music}）' if music in TRACKS else music}",
         f"預設比例：{ASPECTS.get(values.get('aspect'), values.get('aspect'))}",
+        f"圖表鏡頭：{CAMERAS.get(values.get('camera'), values.get('camera'))}",
     ]
     if "independent_review" in values:  # 只有使用者設定有（不進設定快照）
         on = values["independent_review"]
