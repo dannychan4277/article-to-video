@@ -533,3 +533,46 @@ def test_a_derived_number_said_during_a_continued_shot_uses_the_formula_of_the_s
     rep = reconcile(plan_build(root, tts="fake"))
     assert spoken(rep, "SH02") == {("零點六二", "derived")}
     assert not any("畫面上沒有" in note for notes in rep.notes.values() for note in notes)
+
+
+def test_a_gap_said_while_a_compare_chart_shows_it_uses_the_gaps_source(tmp_path):
+    """兩數對比的差距是程式照畫面上兩個數字算的（推算，不用宣告）。旁白在那張圖期間唸同一個差距，
+    就是在唸畫面上那個數字：沿用它的出處，不會變成無出處擋下出片。"""
+    def edit(shots: dict) -> None:
+        shots["shots"] = [{"id": "SH01", "start": {"segment": "s01"}, "chart": {
+            "data": {"title": "短天期比長天期高", "unit": "美國公債殖利率，2023 年平均，%",
+                     "source": "來源：FRED（DGS2、DGS10），年平均自算", "chart": "compare", "decimals": 2, "suffix": "%",
+                     "series": [{"label": "兩年期", "value": 4.58}, {"label": "十年期", "value": 3.96}]},
+            "cues": [{"at": 0, "kind": "title"},
+                     {"at": {"segment": "s01", "word": "四點五八", "edge": "end"}, "kind": "number", "data": {"index": 0}},
+                     {"at": {"segment": "s02", "word": "三點九六", "edge": "end"}, "kind": "number", "data": {"index": 1}},
+                     {"at": {"segment": "s02", "word": "個百分點", "edge": "end"}, "kind": "gap", "text": "高",
+                      "data": {"suffix": " 個百分點"}}]}}]
+
+    root = with_narration(make_project(tmp_path, edit), s02="十年期只有三點九六，短天期高了零點六二個百分點。")
+    rep = reconcile(plan_build(root, tts="fake"))
+    assert ("零點六二", "derived") in spoken(rep, "SH01")
+    assert rep.unsourced == []
+
+
+def test_a_gap_said_during_a_shot_that_continues_the_compare_chart_still_uses_its_source(tmp_path):
+    """差距畫在 SH01，旁白在接續它的 SH02 期間才唸：同一張圖，畫面上一直看得到，照樣沿用差距的出處。"""
+    def edit(shots: dict) -> None:
+        shots["shots"] = [
+            {"id": "SH01", "start": {"segment": "s01"}, "chart": {
+                "data": {"title": "短天期比長天期高", "unit": "美國公債殖利率，2023 年平均，%",
+                         "source": "來源：FRED（DGS2、DGS10），年平均自算", "chart": "compare", "decimals": 2, "suffix": "%",
+                         "series": [{"label": "兩年期", "value": 4.58}, {"label": "十年期", "value": 3.96}]},
+                "cues": [{"at": 0, "kind": "title"},
+                         {"at": {"segment": "s01", "word": "四點五八", "edge": "end"}, "kind": "number", "data": {"index": 0}},
+                         {"at": {"segment": "s02", "word": "三點九六", "edge": "end"}, "kind": "number", "data": {"index": 1}},
+                         {"at": {"segment": "s02", "word": "曲線", "edge": "end"}, "kind": "gap", "text": "高",
+                          "data": {"suffix": " 個百分點"}}]}},
+            {"id": "SH02", "start": {"segment": "s03"}, "continues": True, "chart": {
+                "data": {"highlight": {"index": 0}},
+                "cues": [{"at": {"segment": "s03", "word": "短天期"}, "kind": "highlight"}]}}]
+
+    root = with_narration(make_project(tmp_path, edit), s03="短天期高了零點六二個百分點。")
+    rep = reconcile(plan_build(root, tts="fake"))
+    assert ("零點六二", "derived") in spoken(rep, "SH02")
+    assert rep.unsourced == []

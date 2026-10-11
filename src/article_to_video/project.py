@@ -95,7 +95,12 @@ CHART_DATA_KEYS = frozenset({
     "title", "unit", "source", "badge", "chart", "series", "decimals", "prefix", "suffix",
     "highlight", "colors", "upDown", "xAxis", "xTicks", "axisNote", "push", "publicData", "yRange",
 })
-CHART_CUE_KINDS = frozenset({"title", "bar", "line", "candle", "highlight", "number"})
+CHART_CUE_KINDS = frozenset({"title", "bar", "line", "candle", "highlight", "number", "gap"})
+CHART_LAYOUTS = {
+    "bar": "柱狀圖", "line": "折線圖", "candle": "K 線", "number": "大數字卡", "compare": "兩數對比",
+}
+"""chart.data.chart 認得的圖表版面。大數字卡＝一個分鏡只放一個大數字（number cue）；兩數對比＝兩個數字並排
+（16:9 左右、9:16 上下），可以強調其中一個（highlight）、標出差距（gap）。規則見 _check_layouts。"""
 VOX_CUE_KINDS = frozenset({"image", "excerpt", "box", "title", "point"})
 """Vox 分鏡的 cue：image＝文章原圖（圖N）、excerpt＝原文剪報、box＝框（螢光筆＋紅圈，框住旁白正在唸的數字）、
 title＝黑底白字標題條、point＝橫線索引卡。"""
@@ -441,6 +446,7 @@ def load_project(root: str | Path, *, overrides: Mapping[str, Any] | None = None
         problems.add(msg)
     problems.raise_if_any()
     _check_continuations(shots, problems)
+    _check_layouts(shots, problems)
     _check_vox_boxes(shots, problems)
     problems.raise_if_any()
     return Project(paths=paths, segments=segments, shots=shots, settings=settings, figure_numbers=figure_numbers)
@@ -705,10 +711,6 @@ def _load_chart(raw: Any, label: str, segments: Mapping[str, str], problems: _Pr
             at = anchor
         if "dur" in q and (not _is_number(q["dur"]) or q["dur"] <= 0):
             problems.add(f"{where} 的 dur 要是正的秒數")
-        if kind == "number":
-            d = q.get("data")
-            if not isinstance(d, dict) or not _is_number(d.get("value")):
-                problems.add(f"{where} 是大數字（number），要有 data.value")
         if kind == "bar" and isinstance(q.get("data"), dict) and "index" in q["data"]:
             idx = q["data"]["index"]
             idxs = idx if isinstance(idx, list) else [idx]
@@ -857,10 +859,14 @@ def _check_chart_data(data: dict, label: str, problems: _Problems) -> None:
     if not isinstance(data.get("title"), str) or not data.get("title"):
         problems.add(f"{where} 少了 title（標題，一句結論）")
     kind = data.get("chart", "bar")
-    if kind not in ("bar", "line", "candle"):
-        problems.add(f"{where} 的 chart 只能是 bar、line、candle，現在是 {kind!r}")
+    if kind not in CHART_LAYOUTS:
+        names = "、".join(f"{k}（{v}）" for k, v in CHART_LAYOUTS.items())
+        problems.add(f"{where} 的 chart 只能是 {names}，現在是 {kind!r}")
     if "push" in data and (not _is_number(data["push"]) or not 0 <= data["push"] <= 0.2):
         problems.add(f"{where} 的 push 要是 0～0.2（整串分鏡總共推近多少，例 0.03）")
+    if kind in _CARD_DATA_KEYS:
+        _check_card_data(data, kind, where, problems)
+        return
     for p in y_range_problems(data, where):
         problems.add(p)
     if "publicData" in data:  # 數列由建置抓（public_data.py）；xTicks、yRange 有沒有包住數字等抓到之後才查
@@ -890,6 +896,47 @@ def _check_chart_data(data: dict, label: str, problems: _Problems) -> None:
         problems.add(f"{where} 的 xTicks 要是索引清單（0～{len(series) - 1}）")
     for p in y_range_covers(data, where):
         problems.add(p)
+
+
+_CARD_DATA_KEYS = {
+    "number": frozenset({"title", "unit", "source", "badge", "chart", "colors", "push"}),
+    "compare": frozenset({"title", "unit", "source", "badge", "chart", "colors", "push", "series", "decimals",
+                          "prefix", "suffix", "highlight"}),
+}
+"""大數字卡、兩數對比的 chart.data 用得到的欄位（沒有軸：xTicks、yRange、axisNote…都用不到）。"""
+_CARD_HINT = {
+    "number": "大數字卡只放一個數字：數字寫在 number cue 的 data.value（單位寫 suffix），說明寫在那個 cue 的 text",
+    "compare": "兩數對比的兩個數字寫在 series（剛好兩個，各帶一行說明 label），數字的格式寫 decimals、prefix、suffix",
+}
+
+
+def _check_card_data(data: dict, kind: str, where: str, problems: _Problems) -> None:
+    """大數字卡、兩數對比的 chart.data。cue 的規則在 _check_layouts（接續分鏡的版面要往前找才知道）。"""
+    name = CHART_LAYOUTS[kind]
+    extra = [k for k in data if k in CHART_DATA_KEYS and k not in _CARD_DATA_KEYS[kind]]
+    if extra:
+        problems.add(f"{where} 是{name}，用不到「{'、'.join(extra)}」：{_CARD_HINT[kind]}"
+                     + ("（數字要是文章裡的，或讀圖記下的；公有數據請畫成折線或柱）" if "publicData" in extra else ""))
+    if kind != "compare":
+        return
+    series = data.get("series")
+    if not isinstance(series, list) or len(series) != 2:
+        n = len(series) if isinstance(series, list) else 0
+        problems.add(f"{where} 是兩數對比，series 要剛好兩個數字（現在 {n} 個），"
+                     "例 [{\"label\": \"2023 年平均\", \"value\": -0.62}, {\"label\": \"2025 年平均\", \"value\": 0.48}]")
+        return
+    for i, r in enumerate(series):
+        w = f"{where}.series[{i}]"
+        if not isinstance(r, dict):
+            problems.add(f"{w} 要是物件，例 {{\"label\": \"2023 年平均\", \"value\": -0.62}}")
+            continue
+        if not _is_number(r.get("value")):
+            problems.add(f"{w} 的 value 要是數字，現在是 {r.get('value')!r}")
+        if not isinstance(r.get("label"), str) or not r["label"].strip():
+            problems.add(f"{w} 的 label 要寫一行說明（這個數字是什麼，例「2023 年平均」），會寫在數字底下")
+        bad = [k for k in r if k not in ("label", "value")]
+        if bad:
+            problems.add(f"{w} 有用不到的欄位「{'、'.join(bad)}」（兩數對比的數字只認 label、value）")
 
 
 def _y_range(data: Mapping) -> tuple[float, float] | None:
@@ -980,3 +1027,100 @@ def _check_continuations(shots: list[Shot], problems: _Problems) -> None:
             continue
         if shot.chart is None or prev.chart is None:
             problems.add(f"{shot.label} 設了 continues，但它和上一個分鏡 {prev.id} 都要是財經圖表分鏡才能接續")
+
+
+def _layout_head(shots: list[Shot], i: int) -> int:
+    """第 i 個分鏡那一串的第一個分鏡（接續分鏡沿用它的圖表版面）。"""
+    while i > 0 and shots[i].continues and shots[i - 1].chart is not None:
+        i -= 1
+    return i
+
+
+def _index_list(v: Any) -> list[int] | None:
+    """data.index：一個 0 起算的整數，或這種數字的清單；不是就 None。"""
+    vs = v if isinstance(v, list) else [v]
+    ok = vs and all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in vs)
+    return list(vs) if ok else None
+
+
+def _check_layouts(shots: list[Shot], problems: _Problems) -> None:
+    """每種圖表版面用得到哪些 cue（接續分鏡的版面跟它那一串的第一個分鏡一樣）：
+    - 柱狀、折線、K 線：number cue（右上角的大數字）要有 data.value；差距（gap）不能用。
+    - 大數字卡：剛好一個 number cue（data.value＋說明 text），沒有柱、線、標註、差距；不能被接續（只有一個數字，沒東西可換）。
+    - 兩數對比：number cue 用 data.index（0、1，或清單）指出這一刻落定的是 series 的哪一個，整串裡兩個數字都要有；
+      highlight＝強調其中一個（另一個淡成灰），不寫字；gap＝差距（後一個減前一個的絕對值），data.suffix 寫單位（不能是 %）。"""
+    numbers_at: dict[int, set[int]] = {}
+    for i, shot in enumerate(shots):
+        if shot.chart is None:
+            continue
+        head = _layout_head(shots, i)
+        layout = shots[head].chart.data.get("chart", "bar")
+        name = CHART_LAYOUTS.get(layout, "")
+        if shot.continues and layout == "number" and head != i:
+            problems.add(f"{shot.label} 接續的 {shots[i - 1].id} 是大數字卡：大數字卡一個分鏡只講一個數字，沒有東西可以換。"
+                         "下一句另開一個分鏡（拿掉 continues）")
+            continue
+        own_numbers = 0
+        for cue in shot.chart.cues:
+            d = cue.fields.get("data") if isinstance(cue.fields.get("data"), dict) else {}
+            if cue.kind == "gap" and layout != "compare":
+                problems.add(f"{cue.where} 是差距（gap），只能用在兩數對比（chart: compare）；{name}要標差多少就寫進標註的字")
+                continue
+            if layout in ("number", "compare") and cue.kind in ("bar", "line", "candle"):
+                problems.add(f"{cue.where} 是 {cue.kind}：{name}沒有柱和線，數字用 number cue 出現")
+                continue
+            if layout == "number" and cue.kind in ("highlight", "gap"):
+                problems.add(f"{cue.where} 是 {cue.kind}：大數字卡只有一個數字，沒有標註可以換（要講兩個數字就用兩數對比 compare）")
+                continue
+            if cue.kind == "number":
+                own_numbers += 1
+                if layout == "compare":
+                    idx = _index_list(d.get("index"))
+                    if idx is None or "value" in d:
+                        problems.add(f"{cue.where} 是兩數對比的數字：寫 data.index 指出這一刻落定的是 series 的第幾個"
+                                     "（0 或 1，兩個一起就寫 [0, 1]），數字本身寫在 series，不寫 data.value")
+                    elif any(x > 1 for x in idx):
+                        problems.add(f"{cue.where} 的 data.index 只能是 0 或 1（兩數對比只有兩個數字）")
+                    else:
+                        numbers_at.setdefault(head, set()).update(idx)
+                    if cue.fields.get("text") or cue.fields.get("sub"):
+                        problems.add(f"{cue.where}：兩數對比的說明寫在 series 的 label（寫在數字底下），number cue 不寫 text")
+                    continue
+                if not _is_number(d.get("value")):
+                    problems.add(f"{cue.where} 是大數字（number），要有 data.value")
+                if layout == "number":
+                    cap = cue.fields.get("text", cue.fields.get("sub"))
+                    if not isinstance(cap, str) or not cap.strip():
+                        problems.add(f"{cue.where} 是大數字卡的數字，要寫一行說明 text（這個數字是什麼，例「連續倒掛」），會寫在數字底下")
+            if layout == "compare" and cue.kind == "highlight":
+                own = [k for k in ("text", "sub") if cue.fields.get(k)]
+                h = shot.chart.data.get("highlight") if isinstance(shot.chart.data.get("highlight"), dict) else {}
+                own += [f"data.highlight.{k}" for k in ("text", "sub") if h.get(k)]
+                if own and not d.get("carried"):
+                    problems.add(f"{cue.where} 是兩數對比的強調，不寫字（{'、'.join(own)}）：被強調的數字換成品牌色、"
+                                 "另一個淡成灰；要說的話寫進標題或數字底下的說明")
+            if layout == "compare" and cue.kind == "gap":
+                suf = d.get("suffix")
+                bad = [k for k in d if k not in ("suffix", "prefix")]
+                if bad:
+                    problems.add(f"{cue.where}（差距）只認 data.suffix、data.prefix：差距是畫面上兩個數字相減，會自己算")
+                if not isinstance(suf, str) or not suf.strip():
+                    problems.add(f"{cue.where} 是差距，要寫單位：data.suffix，例「 個百分點」「 天」「 元」（差值一定帶單位）")
+                elif suf.strip() in ("%", "％"):
+                    problems.add(f"{cue.where} 的差距單位不能是 %：兩個百分比相減，單位是「個百分點」，寫 \" 個百分點\"")
+                if "text" in cue.fields and not isinstance(cue.fields["text"], str):
+                    problems.add(f"{cue.where} 的 text 是差距前面的字（例「差」「拉開」「高」），要是文字")
+        if layout == "number" and head == i and own_numbers != 1:
+            problems.add(f"{shot.label} 是大數字卡，要剛好一個 number cue（現在 {own_numbers} 個）：一張卡只放一個大數字，"
+                         "例 {\"at\": 錨點, \"kind\": \"number\", \"text\": \"連續倒掛\", \"data\": {\"value\": 782, \"suffix\": \" 天\"}}")
+    for i, shot in enumerate(shots):
+        if shot.chart is None or shot.continues or shot.chart.data.get("chart") != "compare":
+            continue
+        series = shot.chart.data.get("series")
+        if not isinstance(series, list) or len(series) != 2:
+            continue
+        for k in (0, 1):
+            if k not in numbers_at.get(i, set()):
+                label = series[k].get("label", "") if isinstance(series[k], dict) else ""
+                problems.add(f"{shot.label} 是兩數對比，第 {k + 1} 個數字（series[{k}]「{label}」）沒有 number cue，不會出現："
+                             f"在這個分鏡（或接續它的分鏡）加 {{\"at\": 錨點, \"kind\": \"number\", \"data\": {{\"index\": {k}}}}}")

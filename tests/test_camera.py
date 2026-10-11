@@ -36,6 +36,8 @@ NARRATION = {
     "s02": "丙是負的，而且跌最深。",
     "s03": "換成折線來看，這條線先往下再往上，最後回到正的，之後停在這裡。",
     "s04": "六根柱子一起跳出來，第三根最高。",
+    "s05": "這一段連續倒掛三百天。",
+    "s06": "甲組一點二，乙組零點八，甲高零點四個百分點。",
 }
 SOURCE = "來源：測試用自製數字"
 DIP = [0.80, 0.55, 0.30, 0.10, -0.15, -0.40, -0.60, -0.75, -0.85, -0.80, -0.70, -0.55,
@@ -76,6 +78,20 @@ SHOTS = [
                  "highlight": {"index": 2, "text": "最高"}},
         "cues": [{"at": 0, "kind": "title"}, {"at": _a("s04", "一起"), "kind": "bar", "dur": 0.034},
                  {"at": _a("s04", "最高"), "kind": "highlight"}]}},
+    {"id": "SH05", "start": _a("s05"), "chart": {
+        "data": {"title": "倒掛了很久", "unit": "示意數據", "source": SOURCE, "chart": "number"},
+        "cues": [{"at": 0, "kind": "title"},
+                 {"at": _a("s05", "三百天", "end"), "kind": "number", "text": "連續倒掛", "data": {"value": 300, "suffix": " 天"}}]}},
+    {"id": "SH06", "start": _a("s06"), "chart": {
+        "data": {"title": "甲組比乙組高", "unit": "示意數據，%", "source": SOURCE, "chart": "compare", "decimals": 1,
+                 "suffix": "%", "series": [{"label": "甲組", "value": 1.2}, {"label": "乙組", "value": 0.8}],
+                 "highlight": {"index": 0}},
+        "cues": [{"at": 0, "kind": "title"},
+                 {"at": _a("s06", "一點二", "end"), "kind": "number", "data": {"index": 0}},
+                 {"at": _a("s06", "零點八", "end"), "kind": "number", "data": {"index": 1}},
+                 {"at": _a("s06", "甲高"), "kind": "highlight"}]}},
+    {"id": "SH06B", "start": _a("s06", "零點四"), "continues": True, "chart": {
+        "data": {}, "cues": [{"at": _a("s06", "個百分點", "end"), "kind": "gap", "text": "高", "data": {"suffix": " 個百分點"}}]}},
 ]
 
 
@@ -243,7 +259,8 @@ def test_the_snap_zooms_toward_the_labelled_bar_which_stays_put(lab):
     (bx0, by0), (bx1, by1) = bar_top_center(before), bar_top_center(after)
     assert abs(bx1 - bx0) <= 1 and abs(by1 - by0) <= 1  # 被標註的柱（甲）頂端在畫面上不動
     t0, t1 = title_box(before), title_box(after)
-    assert t1[0] < t0[0] - 2 and t1[2] > t0[2] + 2  # 其他東西往外推開（標題變寬）
+    # 其他東西往外推開（標題變寬）。量寬度：柱寬隨根數之後三根柱擠到圖區中間，甲柱頂離標題右端很近，右端只移一兩個像素
+    assert t1[0] < t0[0] - 2 and (t1[2] - t1[0]) - (t0[2] - t0[0]) > 4
 
 
 def test_a_continued_shot_starts_exactly_where_the_previous_one_left_the_camera(lab):
@@ -347,6 +364,16 @@ def test_holding_still_and_snapping_in_pass_every_check(lab):
         assert findings(lab.report, sid) == [], sid
     sh03 = next(c for c in lab.report.clips if c.clip_id == "SH03").qa
     assert sh03["still_pairs_pct"] >= 60  # 等速慢推（A）的判法會把這麼多靜止判成「沒在動」
+
+
+def test_a_big_number_card_and_a_comparison_pass_every_check_with_the_snap_camera(lab):
+    """大數字卡沒有標註：鏡頭不推（數字自己滾出來就是這一拍的動作）。兩數對比的強調跟標註一樣快推一下（往被強調的數字推），
+    差距、數字落定不推。停住、快推、數字滾動和淡入都不算問題。"""
+    for sid in ("SH05", "SH06", "SH06B"):
+        assert findings(lab.report, sid) == [], sid
+    assert lab.spec("SH05")["data"]["camera"]["snaps"] == []
+    assert [s["index"] for s in lab.spec("SH06")["data"]["camera"]["snaps"]] == [0]
+    assert [s["index"] for s in lab.spec("SH06B")["data"]["camera"]["snaps"]] == [0]   # 接續分鏡：只重播上一下，差距不推
 
 
 def test_a_bar_popping_in_one_frame_is_still_a_jump_with_the_snap_camera(lab):

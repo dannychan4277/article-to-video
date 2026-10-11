@@ -32,6 +32,9 @@ NARRATION = {
     "s02": "這張圖先放著不動，讓大家慢慢看清楚兩根柱子的高低差別。",
     "s03": "六根柱子一起跳出來。",
     "s04": "最後這張推得太近。",
+    "s05": "這一段連續倒掛三百天。",
+    "s06": "甲組一點二，乙組零點八，甲高零點四個百分點。",
+    "s07": "這張大數字卡推得太近。",
 }
 
 
@@ -64,6 +67,31 @@ SHOTS = [
      "start": {"segment": "s04"},
      "chart": {"data": _chart("推太近的圖", TWO_BARS, push=0.2),
                "cues": [{"at": 0, "kind": "title"}, {"at": 0.2, "kind": "bar"}]}},
+    {"id": "SH05", "note": "大數字卡：正常（慢推、數字唸到時滾出來）",
+     "start": {"segment": "s05"},
+     "chart": {"data": {"title": "倒掛了很久", "unit": "自製測試數字", "source": "來源：自製測試資料", "chart": "number"},
+               "cues": [{"at": 0, "kind": "title"},
+                        {"at": {"segment": "s05", "word": "三百天", "edge": "end"}, "kind": "number", "text": "連續倒掛",
+                         "data": {"value": 300, "suffix": " 天"}}]}},
+    {"id": "SH06", "note": "兩數對比：正常（兩個數字唸到時落定、唸到「甲高」強調甲組）",
+     "start": {"segment": "s06"},
+     "chart": {"data": {"title": "甲組比乙組高", "unit": "自製測試數字，%", "source": "來源：自製測試資料", "chart": "compare",
+                        "decimals": 1, "suffix": "%", "series": [{"label": "甲組", "value": 1.2}, {"label": "乙組", "value": 0.8}],
+                        "highlight": {"index": 0}},
+               "cues": [{"at": 0, "kind": "title"},
+                        {"at": {"segment": "s06", "word": "一點二", "edge": "end"}, "kind": "number", "data": {"index": 0}},
+                        {"at": {"segment": "s06", "word": "零點八", "edge": "end"}, "kind": "number", "data": {"index": 1}},
+                        {"at": {"segment": "s06", "word": "甲高"}, "kind": "highlight"}]}},
+    {"id": "SH06B", "note": "接續兩數對比：唸到「個百分點」標出差距",
+     "start": {"segment": "s06", "word": "零點四"}, "continues": True,
+     "chart": {"data": {}, "cues": [{"at": {"segment": "s06", "word": "個百分點", "edge": "end"}, "kind": "gap", "text": "高",
+                                     "data": {"suffix": " 個百分點"}}]}},
+    {"id": "SH07", "note": "大數字卡推太近：整張放大兩成，來源列掉進字幕帶",
+     "start": {"segment": "s07"},
+     "chart": {"data": {"title": "推太近的大數字卡", "unit": "自製測試數字", "source": "來源：自製測試資料", "chart": "number",
+                        "push": 0.2},
+               "cues": [{"at": 0, "kind": "title"},
+                        {"at": {"segment": "s07", "word": "大數字"}, "kind": "number", "text": "推太近", "data": {"value": 20}}]}},
 ]
 
 
@@ -120,12 +148,22 @@ def _shot_span(lab: Lab, shot: str) -> tuple[float, float]:
 
 def test_a_chart_pushed_into_the_subtitle_band_fails_the_band_check(lab):
     band = [f for f in lab.report.findings if f.check == "band"]
-    assert [(f.shot_ids, f.status) for f in band] == [(("SH04",), "fail")]
+    assert [(f.shot_ids, f.status) for f in band] == [(("SH04",), "fail"), (("SH07",), "fail")]
     a, b = _shot_span(lab, "SH04")
     for t0, t1 in band[0].times:
         assert a <= t0 < t1 <= b + 0.1
     # qa 的框景也抓到同一件事：來源列的字掉進字幕帶、被畫面邊緣切掉
     assert {f.check for f in findings(lab.report, "SH04") if f.status == "fail"} >= {"band", "text-in-band", "cut-text"}
+
+
+def test_a_big_number_card_and_a_comparison_pass_every_check_with_the_slow_push(lab):
+    """大數字卡（數字滾出來）、兩數對比（數字淡入、強調、差距）照慢推的判法：不算「沒在動」、不算跳變、字沒出框。"""
+    for sid in ("SH05", "SH06", "SH06B"):
+        assert findings(lab.report, sid) == [], sid
+
+
+def test_a_big_number_card_pushed_into_the_subtitle_band_is_still_caught(lab):
+    assert {f.check for f in findings(lab.report, "SH07") if f.status == "fail"} >= {"band", "text-in-band"}
 
 
 def test_more_than_five_seconds_without_anything_new_is_flagged_but_does_not_block(lab):

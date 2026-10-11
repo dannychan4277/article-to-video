@@ -24,6 +24,12 @@ const LEADER_MIN = 40;
 // ease-in-out 前幾幀幾乎不動，看起來像遲到的運鏡。時長由 spec 給（建置的 SNAP_DUR）。
 const SNAP_EASE = MO.bezier(0.23, 1, 0.32, 1);
 const CAM_SIDE = 12;                                                      // B 鏡頭推近後，字離畫面左右邊至少這麼多（×u）
+// [article-to-video 內嵌修改] 柱寬：一格的 BAR_FILL（原版 0.62），最寬 BAR_MAX（×u；原版 150）。見 init 的 xs
+const BAR_FILL = 0.62, BAR_MAX = 240;
+// [article-to-video 內嵌修改] 大數字卡、兩數對比的動畫時間與顏色（說明在 cardInit 上面）
+const ROLL = 0.9, ENTER = 0.45, STAGGER = 0.06, FLOAT = 18;
+const CARD_DIM = '#98A4AA';                                               // 被比下去的那個數字與說明（還要讀得到，所以比淡掉的柱 #C6D2D8 深）
+const unitScale = s => /[\u2E80-\u9FFF\uFF00-\uFFEF]/.test(s) ? 0.36 : 0.62;   // 中文單位小一點、符號大一點
 const rgba = (col, a, fb) => { const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(col || ''); if (!m) return fb; let h = m[1]; if (h.length === 3) h = [...h].map(x => x + x).join('');
   return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`; };
 return {
@@ -34,6 +40,7 @@ return {
     const mL = Math.max(m, ctx.safe.left), mR = Math.max(m, ctx.safe.right);   // [article-to-video 內嵌] 左右邊距讓開 safe.left/right（直式：短影音平台右側的按鈕欄）；safe 沒寫左右時＝m，跟原版一樣
     const tall = ctx.portrait && ctx.box.h > W * 1.25;                    // [article-to-video 內嵌] 竖屏的「標題 3 行、多一格刻度、底部多留」只在讓開 safe 之後畫面真的很高時才用：直式上下讓給平台介面與字幕後，內容框接近方形，照原版會擠成 8 條刻度、圖區被標題吃光
     const kind = (ctx.of('bar', 'line', 'candle')[0] || {}).kind || d.chart || 'bar';
+    if (kind === 'number' || kind === 'compare') { cardInit(ctx, c, kind, mL, mR, tall); return; }   // [article-to-video 內嵌修改] 圖表版面：大數字卡、兩數對比（見 cardInit）
     const S = d.series || [];
     const vals = kind === 'candle' ? S.flatMap(r => [r.h, r.l]) : S.map(r => r.value);
     let lo = Math.min(...vals), hi = Math.max(...vals);
@@ -61,7 +68,12 @@ return {
       ...(CL.highlights || []).map(h => ({ index: h.index != null ? h.index : S.length - 1, lines: h.text || h.sub ? [h.text, h.sub].filter(Boolean) : Array(h.lines || 0).fill('') }))];
     const band = ctx.of('number').length || CL.number ? 150 * u : 0;     // 有 number：给大数字单独留一条，不压在图区里（折线一上涨，右上角正好是线头）
     const F = { x: mL + 20 * u, y: top + 40 * u + band, w: W - mL - mR - 40 * u, h: H - top - 40 * u - band - (tall ? 260 : 190) * u - ctx.safe.bottom - (srcF.lines.length - 1) * srcF.size * 1.3 };   // safe.bottom：字幕带整条让出来，来源行落在它上面
-    const n = S.length, slot = (F.w - 80 * u) / n, xs = S.map((_, i) => F.x + slot * (i + 0.5));   // 右边留 80px 给刻度值，别压在最后一根柱上
+    // 右边留 80px 给刻度值，别压在最后一根柱上。[article-to-video 內嵌修改] 柱寬隨根數：柱寬＝一格的 BAR_FILL（原版 0.62），最寬 BAR_MAX；
+    // 根數少、柱寬碰到上限時，格子跟著縮成「柱寬 ÷ BAR_FILL」（柱與柱的間距跟根數多時同一個比例），整組柱放在圖區正中間。
+    // 原版上限 150 而格子照樣撐滿圖區：兩三根柱時柱子細、彼此離很遠、圖區空一大片
+    const n = S.length, area = F.w - 80 * u, bw = kind === 'bar' ? Math.min(BAR_MAX * u, area / n * BAR_FILL) : 0;
+    const slot = kind === 'bar' ? Math.min(area / n, bw / BAR_FILL) : area / n, x0 = F.x + (area - slot * n) / 2;
+    const xs = S.map((_, i) => x0 + slot * (i + 0.5));
     // x 轴：时间序列（折线/K 线，或 data.xAxis:'time'）按间隔抽稀；类目（柱状图默认）每根都要有名字，放不下就缩字、再放不下错成两行
     const category = (d.xAxis || (kind === 'bar' ? 'category' : 'time')) === 'category';
     const fs0 = ctx.portrait ? 1.2 : 1, xf = 30 * u * fs0;
@@ -97,7 +109,7 @@ return {
         roomFor(need); ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
       }
     }
-    L = { subF, srcF, m: mL, mR, kind, S, zeroBased, ticks, tdec, yS: CH.lin(...dom(), F.y + F.h, F.y), F, xs, slot, t, sub, band, category, xFont: xf * xScale, stagger,
+    L = { subF, srcF, m: mL, mR, kind, S, zeroBased, ticks, tdec, yS: CH.lin(...dom(), F.y + F.h, F.y), F, xs, slot, bw, t, sub, band, category, xFont: xf * xScale, stagger,
       every: category ? 1 : Math.max(1, Math.ceil(n / (ctx.portrait ? 6 : 10))) };
     const brand = (d.colors && d.colors.brand) || RED;                    // [article-to-video 內嵌修改] 品牌色
     const main = (d.colors && d.colors.main) || (kind === 'bar' ? '#006BA2' : brand);
@@ -146,6 +158,7 @@ return {
       c.restore();
       if (d.badge) { c.save(); c.globalAlpha = MO.seg(lt, 0.2, 0.6); CH.demoBadge(c, d.badge, { x: W - L.mR, y: H - 50 * u - ctx.safe.bottom, font: `700 ${28 * u}px ${CN}`, col: L.col.ink, box: rgba(L.col.ink, 0.06, 'rgba(227,18,11,0.06)') }); c.restore(); }
     }
+    if (L.card) { drawCard(c, t, ctx); c.restore(); glow(c0, ctx); return; }   // [article-to-video 內嵌修改] 大數字卡、兩數對比：版式一樣，沒有坐標系
     // ---- 坐标系（版式之后 0.25s） ----
     const qd = ctx.of('bar', 'line', 'candle')[0] || { at: qt.at + 0.75 }, gStart = Math.min(qt.at + 0.25, qd.at - 0.4);
     const gp = MO.seg(ctx.lt(t, gStart), 0, 0.6);
@@ -173,7 +186,7 @@ return {
     }
     let tops = null, pts = null;
     if (kind === 'bar') {
-      const bw = Math.min(150 * u, L.slot * 0.62);
+      const bw = L.bw;
       const opt = { dimCol: L.col.dim, fmt: v => fmtv(d, v), font: `600 ${Math.max(24 * u * fs, Math.min(34 * u * fs, L.slot * 0.3))}px ${NUM}`, labelCol: INK, label: n <= 14 };
       const own = {};                                                      // 带 data.index 的 bar cue：这几根柱子从它的 at 起单独长
       for (const q of ctx.of('bar')) if (q.data && q.data.index != null) [].concat(q.data.index).forEach(i => { own[i] = q; });
@@ -224,10 +237,156 @@ return {
       c.restore();
     }
     c.restore();
-    if (ctx.alpha) { c0.save(); c0.shadowColor = '#FFFFFF'; for (const b of [8, 3, 1.5]) { c0.shadowBlur = b * ctx.u; c0.drawImage(BUF, 0, 0); } c0.restore(); }   // 三遍由宽到窄：外圈柔光＋贴字的实边
+    glow(c0, ctx);
   },
 };
+function glow(c0, ctx) {
+  if (ctx.alpha) { c0.save(); c0.shadowColor = '#FFFFFF'; for (const b of [8, 3, 1.5]) { c0.shadowBlur = b * ctx.u; c0.drawImage(BUF, 0, 0); } c0.restore(); }   // 三遍由宽到窄：外圈柔光＋贴字的实边
+}
 function C(...a) { return a.find(v => v != null && v !== ''); }
+// [article-to-video 內嵌修改] 圖表版面：大數字卡（chart: 'number'）、兩數對比（chart: 'compare'）。版式（色條、小旗、標題、副標、
+// 來源行、角標、白邊描字、字型、品牌色）跟柱狀圖、折線一樣，只是內容區不畫坐標系，改放大數字。
+// 內容區＝副標下面到來源行上面；數字一律靠左對齊標題（經濟學人式版面從左邊界往右排），整塊在內容區裡垂直置中（偏上一點）。
+// 單位（prefix、suffix）比數字小：中文單位（「天」「個百分點」）0.36 倍、符號（%、$）0.62 倍，基線對齊。
+// 動畫（理由見 NOTICE.md）：
+// - 大數字卡的數字照原版大數字（number cue）的滾法：at 前 0.9 秒開始從 0 滾、expoOut（強 ease-out：先快後慢、最後一位落定）、
+//   前 0.2 秒淡入；等寬數字，右緣固定（位數變多時往左長，單位不跟著跑）。說明晚 STAGGER 秒、淡入＋往上浮 ENTER 秒。
+// - 兩數對比的數字不滾：淡入＋往上浮 FLOAT，ENTER 秒、quintOut（強 ease-out），at 那一刻落定。比較要讀的是兩個確切的數，
+//   從 0 滾上去會經過一串假的數字，也會把「從 4.58 降到 3.81」演成往上數。
+// - 強調（highlight）：0.4 秒（smooth）另一個數字和它的說明淡成灰、被強調的數字換成品牌色；差距（gap）在 at 落定：
+//   橫線從左畫出、字淡入上浮。
+// 一個數字（前綴＋數字＋後綴）在 sz 號字的排法：各段寬度、數字的字高（量 '0' 的上緣）
+function numParts(c, pre, num, suf, sz) {
+  c.save(); c.font = `700 ${sz}px ${NUM}`; const dw = c.measureText('0').width, capH = c.measureText('0').actualBoundingBoxAscent;
+  const numW = [...num].reduce((s, ch) => s + (/[0-9]/.test(ch) ? dw : c.measureText(ch).width), 0);
+  const uf = s => `700 ${sz * unitScale(s)}px ${NUM}`;
+  c.font = uf(pre); const preW = pre ? c.measureText(pre).width + sz * 0.04 : 0;
+  c.font = uf(suf); const sufW = suf ? c.measureText(suf).width + sz * 0.02 : 0;
+  // 字的墨從哪裡開始（光學對齊）：等寬數字的「1」在格子正中，左邊空一截；整個數字往左移這麼多，墨才對齊標題的左邊界
+  let lead = 0;
+  if (pre) { c.font = uf(pre); c.textAlign = 'left'; lead = -c.measureText(pre).actualBoundingBoxLeft; }
+  else if (num) { c.font = `700 ${sz}px ${NUM}`; c.textAlign = 'center'; const ch = [...num][0], m = c.measureText(ch);
+    lead = /[0-9]/.test(ch) ? dw / 2 - m.actualBoundingBoxLeft : m.width / 2 - m.actualBoundingBoxLeft; }
+  c.restore();
+  return { sz, dw, capH, preW, numW, sufW, lead, w: preW + numW + sufW - lead, uf };
+}
+// 畫一個數字：x 是左緣、by 是基線；str 是現在要寫的數字（滾動中位數會變少），右緣固定在 x + preW + numW
+function drawNum(c, P, pre, str, suf, x, by) {
+  c.textBaseline = 'alphabetic'; x -= P.lead;
+  if (pre) { c.font = P.uf(pre); c.textAlign = 'left'; c.fillText(pre, x, by); }
+  c.font = `700 ${P.sz}px ${NUM}`; TY.tabular(c, str, x + P.preW + P.numW, by, { align: 'right', digitW: P.dw });
+  if (suf) { c.font = P.uf(suf); c.textAlign = 'left'; c.fillText(suf, x + P.preW + P.numW + P.sz * 0.02, by); }
+}
+function cardInit(ctx, c, kind, mL, mR, tall) {
+  const { W, H, u, data: d } = ctx, fsz = ctx.portrait ? 1.2 : 1, cw = W - mL - mR;
+  const t = TY.fit(c, d.title || '', cw, (ctx.portrait ? 64 : 58) * u, 'PuHui-Bold', { maxLines: tall ? 3 : 2, weight: '700 ' });
+  const subF = TY.fit(c, d.unit || '', cw, 32 * u * fsz, 'PuHui-Medium', { maxLines: 2, min: 0.8 });
+  c.font = `700 ${28 * u}px "PuHui-Medium"`; const badgeW = d.badge ? c.measureText(d.badge).width + 28 + 30 * u : 0;
+  const srcF = TY.fit(c, d.source || '', cw - badgeW, 26 * u * fsz, 'PuHui-Medium', { maxLines: 2, min: 0.8 });
+  const top = ctx.safe.top + 80 * u + t.lines.length * t.size * 1.25 + 60 * u + (subF.lines.length - 1) * subF.size * 1.3;
+  const y0 = top + 40 * u, y1 = H - 40 * u - ctx.safe.bottom - (srcF.lines.length - 1) * srcF.size * 1.3 - srcF.size - 60 * u;   // 內容區：副標下面到來源行上面
+  const brand = (d.colors && d.colors.brand) || RED, ink = (d.colors && d.colors.ink) || brand;
+  L = { card: kind, t, subF, srcF, m: mL, mR, S: d.series || [], col: { main: brand, accent: brand, dim: CARD_DIM, brand, ink } };
+  if (kind === 'number') {
+    const q = ctx.of('number')[0], nd = (q && q.data) || {}, dec = nd.decimals ?? 0, pre = nd.prefix || '', suf = nd.suffix || '';
+    let P = numParts(c, pre, TY.fmt(nd.value || 0, dec), suf, (ctx.portrait ? 250 : 300) * u);
+    if (P.w > cw) P = numParts(c, pre, TY.fmt(nd.value || 0, dec), suf, P.sz * cw / P.w);
+    const capF = TY.fit(c, (q && (q.text ?? q.sub)) || '', cw, 44 * u * fsz, 'PuHui-Medium', { maxLines: 2, min: 0.7 });
+    const gap = 0.3 * P.capH, blockH = P.capH + gap + capF.lines.length * capF.size * 1.3;
+    if (blockH > y1 - y0) throw new Error(`[article-to-video 內嵌] 大數字卡放不下：標題、副標、來源行之間只剩 ${Math.round(y1 - y0)}px，數字和說明要 ${Math.round(blockH)}px。請縮短標題或說明`);
+    const by = y0 + (y1 - y0 - blockH) * 0.45 + P.capH;
+    L.num = { q, nd, dec, pre, suf, P, capF, x: mL, by, capY: by + gap + capF.size };
+  } else compareInit(ctx, c, cw, y0, y1);
+  L.cam = d.camera ? cameraKeys(ctx, c, d.camera) : null;
+}
+// 兩數對比：兩格（16:9 左右並排、9:16 上下疊），每格一個數字＋說明（series[i].label），兩個數字同一個字級（比較才公平）。
+// 差距（gap cue）放在兩格下面：先一條細橫線（像直式算術的那條線：上面是兩個數，下面是結果），再一行「動詞 數字 單位」。
+// 整串（接續分鏡）裡有差距就先留好位置（chainLayout.gap），切點時兩個數字不會跳。放不下就整組縮小，字級最小到原本的一半。
+function compareInit(ctx, c, cw, y0, y1) {
+  const { W, u, data: d } = ctx, fsz = ctx.portrait ? 1.2 : 1, side = !ctx.portrait, S = L.S, mL = L.m;
+  const dec = d.decimals ?? 1, pre = d.prefix || '', suf = d.suffix || '', strs = S.map(r => TY.fmt(r.value, dec));
+  const gutter = 120 * u, cellW = side ? (cw - gutter) / 2 : cw;
+  const caps0 = S.map(r => TY.fit(c, String(r.label ?? ''), cellW, 40 * u * fsz, 'PuHui-Medium', { maxLines: 2, min: 0.75 }));
+  const capSz = Math.min(...caps0.map(f => f.size)), caps = S.map(r => TY.fit(c, String(r.label ?? ''), cellW, capSz, 'PuHui-Medium', { maxLines: 2, min: 1 }));
+  const capLines = Math.max(...caps.map(f => f.lines.length));
+  const gq = ctx.of('gap')[0], hasGap = !!gq || !!(d.chainLayout && d.chainLayout.gap);
+  const gd = (gq && gq.data) || {}, gsuf = gd.suffix || '', gpre = gd.prefix || '', verb = gq ? C(gq.text, '差') : '差';
+  const r = v => Math.sign(v) * +Math.abs(v).toFixed(dec);              // 畫面上寫的數（四捨五入到 decimals）：差距照畫面上的兩個數算，觀眾自己減得出來
+  const gStr = S.length === 2 ? TY.fmt(Math.abs(r(S[1].value) - r(S[0].value)), dec) : '';
+  const gWord = 44 * u * fsz;
+  let sz = (side ? 210 : 180) * u, lay;
+  for (let k = 0; k < 12; k++) {
+    let Ps = strs.map(s => numParts(c, pre, s, suf, sz));
+    const wMax = Math.max(...Ps.map(P => P.w));
+    if (wMax > cellW) { sz *= cellW / wMax; Ps = strs.map(s => numParts(c, pre, s, suf, sz)); }
+    const capH = Ps[0].capH, gapNC = 0.3 * capH, cellH = capH + gapNC + capLines * capSz * 1.3, rowGap = 0.45 * capH;
+    const G = numParts(c, gpre, gStr, gsuf, Math.max(60 * u * fsz, 0.4 * sz)), ruleGap = 0.32 * capH;
+    const gapH = hasGap ? ruleGap + 2 * u + 0.28 * capH + G.capH : 0;
+    const blockH = (side ? cellH : 2 * cellH + rowGap) + gapH;
+    lay = { Ps, capH, gapNC, cellH, rowGap, G, ruleGap, blockH };
+    if (blockH <= y1 - y0 || k === 11) break;
+    sz *= 0.92;
+  }
+  if (lay.blockH > y1 - y0) throw new Error(`[article-to-video 內嵌] 兩數對比放不下：標題、副標、來源行之間只剩 ${Math.round(y1 - y0)}px，兩個數字和說明要 ${Math.round(lay.blockH)}px。請縮短標題或說明`);
+  const top = y0 + (y1 - y0 - lay.blockH) * 0.45, { Ps, capH, gapNC, cellH, rowGap, G, ruleGap } = lay;
+  const cells = S.map((_, i) => { const x = side ? mL + i * (cellW + gutter) : mL, by = top + capH + (side ? 0 : i * (cellH + rowGap));
+    c.save(); c.font = `500 ${capSz}px ${CN}`; const capW = Math.max(...caps[i].lines.map(l => c.measureText(l).width)); c.restore();
+    return { x, by, P: Ps[i], str: strs[i], cap: caps[i], capY: by + gapNC + capSz, right: x + Math.max(Ps[i].w, capW) }; });
+  const ruleY = top + (side ? cellH : 2 * cellH + rowGap) + ruleGap;
+  // 每個數字什麼時候落定：number cue 的 data.index（一個或清單）；同一個數字寫兩次以第一次為準
+  const at = S.map(() => null);
+  for (const q of ctx.of('number')) [].concat((q.data || {}).index ?? []).forEach(i => { if (at[i] == null) at[i] = q.at; });
+  L.cmp = { cells, at, pre, suf, capSz, hl: ctx.of('highlight').map(q => hlOf(q, d, S.length)).filter(h => S[h.index]),
+    gap: gq && { at: gq.at, verb, pre: gpre, str: gStr, suf: gsuf, G, x: mL, x1: Math.max(...cells.map(e => e.right)), ruleY, by: ruleY + 2 * u + 0.28 * capH + G.capH, word: gWord } };
+  L.focus = i => { const e = cells[i]; return [e.x + e.P.w / 2, e.by - capH / 2]; };   // B 鏡頭快推時不動的點：被強調的那個數字中間
+}
+function drawCard(c, t, ctx) {
+  const { u } = ctx;
+  if (L.card === 'number' && L.num.q) {
+    const { q, nd, dec, pre, suf, P, capF, x, by, capY } = L.num, s = t - (q.at - ROLL);
+    if (s < 0) return;
+    c.save(); c.globalAlpha = clamp(s / 0.2); c.fillStyle = L.col.ink;
+    drawNum(c, P, pre, TY.fmt((nd.value || 0) * MO.expoOut(clamp(s / ROLL)), dec), suf, x, by);
+    const cp = MO.quintOut(clamp((s - STAGGER) / ENTER));
+    if (cp > 0) { c.globalAlpha = cp; c.fillStyle = INK; c.textAlign = 'left'; c.font = `500 ${capF.size}px ${CN}`;
+      capF.lines.forEach((ln, k) => c.fillText(ln, x, capY + k * capF.size * 1.3 + (1 - cp) * 12 * u)); }
+    c.restore();
+  } else if (L.card === 'compare') drawCompare(c, t, ctx);
+}
+// 字的顏色：base 往 to 混 k（強調：黑 → 品牌色），再往 CARD_DIM 混 dim（被比下去：淡成灰）
+function tone(base, to, k, dim) {
+  const A = PAINT.hex(base), B = PAINT.hex(to), D = PAINT.hex(CARD_DIM);
+  return `rgb(${[0, 1, 2].map(j => Math.round(lerp(lerp(A[j], B[j], k), D[j], dim))).join(',')})`;
+}
+function drawCompare(c, t, ctx) {
+  const { u } = ctx, { cells, at, pre, suf, capSz, hl, gap } = L.cmp;
+  const emph = cells.map(() => 0), dim = cells.map(() => 0);           // 強調照時間一個換一個（接續分鏡沿用的強調在負的時間，第一幀就在）
+  for (const h of hl) { const k = ctx.lt(t, h.q.at); if (k <= 0) continue; const w = MO.smooth(clamp(k / 0.4));
+    cells.forEach((_, i) => { emph[i] = lerp(emph[i], i === h.index ? 1 : 0, w); dim[i] = lerp(dim[i], i === h.index ? 0 : 1, w); }); }
+  cells.forEach((e, i) => {
+    if (at[i] == null) return;
+    const s = t - (at[i] - ENTER); if (s < 0) return;
+    const p = MO.quintOut(clamp(s / ENTER)), cp = MO.quintOut(clamp((s - STAGGER) / ENTER));
+    c.save(); c.globalAlpha = clamp(s / ENTER * 1.5);
+    c.fillStyle = tone(INK, L.col.ink, emph[i], dim[i]);
+    drawNum(c, e.P, pre, e.str, suf, e.x, e.by + (1 - p) * FLOAT * u);
+    if (cp > 0) { c.globalAlpha = cp; c.fillStyle = tone(INK, INK, 0, dim[i]); c.textAlign = 'left'; c.font = `500 ${capSz}px ${CN}`;
+      e.cap.lines.forEach((ln, k) => c.fillText(ln, e.x, e.capY + k * capSz * 1.3 + (1 - cp) * 12 * u)); }
+    c.restore();
+  });
+  if (gap) {
+    const s = t - (gap.at - ENTER - 0.1); if (s < 0) return;
+    const rp = MO.quintOut(clamp(s / ENTER)), p = MO.quintOut(clamp((s - 0.1) / ENTER));
+    c.save(); c.strokeStyle = INK; c.lineWidth = 2 * u; c.globalAlpha = 0.5; c.beginPath(); c.moveTo(gap.x, gap.ruleY); c.lineTo(lerp(gap.x, gap.x1, rp), gap.ruleY); c.stroke();
+    if (p > 0) {
+      const y = gap.by + (1 - p) * 12 * u; c.globalAlpha = clamp(s / ENTER * 1.5); c.textBaseline = 'alphabetic'; c.textAlign = 'left';
+      c.font = `500 ${gap.word}px ${CN}`; c.fillStyle = INK; c.fillText(gap.verb, gap.x, y); const vw = c.measureText(gap.verb + ' ').width;
+      c.fillStyle = L.col.ink; drawNum(c, gap.G, gap.pre, gap.str, '', gap.x + vw + gap.G.lead, y);   // 句中的數字不做光學對齊
+      c.font = `500 ${gap.word}px ${CN}`; c.fillStyle = INK; c.fillText(gap.suf, gap.x + vw + gap.G.preW + gap.G.numW + gap.G.sz * 0.02, y);
+    }
+    c.restore();
+  }
+}
 // [article-to-video 內嵌修改] B 鏡頭的關鍵幀（init 算好）。cam = {dur, box: [左, 上, 右, 下]（佔畫面比例：內容推近後可以到的範圍，
 // 畫面扣掉平台介面區與字幕帶）, snaps: [{at, zoom（推到多大，1.04＝推近 4%）, index（標哪一點）}]}：整串到這個片段為止的每一下，
 // 之前分鏡的 at 是負的，所以接續分鏡從同一個鏡頭接著走。鏡頭＝畫面座標 = s × 原座標 + (tx, ty)：
@@ -239,13 +398,13 @@ function cameraKeys(ctx, c, cam) {
   const A = [b[0] * W + CAM_SIDE * u, b[1] * H, b[2] * W - CAM_SIDE * u, b[3] * H];
   let x0 = L.m, x1 = W - L.mR;
   c.save(); c.font = `400 ${L.xFont}px ${NUM}`;
-  S.forEach((r, i) => { if (L.xKeep && !L.xKeep.has(i)) return; const hw = c.measureText(String(r.label ?? '')).width / 2; x0 = Math.min(x0, xs[i] - hw); x1 = Math.max(x1, xs[i] + hw); });
+  if (xs) S.forEach((r, i) => { if (L.xKeep && !L.xKeep.has(i)) return; const hw = c.measureText(String(r.label ?? '')).width / 2; x0 = Math.min(x0, xs[i] - hw); x1 = Math.max(x1, xs[i] + hw); });   // 大數字卡、兩數對比沒有 x 軸
   c.restore();
   const C = [x0, safe.top + 52 * u, x1, Math.max(H - safe.bottom - 24 * u, d.badge ? H - safe.bottom - 50 * u + 24 : 0)];
   const fit = Math.min((A[2] - A[0]) / (C[2] - C[0]), (A[3] - A[1]) / (C[3] - C[1]));
   const keys = []; let s = 1, tx = 0, ty = 0;
   for (const q of cam.snaps || []) {
-    const i = q.index != null && S[q.index] ? q.index : S.length - 1, P = [xs[i], yS(kind === 'candle' ? S[i].c : S[i].value)];
+    const i = q.index != null && S[q.index] ? q.index : S.length - 1, P = L.focus ? L.focus(i) : [xs[i], yS(kind === 'candle' ? S[i].c : S[i].value)];
     // 被標註的點現在在畫面上的位置 p0 不動：畫面座標 = p0 + s1 × (原座標 − P)。內容框不出 box 的條件換成 s1 的上限
     // （每個方向兩邊各一個）；推不到要的量就少推（甚至不推），不平移整張圖——平移會把被標註的點往畫面邊推（方向反了）
     const p0 = [s * P[0] + tx, s * P[1] + ty];
@@ -334,16 +493,23 @@ function barMode(ctx, c, h) {
   if (v < 0) return 'neg';
   if (S.some((r, j) => j !== hi && r.value > v * 1.5)) return 'above';   // 有更高的柱子挡在旁边：标注放在这根柱子正上方，别压进别的柱子
   const tops = S.map((r, i) => [xs[i], yS(r.value)]), anchor = tops[hi];   // 预演斜向标注的文字框：压到别的柱子或它的数值，就改放这根柱子正上方
-  const ax = anchor[0] - Math.min(150 * u, L.slot * 0.62) / 2, right = ax > F.x + F.w * 0.55, tx = right ? ax - 60 * u : ax + 60 * u, ty = Math.max(F.y + 60 * u, anchor[1] - 140 * u);
+  const ax = anchor[0] - L.bw / 2, right = ax > F.x + F.w * 0.55, tx = right ? ax - 60 * u : ax + 60 * u;
   c.save(); c.font = `700 ${50 * u}px ${NUM}`; let tw = c.measureText(ls[0] || '').width; c.font = `400 ${28 * u * fs}px ${CN}`; if (ls[1]) tw = Math.max(tw, c.measureText(ls[1]).width); c.restore();
-  const bx0 = right ? tx - 12 - tw : tx + 12, bx1 = bx0 + tw, by1 = ty + (ls.length > 1 ? 56 : 16) * u;
+  const drop = (ls.length > 1 ? 56 : 16) * u, bx0 = right ? tx - 12 - tw : tx + 12, bx1 = bx0 + tw;
+  let ty = Math.max(F.y + 60 * u, anchor[1] - 140 * u);
+  // [article-to-video 內嵌修改] 斜向文字也不能壓到這根柱自己的數值（柱頂正中）：柱寬隨根數變寬之後，數值會落到文字底下
+  // （標最高那根、文字被夾在圖區上緣 +60 時最明顯）。橫向疊到時，文字往上抬到數值上面（最多抬到圖區上緣 +20）
+  const lf = Math.max(24 * u * fs, Math.min(34 * u * fs, L.slot * 0.3)); c.save(); c.font = `600 ${lf}px ${NUM}`; const lw = c.measureText(fmtv(ctx.data, v)).width; c.restore();
+  if (bx0 < anchor[0] + lw / 2 + 6 * u && bx1 > anchor[0] - lw / 2 - 6 * u) ty = Math.max(F.y + 20 * u, Math.min(ty, anchor[1] - 14 - lf - drop - 4 * u));
+  h.ty = ty;
+  const by1 = ty + drop;
   return tops.some(([bx, by], j) => j !== hi && bx + L.slot * 0.45 > bx0 && bx - L.slot * 0.45 < bx1 && by - 44 * u * fs < by1) ? 'above' : 'diag';
 }
 // [article-to-video 內嵌修改] 畫一個標註（原版寫在 draw 裡、只畫第一個 highlight cue）。k：這個標註出現了幾秒；alpha：整個標註的透明度（換標註時舊的淡出）；
 // dot：'spring'＝圓點彈出（原版）、'full'＝圓點已經在（同一點換字）、'none'＝不畫圓點（同一點換字時舊的那個）。anchor：點（柱頂／柱底、折線上的點）；tops：現在的柱頂
 function drawLabel(c, ctx, h, k, alpha, dot, anchor, tops) {
   if (k <= 0 || alpha <= 0) return;
-  const { u } = ctx, { F, yS, kind } = L, fs = ctx.portrait ? 1.2 : 1, lines = h.lines, bw = Math.min(150 * u, L.slot * 0.62);
+  const { u } = ctx, { F, yS, kind } = L, fs = ctx.portrait ? 1.2 : 1, lines = h.lines, bw = L.bw;
   const s = dot === 'spring' ? MO.spring(k, { duration: 0.45, bounce: 0.25 }) : 1, lp = MO.quintOut(MO.seg(k, 0.12, 0.45)), fp = MO.quintOut(MO.seg(k, 0.3, 0.7));
   const [x, y] = anchor;
   if (kind === 'bar' && h.mode === 'neg') {
@@ -378,7 +544,7 @@ function drawLabel(c, ctx, h, k, alpha, dot, anchor, tops) {
     const a = kind === 'bar' ? [x - bw / 2, y] : [x, y];
     const right = a[0] > F.x + F.w * 0.55, co = kind === 'line' ? h.co : null;   // [article-to-video 內嵌修改] 折線：位置照 placeLineLabel 挑的（不壓線、零軸）
     const tx = co ? co.tx : right ? a[0] - 60 * u : a[0] + 60 * u;
-    const ty = co ? co.ty : Math.max(F.y + 60 * u, a[1] - 140 * u);   // [article-to-video 內嵌修改] 負數柱另外處理（上面那段），這裡只剩正數柱與折線、K 線
+    const ty = co ? co.ty : kind === 'bar' && h.ty != null ? h.ty : Math.max(F.y + 60 * u, a[1] - 140 * u);   // [article-to-video 內嵌修改] 負數柱另外處理（上面那段），這裡只剩正數柱與折線、K 線；柱的高度 barMode 算好（讓開自己的數值）
     CH.callout(c, k, 0, { x: a[0], y: a[1], tx, ty, lines, col: INK, dotCol: L.col.ink, font: `700 ${50 * u}px ${NUM}`, font2: `400 ${28 * u * fs}px ${CN}`, align: co ? co.align : right ? 'right' : 'left', r: 9 * u, halo: 10 * u, alpha, dot });
   }
 }
