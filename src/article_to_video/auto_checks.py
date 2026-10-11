@@ -56,6 +56,7 @@ import hashlib
 import json
 import os
 import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -542,7 +543,7 @@ def _spikes_besides(ts: Sequence[float], diffs: Sequence[float],
     spikes = []
     for j, i in enumerate(kept):
         near = d[max(0, j - 3):j] + d[j + 1:j + 4]
-        loc = float(sorted(near)[len(near) // 2] if len(near) % 2 else sum(sorted(near)[len(near) // 2 - 1:len(near) // 2 + 1]) / 2) if near else 0.0
+        loc = statistics.median(near) if near else 0.0
         if d[j] > SPIKE_MIN and d[j] > SPIKE_RATIO * max(loc, SPIKE_FLOOR):
             spikes.append(round(float(ts[i + 1]), 3))
     return spikes, max(d, default=0.0)
