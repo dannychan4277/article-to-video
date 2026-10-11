@@ -93,7 +93,12 @@ CHART_DATA_KEYS = frozenset({
     "title", "unit", "source", "badge", "chart", "series", "decimals", "prefix", "suffix",
     "highlight", "colors", "upDown", "xAxis", "xTicks", "axisNote", "push", "publicData", "yRange",
 })
-CHART_CUE_KINDS = frozenset({"title", "bar", "line", "candle", "highlight", "number"})
+CHART_CUE_KINDS = frozenset({"title", "bar", "line", "candle", "highlight", "number", "gap"})
+CHART_LAYOUTS = {
+    "bar": "柱狀圖", "line": "折線圖", "candle": "K 線", "number": "大數字卡", "compare": "兩數對比",
+}
+"""chart.data.chart 認得的圖表版面。大數字卡＝一個分鏡只放一個大數字（number cue）；兩數對比＝兩個數字並排
+（16:9 左右、9:16 上下），可以強調其中一個（highlight）、標出差距（gap）。規則見 _check_layouts。"""
 VOX_CUE_KINDS = frozenset({"image", "excerpt", "box", "title", "point"})
 """Vox 分鏡的 cue：image＝文章原圖（圖N）、excerpt＝原文剪報、box＝框（螢光筆＋紅圈，框住旁白正在唸的數字）、
 title＝黑底白字標題條、point＝橫線索引卡。"""
@@ -705,7 +710,7 @@ def _load_chart(raw: Any, label: str, segments: Mapping[str, str], problems: _Pr
             problems.add(f"{where} 的 dur 要是正的秒數")
         if kind == "number":
             d = q.get("data")
-            if not isinstance(d, dict) or not _is_number(d.get("value")):
+            if not isinstance(d, dict) or not (_is_number(d.get("value")) or "index" in d):
                 problems.add(f"{where} 是大數字（number），要有 data.value")
         if kind == "bar" and isinstance(q.get("data"), dict) and "index" in q["data"]:
             idx = q["data"]["index"]
@@ -855,8 +860,11 @@ def _check_chart_data(data: dict, label: str, problems: _Problems) -> None:
     if not isinstance(data.get("title"), str) or not data.get("title"):
         problems.add(f"{where} 少了 title（標題，一句結論）")
     kind = data.get("chart", "bar")
-    if kind not in ("bar", "line", "candle"):
-        problems.add(f"{where} 的 chart 只能是 bar、line、candle，現在是 {kind!r}")
+    if kind not in CHART_LAYOUTS:
+        names = "、".join(f"{k}（{v}）" for k, v in CHART_LAYOUTS.items())
+        problems.add(f"{where} 的 chart 只能是 {names}，現在是 {kind!r}")
+    if kind == "number":
+        return
     if "push" in data and (not _is_number(data["push"]) or not 0 <= data["push"] <= 0.2):
         problems.add(f"{where} 的 push 要是 0～0.2（整串分鏡總共推近多少，例 0.03）")
     for p in y_range_problems(data, where):

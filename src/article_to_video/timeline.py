@@ -508,10 +508,10 @@ def resolve_highlight(fields: Mapping[str, Any], data: Mapping[str, Any]) -> dic
 
 def _chain_layout(project: Project, members: list[int]) -> dict[str, Any]:
     """一串接續分鏡的版面要用到的東西（給引擎 data.chainLayout）：整串每個分鏡自己的標註標哪一點、幾行字
-    （折線另外帶字：標註擺哪、要不要多留空間看字多寬），整串有沒有大數字。引擎照整串的需要留白，每個分鏡的
+    （折線另外帶字：標註擺哪、要不要多留空間看字多寬），整串有沒有大數字、差距（兩數對比）。引擎照整串的需要留白，每個分鏡的
     刻度、圖區都一樣，切點不跳。只帶版面用得到的：柱狀圖改後面分鏡的標註字，前面的分鏡不用重渲。"""
     highlights: list[dict[str, Any]] = []
-    number = False
+    number = gap = False
     for n in members:
         shot = project.shots[n]
         data, cues = effective_chart(project.shots, n)
@@ -526,7 +526,11 @@ def _chain_layout(project: Project, members: list[int]) -> dict[str, Any]:
                     item.update({k: h[k] for k in ("text", "sub") if h[k]})
                 highlights.append(item)
             number = number or cue.kind == "number"
-    return {"highlights": highlights, "number": number}
+            gap = gap or cue.kind == "gap"
+    out: dict[str, Any] = {"highlights": highlights, "number": number}
+    if gap:  # 兩數對比：整串有差距就先留好它的位置（只在有的時候寫：其他圖的 spec 跟原本一樣，不會白白重渲）
+        out["gap"] = True
+    return out
 
 
 def _check_highlight_points(project: Project) -> None:
