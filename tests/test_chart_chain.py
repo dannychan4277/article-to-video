@@ -9,6 +9,7 @@
 - SH07：同一組折線數字，自己寫縱軸範圍 yRange [-2, 2]。
 - SH08～SH09：柱狀圖一串、一句長一根柱（計時實測的卡點）。甲、乙在 SH08 唸到時長（乙比甲低：「降到」），丙的 bar cue
   寫在接續分鏡 SH09。SH08 唸完乙標「不到一半」（乙旁邊有高一倍多的甲：標註放在乙的正上方）。
+- SH10～SH11：第一個分鏡沒寫 bar cue（柱在版式之後自己長），接續分鏡才寫第三根柱的 bar cue。
 
 整串的第一個分鏡寫 push 0（不慢推），同一串裡不同時刻的畫面可以逐像素比；慢推的連續性另有測試（test_build.py）。
 """
@@ -38,6 +39,8 @@ NARRATION = {
     "s07": "換一種刻度來看。",
     "s08": "甲組三十，乙組降到十二點五。",
     "s09": "再看丙組，回到二十。",
+    "s10": "先放兩組。",
+    "s11": "第三組，最後才來。",
 }
 # 自製的月資料（跟 test_render_clip.py 的 DIP 同一組）：先倒掛、谷底在第 9 個月、回正
 DIP = [0.80, 0.55, 0.30, 0.10, -0.15, -0.40, -0.60, -0.75, -0.85, -0.80, -0.70, -0.55,
@@ -99,6 +102,13 @@ SHOTS = [
                  {"at": _a("s08", "十二點五", "end"), "kind": "highlight"}]}},
     {"id": "SH09", "start": _a("s09"), "continues": True, "chart": {
         "cues": [{"at": _a("s09", "回到"), "kind": "bar", "data": {"index": 2}}]}},
+    # 第一個分鏡沒寫 bar cue（柱在版式之後自己長），接續分鏡才寫第三根的 bar cue
+    {"id": "SH10", "start": _a("s10"), "chart": {
+        "data": {"title": "沒寫 bar cue 的柱", "unit": "示意數據", "source": SOURCE, "chart": "bar", "decimals": 1, "push": 0,
+                 "series": [{"label": "子", "value": 3}, {"label": "丑", "value": 4}, {"label": "寅", "value": 5}]},
+        "cues": [{"at": 0, "kind": "title"}]}},
+    {"id": "SH11", "start": _a("s11"), "continues": True, "chart": {
+        "cues": [{"at": _a("s11", "最後"), "kind": "bar", "data": {"index": 2}}]}},
 ]
 
 LAST = -1.0
@@ -113,6 +123,8 @@ STILLS = {
     "SH07": [LAST],
     "SH08": [LAST],
     "SH09": [0.0, 0.7, LAST],   # 0.7 秒：還沒唸到「回到」
+    "SH10": [LAST],
+    "SH11": [0.0, LAST],
 }
 
 
@@ -323,3 +335,10 @@ def test_a_bar_cued_in_a_continuation_grows_there_and_not_in_the_shot_before(cha
     assert early < 50, f"還沒唸到「回到」，畫面就變了 {early} 個像素"
     grown = changed(chain.at("SH09", 0.7), chain.last("SH09"))
     assert grown > 5000, f"唸到「回到」之後丙沒長出來（只變了 {grown} 個像素）"
+
+
+def test_bars_without_a_cue_stay_grown_when_a_continuation_cues_another_bar(chain):
+    """第一個分鏡沒寫 bar cue（子、丑在版式之後自己長好），接續分鏡 SH11 才寫寅的 bar cue：切點子、丑不會變回 0 重長。"""
+    cut = changed(chain.last("SH10"), chain.at("SH11", 0.0))
+    assert cut < 400, f"SH10→SH11 切點前後有 {cut} 個像素變了"
+    assert changed(chain.at("SH11", 0.0), chain.last("SH11")) > 5000, "寅沒在 SH11 長出來"
