@@ -1,4 +1,4 @@
-"""片尾卡的內容：本片用到的資料來源彙整、頻道名沒設定時擋下。用 plan_build（不渲染，很快）看片尾卡的片段計畫。"""
+"""片尾卡的內容：本片用到的資料來源彙整、頻道名沒填時的排法。多半用 plan_build（不渲染，很快）看片尾卡的片段計畫。"""
 
 from __future__ import annotations
 
@@ -144,12 +144,61 @@ def test_report_zip_carries_the_end_card_logo_so_it_reproduces(tmp_path):
         assert z.read("project/logo.png") == _png(8, 8)  # 重現時解開就在 settings.json 指的位置
 
 
-def test_without_a_channel_name_the_build_stops_and_says_how_to_set_it(tmp_path):
+def project_without_a_channel(tmp_path: Path, *, logo: bool = False) -> Path:
+    """只想自己看懂文章的人：安裝時頻道名跳過了（設定快照裡是空的）；logo 可有可無。"""
+    from test_user_settings import _png
+
     root = tmp_path / "專案"
     shutil.copytree(MINI_PROJECT, root)
     snap = json.loads((root / "settings.json").read_text(encoding="utf-8"))
-    (root / "settings.json").write_text(json.dumps({**snap, "channel": ""}), encoding="utf-8")
-    with pytest.raises(ProjectError) as err:
-        build_project(root, tts="fake")
-    assert "頻道名" in str(err.value) and "settings set --channel" in str(err.value)
-    assert not (root / "build" / "16x9" / "clips").exists()  # 渲染前就擋下
+    extra = {"channel": ""}
+    if logo:
+        (root / "logo.png").write_bytes(_png(64, 64, LOGO_RGB))
+        extra["logo"] = "logo.png"
+    (root / "settings.json").write_text(json.dumps({**snap, **extra}), encoding="utf-8")
+    return root
+
+
+LOGO_RGB = (20, 90, 180)
+
+
+def test_without_a_channel_name_the_build_goes_on_and_the_card_has_no_name(tmp_path):
+    """頻道名是選填：沒填照樣排得出整支片，片尾卡上沒有名字，資料來源和聲明照放。"""
+    data = end_card(plan_build(project_without_a_channel(tmp_path), tts="fake")).spec["data"]
+    assert not data.get("channel")
+    assert data["sources"] == ["FRED（DGS2、DGS10），年平均自算"]
+    assert data["notes"] == ["僅供教育，非投資建議", "配音為 AI 合成"]
+
+
+def _pixels(path: Path, mode: str):
+    import numpy as np
+    from PIL import Image
+
+    return np.asarray(Image.open(path).convert(mode), dtype=np.int16)
+
+
+@pytest.mark.parametrize("aspect, logo", [("16x9", False), ("9x16", False), ("16x9", True)])
+def test_card_without_a_channel_name_leaves_no_hole(tmp_path, aspect, logo):
+    """沒有名字那一塊：有 logo 就只放 logo；都沒有時資料來源、聲明重新排。不管哪種，淡入的內容整塊都在
+    頂端小旗和底部聲明之間置中（上下留白差不多），名字原本的位置不會空一塊。
+
+    第一幀只有頂端色條和小旗（內容都還沒淡入），最後一幀減掉第一幀＝淡入的內容；最大的那道空隙分開內容和聲明。"""
+    import numpy as np
+
+    from article_to_video.clips import render_stills
+    from article_to_video.timeline import FORMATS
+
+    root = project_without_a_channel(tmp_path, logo=logo)
+    spec = end_card(plan_build(root, tts="fake", fmt=FORMATS[aspect])).spec
+    first, last = render_stills(spec, tmp_path / "stills", [0, spec["duration"] - 0.02], base_dir=root).paths
+    a0, a1 = _pixels(first, "L"), _pixels(last, "L")
+    deco_bottom = int(np.nonzero((a0 < 180).any(axis=1))[0].max())  # 小旗的底
+    rows = np.nonzero((np.abs(a1 - a0) > 60).any(axis=1))[0]
+    assert len(rows) and rows.min() > deco_bottom
+    split = int(np.argmax(np.diff(rows)))
+    content_top, content_bottom, notes_top = rows[0], rows[split], rows[split + 1]
+    above, below = content_top - deco_bottom, notes_top - content_bottom
+    assert abs(above - below) <= 0.05 * (above + below), (above, below)
+    if logo:
+        logo_px = (np.abs(_pixels(last, "RGB") - np.array(LOGO_RGB)).max(axis=-1) <= 12).sum()
+        assert logo_px > 1000  # logo 有畫出來

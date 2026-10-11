@@ -1,6 +1,6 @@
 """片尾卡：每支片最後一段旁白唸完之後接一張卡，長 settings.tail 秒（算進成片長度）。
 
-卡上有：頻道名（＋logo）、本片資料來源（彙整）、「僅供教育，非投資建議」、「配音為 AI 合成」。
+卡上有：頻道名＋logo（都是選填，沒填就不放那一塊）、本片資料來源（彙整）、「僅供教育，非投資建議」、「配音為 AI 合成」。
 用內嵌引擎的自訂語法 engine/clips/a2v_end_card.js 渲（跟圖表同一組字型、同一套缺字檢查），跟分鏡一樣進片段快取。
 
 資料來源怎麼來：每個片段計畫（timeline.ClipPlan）的 `sources`。財經圖表片段放圖上的來源列（data.source，
@@ -10,11 +10,9 @@
 
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from article_to_video.clips import GRAMMAR_END_CARD
@@ -24,7 +22,7 @@ from article_to_video.project import Project, ProjectError
 if TYPE_CHECKING:
     from article_to_video.timeline import ClipPlan, Timeline, VideoFormat
 
-__all__ = ["END_CARD_GRAMMAR", "END_CARD_ID", "NOTES", "merge_sources", "missing_channel_error", "plan_end_card"]
+__all__ = ["END_CARD_GRAMMAR", "END_CARD_ID", "NOTES", "merge_sources", "plan_end_card"]
 
 END_CARD_ID = "end.card"
 """片尾卡的片段 id（檔名 specs/end.card.json、clips/end.card.mp4）。有句點，分鏡 id 不會跟它撞名。"""
@@ -128,31 +126,20 @@ def merge_sources(texts: Iterable[str]) -> list[str]:
     return [s.text() for s in sources.values()]
 
 
-def missing_channel_error(project_root: Path, data_dir: str | os.PathLike | None = None) -> ProjectError:
-    """還沒設定頻道名、片尾卡做不出來的錯誤。設定快照已經記了空的頻道名時，只改使用者設定救不了這支片，
-    所以兩行指令都給：存進使用者設定（以後每支片）、補進這支片的設定快照。"""
-    return ProjectError(
-        "片尾卡要放你的名字，但還沒設定頻道名",
-        title="還不能出片",
-        hint="跟 Claude 說「頻道名叫○○」就會設定好。指令：以後每支片都用 "
-             + cli_command("settings set", "--channel", '"<頻道名>"', data_dir=data_dir)
-             + "；這支片也補上 " + cli_command("settings set", "--project", Path(project_root), "--channel", '"<頻道名>"'),
-    )
-
-
 def plan_end_card(project: Project, timeline: Timeline, fmt: VideoFormat, plans: Sequence[ClipPlan]) -> ClipPlan:
-    """片尾卡的片段計畫。來源從前面所有片段計畫的 sources 彙整。"""
+    """片尾卡的片段計畫。來源從前面所有片段計畫的 sources 彙整。
+
+    頻道名是選填（只想自己看懂文章的人不用填）：沒填就不放 channel，引擎不畫名字那一塊，其餘重新排。"""
     from article_to_video.timeline import ClipPlan
 
     s = project.settings
-    if not s.channel.strip():
-        raise missing_channel_error(project.root)
     data: dict[str, Any] = {
-        "channel": s.channel,
         "sourcesLabel": "資料來源",
         "sources": merge_sources(src for p in plans for src in p.sources),
         "notes": list(NOTES),
     }
+    if s.channel.strip():
+        data["channel"] = s.channel.strip()
     if s.brand_color:
         data["brand"] = s.brand_color
     images = []

@@ -97,7 +97,7 @@ from article_to_video.user_settings import SettingsError
 KNOWN_ERRORS = (ProjectError, NarrationError, ClipRenderError, FFmpegNotFoundError, AssemblyError, SettingsError)
 
 _SET_OPTIONS = {  # 選項 → 設定鍵
-    "channel": "頻道名（片尾卡上的名字）",
+    "channel": "頻道名（片尾卡上的名字）；選填，none＝不放名字",
     "logo": "logo 圖檔路徑（PNG／JPG／WebP），none＝拿掉",
     "brand_color": "品牌色色碼，例 #1A5FB4；none＝圖表用預設紅黑白",
     "voice": "聲音：曉臻、曉雨、雲哲（或 zh-TW-…Neural 代號）",
@@ -783,7 +783,7 @@ def _describe(values: dict) -> str:
         "google": f"{values.get('google_voice')}（{GOOGLE_TW_VOICES.get(values.get('google_voice'), '')}）",
     }.get(tts, f"{ZH_TW_VOICES.get(values.get('voice'), '?')}（{values.get('voice')}）")
     lines = [
-        f"頻道名：{values.get('channel') or '（還沒設定：片尾卡要用，請設定）'}",
+        f"頻道名：{values.get('channel') or '（沒填：片尾卡不放頻道名）'}",
         f"logo：{values.get('logo') or '（沒有）'}",
         f"品牌色：{values.get('brand_color') or '（沒設定：圖表用預設紅黑白）'}",
         f"配音：{_TTS_LABELS.get(tts, tts)}",

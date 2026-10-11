@@ -54,7 +54,7 @@ class UnreachableCommunicate:
 
 @pytest.fixture(scope="module")
 def offline_run(tmp_path_factory):
-    """這台 Mac 的「檢查環境」：edge-tts 連不上（測試不准連網）、資料位置是空的（還沒設定頻道名）。"""
+    """這台 Mac 的「檢查環境」：edge-tts 連不上（測試不准連網）、資料位置是空的（什麼都沒設定：頻道名選填，不算問題）。"""
     empty = tmp_path_factory.mktemp("還沒設定")
     return check_env("--data-dir", str(empty))
 
@@ -74,13 +74,14 @@ def test_check_env_lists_every_item_with_status_and_fix(offline_run):
     # 這台 Mac 都裝好了
     for name in ["Homebrew", "ffmpeg", "Playwright", "Chromium", "edge-tts（配音）", "uv", "字型"]:
         assert line_of(name).startswith("✓"), line_of(name)
-    # 有問題的兩項：打勾打叉、下一行就是修法
-    for name, hint in [("edge-tts 連線", "網路"), ("頻道設定", "設定")]:
-        ln = line_of(name)
-        assert ln.startswith("✗"), ln
-        fix = lines[lines.index(ln) + 1]
-        assert fix.strip().startswith("修法：") and hint in fix, fix
-    assert "有 2 項要處理" in out
+    # 有問題的那一項：打叉、下一行就是修法
+    ln = line_of("edge-tts 連線")
+    assert ln.startswith("✗"), ln
+    fix = lines[lines.index(ln) + 1]
+    assert fix.strip().startswith("修法：") and "網路" in fix, fix
+    # 頻道名沒填（只想自己看的人）：不算問題，說片尾卡不放名字
+    assert line_of("頻道設定").startswith("✓") and "片尾卡不放" in line_of("頻道設定"), line_of("頻道設定")
+    assert "有 1 項要處理" in out
     assert offline_run.returncode == 1
 
 
@@ -90,7 +91,7 @@ def test_check_env_json_gives_a_fix_for_every_problem(tmp_path):
     keys = {c["key"] for c in checks}
     assert {"homebrew", "ffmpeg", "chromium", "edge-tts", "edge-tts-online", "uv", "fonts", "settings"} <= keys
     problems = [c for c in checks if c["ok"] is False]
-    assert {c["key"] for c in problems} == {"edge-tts-online", "settings"}
+    assert {c["key"] for c in problems} == {"edge-tts-online"}
     assert all(c["fix"] for c in problems)
     assert proc.returncode == 1
 
@@ -148,8 +149,8 @@ def test_homebrew_check_on_both_prefixes(tmp_path, arch):
 def test_settings_check_reads_the_channel_from_the_data_dir(tmp_path, user_data_dir):
     assert settings_check(user_data_dir)().ok is True
     assert "測試頻道" in settings_check(user_data_dir)().value
-    empty = settings_check(tmp_path)()
-    assert empty.ok is False and "頻道名" in empty.value
+    empty = settings_check(tmp_path)()  # 頻道名選填：沒填不算問題
+    assert empty.ok is True and "沒填" in empty.value and "片尾卡不放" in empty.value
 
 
 def test_one_broken_check_does_not_stop_the_others():

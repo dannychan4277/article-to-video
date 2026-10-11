@@ -397,7 +397,8 @@ def check_fonts() -> EnvCheck:
 
 
 def settings_check(data_dir: str | os.PathLike | None = None) -> Check:
-    """頻道設定（使用者設定）：沒有頻道名就做不了片（片尾卡要用）。資料位置要由呼叫的人給（${CLAUDE_PLUGIN_DATA}）。"""
+    """頻道設定（使用者設定）：列出頻道名、聲音、配樂、品牌色、logo。都是選填，這一項不會是問題
+    （頻道名沒填＝片尾卡不放名字）。資料位置要由呼叫的人給（${CLAUDE_PLUGIN_DATA}）。"""
 
     @env_check("settings", "頻道設定")
     def check_settings() -> EnvCheck:
@@ -410,10 +411,8 @@ def settings_check(data_dir: str | os.PathLike | None = None) -> Check:
         music = "不要配樂" if us.music == "none" else TRACKS[us.music].label if us.music in TRACKS else us.music
         summary = (f"聲音 {ZH_TW_VOICES.get(us.voice, us.voice)}｜配樂 {music}｜"
                    f"品牌色 {us.brand_color or '預設紅黑白'}｜logo {'有' if us.logo else '沒有'}")
-        if not us.channel:
-            return EnvCheck("settings", "頻道設定", False, f"還沒設定頻道名（片尾卡要用）｜{summary}", detail,
-                            fix="跟 Claude 說「設定」，它會問你頻道名、logo、品牌色，順便讓你挑聲音和配樂")
-        return EnvCheck("settings", "頻道設定", True, f"{us.channel}｜{summary}", detail)
+        channel = us.channel or "頻道名沒填（片尾卡不放頻道名）"  # 選填：只想自己看的人不用填，不算問題
+        return EnvCheck("settings", "頻道設定", True, f"{channel}｜{summary}", detail)
 
     return check_settings
 
