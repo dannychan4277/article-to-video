@@ -602,7 +602,7 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
                 return [CardSection("review", title, done, summary=f"{title}：{handled}")] if done else []
             if not later:  # 已處理的接在還沒處理的後面，收成一行
                 return [CardSection("review", title, open_, note=note, rest=done, rest_summary=handled)]
-            out = [CardSection("review", title, open_, note=note, rest=later,
+            out = [CardSection("review", title, open_, note=note, rest=later, rest_ok=False,
                                rest_summary=f"另外 {len(later)} 項可改，寫在各分鏡卡上（點開看）")]
             if done:
                 out.append(CardSection("review", title, done, summary=f"{title}：{handled}"))

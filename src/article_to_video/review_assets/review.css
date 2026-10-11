@@ -175,6 +175,7 @@ details.more .codes { font-size: 12px; margin-top: 4px; }
 details.more code { font-size: 12px; word-break: break-all; }
 details.rest { margin-top: 6px; }
 details.rest > summary { cursor: pointer; }
+.rest-line { color: var(--muted); font-size: 14px; }
 details.rest[open] > summary { margin-bottom: 6px; }
 
 label.field { font-weight: 600; font-size: 16px; }

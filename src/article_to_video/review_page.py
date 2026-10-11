@@ -81,6 +81,8 @@ class CardSection:
     """攤開的 items 後面、預設收起來的其他幾行（例：要作者對照的數字攤開，其他都對得到出處的收起來）。"""
     rest_summary: str = ""
     """rest 收起來時看得到的那一行（例「其他 11 個數字都對得到出處」）。"""
+    rest_ok: bool = True
+    """收起來的是沒問題的（那一行前面打勾）；False＝收起來的還要看（例「另外 16 項可改」），不打勾。"""
 
 
 @dataclass(frozen=True)
@@ -224,7 +226,8 @@ def _rest(sec: CardSection) -> str:
     """攤開的幾行後面，其他的收成一行（點開才看）。"""
     if not sec.rest:
         return ""
-    return (f'<details class="fold rest"><summary class="quiet-line">{_e(sec.rest_summary or "其他（點開看）")}'
+    cls = "quiet-line" if sec.rest_ok else "rest-line"
+    return (f'<details class="fold rest"><summary class="{cls}">{_e(sec.rest_summary or "其他（點開看）")}'
             f'</summary>{_items(sec.rest)}</details>')
 
 
