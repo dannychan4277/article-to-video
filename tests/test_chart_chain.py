@@ -368,3 +368,34 @@ def test_bars_without_an_index_wait_for_their_own_cue_written_after_an_indexed_o
     early, settled = visible_bars(chain.at("SH12", 0.85)), visible_bars(chain.last("SH12"))
     assert early == 1, f"唸到「其他」之前畫面上就有 {early} 根柱"
     assert settled == 3, f"最後只有 {settled} 根柱"
+
+
+# ---------------------------------------------------------------- 計時實測 R2-7：標註的圓點接在引線上
+
+
+RED = np.array([0xE3, 0x12, 0x0B])
+"""品牌色沒設時的標註圓點（引擎原版的紅）。"""
+
+
+def label_dot(chain: Chain, img: np.ndarray) -> tuple[int, int, int]:
+    """標註圓點的中心 (x, y) 與半徑（像素）。頂端色條、小旗也是紅的：只看標題以下。"""
+    top = SAFE_TOP[chain.aspect] + 100
+    ys, xs = np.nonzero(np.abs(img[top:] - RED).max(axis=-1) <= 60)
+    assert len(xs) > 100, "找不到標註的圓點"
+    return round(xs.mean()), round(ys.mean()) + top, round(float(np.sqrt(len(xs) / np.pi)))
+
+
+def ink(img: np.ndarray) -> np.ndarray:
+    """黑色的字和引線（不是彩色的柱、不是淺灰的格線）。"""
+    return (img.max(axis=-1) < 160) & (np.ptp(img, axis=-1) < 40)
+
+
+@pytest.mark.parametrize("sid, way", [("SH08", "上"), ("SH02", "下")])
+def test_label_dot_sits_at_the_end_of_its_leader(chain, sid, way):
+    """標註放在柱的正上方（SH08：乙旁邊有高一倍多的甲）或負數柱底下（SH02：丁）時，圓點要接在引線上，
+    往文字那一頭緊接著就是引線（計時實測 R2-7：圓點落在柱角、引線從柱中間拉出去，兩個沒連在一起，像多出一個點）。"""
+    img = chain.last(sid)
+    x, y, r = label_dot(chain, img)
+    rows = range(y - r - 14, y - r - 2) if way == "上" else range(y + r + 2, y + r + 14)
+    leader = int(ink(img)[rows.start: rows.stop, x - 3: x + 4].sum())
+    assert leader >= 8, f"{sid} 的圓點（{x}, {y}）往{way}沒有接著引線（只有 {leader} 個黑色像素）"

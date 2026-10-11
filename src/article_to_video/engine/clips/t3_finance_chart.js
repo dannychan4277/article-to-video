@@ -15,6 +15,10 @@ const fmtv = (d, v) => (d.prefix || '') + TY.fmt(v, d.decimals ?? 1) + (d.suffix
 // [article-to-video 內嵌修改] 負數柱標註的版面（×u×字級倍數）：數值標籤占柱底下方多高（CH.bars 寫在柱底 +12、字最大 34）、
 // 標籤到文字塊的間隔、第一行（50 號粗體）基線離文字塊上緣多遠、第二行基線再往下多少
 const NEG_LABEL = 50, NEG_GAP = 18, NEG_LINE1 = 44, NEG_LINE2 = 40;
+// [article-to-video 內嵌修改] 柱正上方、負數柱底下的標註：圓點（半徑 DOT_R ×u）放在引線靠柱子那一頭（數值標籤外側、柱的中線上），
+// 引線從圓點拉到文字。原版圓點在柱角、引線從柱中間的數值標籤外拉出去，兩個沒接上，看起來像多出一個點（計時實測 R2-7）。
+// 負數柱的文字塊離數值標籤至少 NEG_DOT（×u×字級倍數）：圓點＋露出的一截引線
+const DOT_R = 9, NEG_DOT = 2 * DOT_R + 16;
 // [article-to-video 內嵌修改] 柱正上方的標註：引線至少露出這麼長（×u×字級倍數），不會被柱上數值標籤蓋得只剩一小截
 const LEADER_MIN = 40;
 // [article-to-video 內嵌修改] 品牌色：data.colors.brand 取代「當品牌用的紅」（頂端色條、小旗、角標、標註圓點、大數字、折線預設色）；
@@ -95,7 +99,7 @@ return {
     }
     if (!yr && kind === 'bar' && negL.length) {    // [article-to-video 內嵌修改] 負數柱的標註放在數值標籤正下方：最低那根柱下面再留出標註文字的高度
       const nL = Math.max(...negL.map(h => h.lines.length)), vmin = Math.min(...vals);
-      const need = (NEG_LABEL + NEG_GAP + NEG_LINE1 + NEG_LINE2 * (nL - 1) + 12) * u * fs0; roomFor(need);
+      const need = (NEG_LABEL + NEG_DOT + NEG_LINE1 + NEG_LINE2 * (nL - 1) + 12) * u * fs0; roomFor(need);
       while ((vmin - ticks[0]) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.unshift(+(ticks[0] - step).toFixed(10));
     }
     if (!yr && kind === 'line' && hls.length) {                           // [Danny 本机改] 折线标注：线的最高点之上留够文字块，斜向标注才不会压在线上
@@ -519,15 +523,17 @@ function drawLabel(c, ctx, h, k, alpha, dot, anchor, tops) {
   const [x, y] = anchor;
   if (kind === 'bar' && h.mode === 'neg') {
     // [article-to-video 內嵌修改] 負數柱：數值標籤寫在柱底下方（CH.bars），原版的斜向標註往下拉會壓在標籤上（「-2.6%」被「跌最深」蓋住）。
-    // 改成文字塊放在這根柱的數值標籤正下方（也讓開它橫跨到的其他負數柱與它們的標籤），引線從標籤下緣垂直拉下來；圓點照舊在柱底左角。
+    // 改成文字塊放在這根柱的數值標籤正下方（也讓開它橫跨到的其他負數柱與它們的標籤）。[計時實測 R2-7] 圓點在數值標籤正下方
+    // （柱的中線上），引線從圓點垂直拉到文字（原版圓點在柱底左角，跟引線沒接上）
     const vlab = NEG_LABEL * u * fs;
     c.save(); c.globalAlpha = alpha; c.font = `700 ${50 * u * fs}px ${NUM}`; let tw = c.measureText(lines[0] || '').width; c.font = `400 ${28 * u * fs}px ${CN}`; if (lines[1]) tw = Math.max(tw, c.measureText(lines[1]).width);
     const cx = clamp(x, F.x + tw / 2, F.x + F.w - 80 * u - tw / 2);
     const cover = tops.filter(([bx]) => bx > cx - tw / 2 - L.slot / 2 && bx < cx + tw / 2 + L.slot / 2).map(([, by]) => by > yS(0) ? by + vlab : yS(0));
-    const top = Math.max(y + vlab, ...cover) + NEG_GAP * u * fs;   // 文字塊上緣
-    if (dot !== 'none') { c.fillStyle = L.col.ink; c.beginPath(); c.arc(x - bw / 2, y, 9 * u * Math.max(0, s), 0, 7); c.fill(); }
-    const y0 = y + vlab, y1 = top - 6 * u;
-    if (y1 - y0 > 6 * u) { c.strokeStyle = INK; c.lineWidth = 2 * u; c.beginPath(); c.moveTo(x, y0); c.lineTo(lerp(x, cx, lp), lerp(y0, y1, lp)); c.stroke(); }
+    const y0 = y + vlab, dy = y0 + DOT_R * u;                          // 數值標籤下緣、圓點中心
+    const top = Math.max(y0 + NEG_DOT * u * fs, Math.max(...cover) + NEG_GAP * u * fs);   // 文字塊上緣
+    const y1 = top - 6 * u;
+    if (y1 - dy > 6 * u) { c.strokeStyle = INK; c.lineWidth = 2 * u; c.beginPath(); c.moveTo(x, dy); c.lineTo(lerp(x, cx, lp), lerp(dy, y1, lp)); c.stroke(); }
+    if (dot !== 'none') { c.fillStyle = L.col.ink; c.beginPath(); c.arc(x, dy, DOT_R * u * Math.max(0, s), 0, 7); c.fill(); }
     c.globalAlpha = alpha * fp; c.fillStyle = INK; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
     lines.forEach((ln, i) => { c.font = i === 0 ? `700 ${50 * u * fs}px ${NUM}` : `400 ${28 * u * fs}px ${CN}`; haloText(c, ln, cx, top + (NEG_LINE1 + i * NEG_LINE2) * u * fs + (1 - fp) * 12 * u, 10 * u); });   // [article-to-video 內嵌修改] 描白邊（試跑 #9）
     c.restore();
@@ -538,10 +544,13 @@ function drawLabel(c, ctx, h, k, alpha, dot, anchor, tops) {
     const cx = clamp(x, F.x + tw / 2, F.x + F.w - 80 * u - tw / 2);
     const cover = tops.filter(([bx]) => bx > cx - tw / 2 - L.slot / 2 && bx < cx + tw / 2 + L.slot / 2).map(([, by]) => by);
     // [article-to-video 內嵌修改] 引線至少露出 LEADER_MIN：原版文字塊緊貼數值標籤（只隔 18），引線只剩 10 像素、看起來被標籤蓋掉（短柱最明顯）
-    const y0 = y - vlab - 4 * u, bottom = Math.max(F.y + lh * lines.length, Math.min(Math.min(y, ...cover) - vlab - 18 * u, y0 - LEADER_MIN * u * fs - 10 * u));   // 文字块底边
-    if (dot !== 'none') { c.fillStyle = L.col.ink; c.beginPath(); c.arc(x - bw / 2, y, 9 * u * Math.max(0, s), 0, 7); c.fill(); }   // [Danny 本机改] 圆点放在柱顶左角：放柱顶正中会压到柱上数值的字底
+    // [計時實測 R2-7] 圓點在數值標籤正上方（柱的中線上），引線從圓點往上拉到文字。[Danny 本机改] 原本圓點在柱頂左角（放柱頂正中會壓到
+    // 柱上數值的字底），但引線從數值標籤上面拉出去，兩個沒接上；現在圓點跟引線一起放到數值標籤外側，一樣不壓字
+    const y0 = y - vlab - 4 * u, dy = y0 - DOT_R * u;                 // 數值標籤上緣、圓點中心
+    const bottom = Math.max(F.y + lh * lines.length, Math.min(Math.min(y, ...cover) - vlab - 18 * u, dy - DOT_R * u - LEADER_MIN * u * fs - 10 * u));   // 文字块底边
     const y1 = bottom + 10 * u;
-    if (y0 - y1 > 6 * u) { c.strokeStyle = INK; c.lineWidth = 2 * u; c.beginPath(); c.moveTo(x, y0); c.lineTo(lerp(x, cx, lp), lerp(y0, y1, lp)); c.stroke(); }
+    if (dy - y1 > 6 * u) { c.strokeStyle = INK; c.lineWidth = 2 * u; c.beginPath(); c.moveTo(x, dy); c.lineTo(lerp(x, cx, lp), lerp(dy, y1, lp)); c.stroke(); }
+    if (dot !== 'none') { c.fillStyle = L.col.ink; c.beginPath(); c.arc(x, dy, DOT_R * u * Math.max(0, s), 0, 7); c.fill(); }
     c.globalAlpha = alpha * fp; c.fillStyle = INK; c.textAlign = 'center'; c.textBaseline = 'alphabetic';
     lines.forEach((ln, i) => { c.font = i === 0 ? `700 ${50 * u * fs}px ${NUM}` : `400 ${28 * u * fs}px ${CN}`; haloText(c, ln, cx, bottom - (lines.length - 1 - i) * lh * (i === 0 ? 1 : 0.62) + (1 - fp) * 12 * u, 10 * u); });   // [article-to-video 內嵌修改] 描白邊（試跑 #9）
     c.restore();
