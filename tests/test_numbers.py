@@ -382,6 +382,21 @@ def test_the_review_card_asks_the_author_to_check_figure_numbers_against_his_fig
     assert "原文圖表" in page.summary + page.note + page.title
 
 
+def test_only_the_numbers_the_author_must_check_are_spread_out_on_the_card(tmp_path):
+    """示範片：一張重畫圖1 的柱狀圖，卡片上攤開十幾行出處，作者要對照的只有三個讀圖的數字。
+    攤開的只有要作者看的（原文圖表、無出處）；其他對得到出處的收成一行，點開才看。"""
+    def edit(shots: dict) -> None:
+        redrawn_figure(shots)
+        shots["shots"][0]["chart"]["data"]["title"] = "2023 年的殖利率"  # 2023 文章文字裡有
+
+    root = with_figure(make_project(tmp_path, edit), FIG1)
+    [section] = number_review(plan_build(root, tts="fake")).cards["SH01"]
+    assert {it.text for it in section.items} == {"5.12%", "4.21%"}
+    assert "2023" in {it.text for it in section.rest}
+    assert all(it.status == "ok" for it in section.rest)
+    assert "1 個" in section.rest_summary and "出處" in section.rest_summary
+
+
 def test_years_on_a_redrawn_figures_axis_point_to_the_figure_reading(tmp_path):
     """示範：重畫圖1 的柱狀圖，類目名（橫軸年份）2020 文章文字裡沒有 → 無出處。Claude 要知道它也是「圖上的字」，
     該讀圖記進 figure_numbers.json 的圖1——提示要點名那張圖、說軸上的年份也算。"""
