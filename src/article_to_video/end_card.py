@@ -28,7 +28,8 @@ END_CARD_ID = "end.card"
 """片尾卡的片段 id（檔名 specs/end.card.json、clips/end.card.mp4）。有句點，分鏡 id 不會跟它撞名。"""
 END_CARD_GRAMMAR = GRAMMAR_END_CARD
 NOTES = ("僅供教育，非投資建議", "配音為 AI 合成")
-_PREFIX_RE = re.compile(r"^\s*(?:資料來源|数据来源|資料出處|資料|资料|來源|来源|出處|出处|sources?)\s*[:：]\s*", re.IGNORECASE)
+_PREFIX_RE = re.compile(
+    r"^\s*(?:原始資料|原始数据|原始數據|資料來源|数据来源|資料出處|資料|资料|來源|来源|出處|出处|sources?)\s*[:：]\s*", re.IGNORECASE)
 _GROUP_RE = re.compile(r"^(?P<name>[^（(]+?)\s*[（(](?P<items>[^（()）]+)[）)](?P<rest>.*)$")
 
 
@@ -72,17 +73,25 @@ class _Source:
     """每一列都有的說明，(是不是括號裡的說明, 文字)；None＝還沒有哪一列帶說明或代號（只有光寫名字的）。"""
     texts: list[str] = field(default_factory=list)
     """原文寫法（去掉前綴、重複的），只有一種寫法時照原樣印。"""
+    bare: set[str] = field(default_factory=set)
+    """光寫名字的寫法（「作者原文」）：不算一種寫法。"""
 
-    def add(self, text: str, refs: list[str], notes: list[tuple[bool, str]], bare: bool) -> None:
+    def add(self, name: str, text: str, refs: list[str], notes: list[tuple[bool, str]], bare: bool, silent: bool) -> None:
+        """silent：一列裡跟在別的出處後面的（「；原始資料：FRED（DGS10）」），沒帶說明＝沒講，不拿來刪別列的說明。"""
+        if len(name) > len(self.name):  # 「FRED」和「FRED，聯準會」是同一個：用寫得比較完整的名字
+            self.name = name
         if text not in self.texts:
             self.texts.append(text)
         if bare:
+            self.bare.add(text)
             return
         self.refs.extend(x for x in refs if x not in self.refs)
+        if silent and not notes:
+            return
         self.notes = list(notes) if self.notes is None else [n for n in self.notes if n in notes]
 
     def text(self) -> str:
-        written = [t for t in self.texts if t != self.name] or self.texts
+        written = [t for t in self.texts if t not in self.bare] or [self.name]
         if len(written) == 1:
             return written[0]
         out = self.name + (f"（{_format_references(self.refs)}）" if self.refs else "")
@@ -91,16 +100,43 @@ class _Source:
         return out
 
 
+def _split_origins(row: str) -> list[tuple[str, bool]]:
+    """一列來源 → 裡面的每個出處（文字, 是不是跟在別的出處後面）。一列用「；」分欄：第一欄是出處；後面的欄
+    有「原始資料：」「資料：」這類前綴、或是「名字（代號／圖號／段號）」的，是另一個出處（重畫文章的圖：
+    「作者原文（圖1）；原始資料：FRED（DGS10）」）；其他的欄（「月平均」「2026-10-09 擷取」）是前一個出處的說明。"""
+    out: list[list[str]] = []
+    for k, field_ in enumerate(x.strip() for x in _NOTE_SPLIT_RE.split(row)):
+        if not field_:
+            continue
+        stripped = " ".join(_PREFIX_RE.sub("", field_).split()).strip("，,。 ")
+        m = _GROUP_RE.match(stripped)
+        refs = m is not None and _references([x.strip() for x in re.split(r"[、,，]", m["items"]) if x.strip()])
+        if not out or stripped != field_ or refs:
+            if stripped:
+                out.append([stripped])
+        else:
+            out[-1].append(field_)
+    return [("；".join(parts), k > 0) for k, parts in enumerate(out)]
+
+
+def _key(name: str) -> str:
+    """同一個出處的認法：名字逗號前面那一截（「FRED，聯準會」＝「FRED」）。"""
+    return re.split(r"[，,]", name, maxsplit=1)[0].strip()
+
+
 def merge_sources(texts: Iterable[str]) -> list[str]:
     """圖上的來源列 → 片尾卡的來源清單：**同一個出處只列一行**。
 
-    - 拿掉「來源：」「資料來源：」「資料：」這類前綴（卡上統一有「資料來源」小標）。一列就是一個出處
-      （公有數據自動寫的來源行用「；」分欄：「FRED，聯準會（DGS10）；月平均；2026-10-09 擷取」，不拆成好幾個出處）。
-    - 出處＝括號前面的名字（「FRED，聯準會」「作者原文」）。同名的併成一行，順序照名字第一次出現：
+    - 拿掉「來源：」「資料來源：」「資料：」這類前綴（卡上統一有「資料來源」小標）。一列用「；」分欄：
+      公有數據自動寫的「FRED，聯準會（DGS10）；月平均；2026-10-09 擷取」是一個出處加兩欄說明；重畫文章的圖寫的
+      「作者原文（圖1）；原始資料：FRED（DGS10）」是兩個出處（「原始資料：」或「名字（代號）」開頭的欄是另一個出處，見 _split_origins）。
+    - 出處＝括號前面的名字（「FRED，聯準會」「作者原文」）；名字逗號前面一樣的算同一個（「FRED」＝「FRED，聯準會」，
+      卡上用寫得比較完整的）。同一個出處併成一行，順序照第一次出現：
       - 括號裡的代號／圖號／段號全部併進去：「FRED（DGS2）」＋「FRED（DGS10）」→「FRED（DGS2、DGS10）」；
         「作者原文（圖2）」＋「作者原文（第 4 段）」＋「作者原文（圖1）」→「作者原文（圖1、圖2、第 4 段）」。
       - 說明（括號後面「；」分開的欄，或括號裡寫的是說明文字）只留每一列都有的：擷取日期一樣就留，
         各張圖不同的算法（月平均、年平均、「十年期減兩年期＝…自算」）拿掉——圖上的來源行自己寫著。
+        跟在別的出處後面、自己沒帶說明的（「；原始資料：FRED（DGS10）」）不算：它沒講擷取日期，不是日期不一樣。
       - 光寫名字的（「作者原文」）併進同名的那一行，不另成一行。
     - 一個出處只有一種寫法時照原樣（括號裡是說明文字的「財政部（10 年期、2 年期），月資料」不動）。
     """
@@ -108,21 +144,19 @@ def merge_sources(texts: Iterable[str]) -> list[str]:
     for raw in texts:
         if not isinstance(raw, str):
             continue
-        t = " ".join(_PREFIX_RE.sub("", raw).split()).strip("，,。； ")
-        if not t:
-            continue
-        m = _GROUP_RE.match(t)
-        if m is None:
-            name, refs, notes, bare = t, [], [], True
-        else:
-            name = m["name"].strip()
-            items = [x.strip() for x in re.split(r"[、,，]", m["items"]) if x.strip()]
-            if _references(items):
-                refs, notes = items, [(False, n) for n in _notes(m["rest"])]
+        for t, silent in _split_origins(raw):
+            m = _GROUP_RE.match(t)
+            if m is None:
+                name, refs, notes, bare = t, [], [], True
             else:
-                refs, notes = [], [(True, m["items"].strip()), *((False, n) for n in _notes(m["rest"]))]
-            bare = False
-        sources.setdefault(name, _Source(name, [])).add(t, refs, notes, bare)
+                name = m["name"].strip()
+                items = [x.strip() for x in re.split(r"[、,，]", m["items"]) if x.strip()]
+                if _references(items):
+                    refs, notes = items, [(False, n) for n in _notes(m["rest"])]
+                else:
+                    refs, notes = [], [(True, m["items"].strip()), *((False, n) for n in _notes(m["rest"]))]
+                bare = False
+            sources.setdefault(_key(name), _Source(name, [])).add(name, t, refs, notes, bare, silent)
     return [s.text() for s in sources.values()]
 
 

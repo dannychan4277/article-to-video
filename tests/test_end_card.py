@@ -110,6 +110,31 @@ def test_each_source_is_credited_once_even_with_different_notes():
         "FRED，聯準會（DGS10、DGS2）；月平均"]
 
 
+def test_a_redrawn_figure_that_names_its_original_data_is_credited_once_per_source():
+    """計時實測的片尾卡（獨立審片 R1-16「來源三行內容重疊」）：重畫文章的圖，來源行照分鏡規則寫
+    「作者原文（圖N）；原始資料：FRED（…）」，旁邊是公有數據自動寫的「FRED，聯準會（…）；…；擷取日期」。
+    原本「；原始資料：…」被當成作者原文的說明；沒寫圖號的那列（「作者原文；原始資料：FRED（…）」）整列被當成
+    一個叫「作者原文；原始資料：FRED」的出處，卡上三行互相重疊。一列裡「原始資料：」後面是另一個出處，各自併進
+    自己那一行；「FRED」跟「FRED，聯準會」是同一個出處。（來源列照實測專案的寫法，日期換成自製的。）"""
+    sources = [  # 照片段順序
+        "來源：作者原文；原始資料：FRED（DGS10、DGS2）",
+        "來源：FRED，聯準會（DGS10、DGS2）；十年期減兩年期＝DGS10 減 DGS2 自算，月平均；2026-09-30 擷取",
+        "來源：作者原文",
+        "來源：作者原文（圖1）；原始資料：FRED（DGS10、DGS2）",
+        "來源：作者原文（圖2）；原始資料：FRED（DGS2、DGS10）",
+        "來源：作者原文（圖2）；原始資料：FRED（DGS2）",
+        "來源：作者原文；原始資料：FRED（THREEFYTP10）",
+        "來源：FRED，聯準會（THREEFYTP10）；月平均；2026-09-30 擷取",
+        "來源：作者原文（圖2）；原始資料：FRED（DGS10）",
+    ]
+    assert merge_sources(sources) == [
+        "作者原文（圖1、圖2）",
+        "FRED，聯準會（DGS10、DGS2、THREEFYTP10）；2026-09-30 擷取",
+    ]
+    # 只有一列：原始出處也是自己一行（片尾卡的小標就是「資料來源」）
+    assert merge_sources(["來源：作者原文（圖2）；原始資料：聯準會"]) == ["作者原文（圖2）", "聯準會"]
+
+
 def test_public_data_charts_show_up_on_the_end_card(tmp_path, fred):
     """公有數據自動寫的來源行也會進片尾卡；同出處、同算法的兩個系列併成一行。"""
     from datetime import date
