@@ -247,6 +247,17 @@ def test_checks_command_reports_every_shot_and_writes_the_summary(checked):
     assert "分鏡 1" in proc.stdout and "分鏡 2" in proc.stdout
 
 
+def test_before_the_checks_run_the_page_says_so_once_not_on_every_card(built_project):
+    """示範片：還沒跑自動檢查時，25 張卡每張都寫一遍「還沒跑自動檢查／做好審片用的影片之後 Claude 會跑…」。
+    頁首說一次就好；卡片上不重複。"""
+    from test_review_page import read_review
+
+    page = read_review(built_project.dir)
+    assert "還沒跑" in page.page_slots["checks"]
+    for card in page.cards:
+        assert not card.slots.get("checks", "").strip(), card.slots
+
+
 def test_the_review_page_shows_the_checks_on_every_card_and_on_top(checked):
     from test_review_page import read_review
 

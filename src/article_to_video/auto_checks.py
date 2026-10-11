@@ -883,13 +883,15 @@ def checks_contributor(plan: BuildPlan) -> ReviewExtras:
                          label=f.severity, code=code)
 
     cards: dict[str, list] = {}
+    never = bool(report.unchecked) and len(report.unchecked) == len(report.clips)
     for st in plan.timeline.shots:
         sid = st.shot.id
         clips = [c for c in report.clips if sid in c.shot_ids]
         fs = report.for_shot(sid)
+        if never:
+            continue  # 整支片都還沒跑：頁首說一次就好，不每張卡重複
         if any(c.qa is None for c in clips):
-            sec = CardSection("checks", "自動檢查", [CheckItem(
-                "還沒跑自動檢查", detail="做好審片用的影片之後 Claude 會跑；改過的分鏡要重跑", status="info")])
+            sec = CardSection("checks", "自動檢查", [CheckItem("改過之後還沒重跑自動檢查", status="info")])
         elif not fs:
             sec = CardSection("checks", "自動檢查", [], summary="自動檢查沒發現問題")
         else:
@@ -899,9 +901,9 @@ def checks_contributor(plan: BuildPlan) -> ReviewExtras:
     bad, warn = report.blocking, [f for f in report.findings if not f.blocking]
     nums = _shot_numbers(plan)
     note = "機器把每個片段重做一遍，看畫面有沒有卡住、閃一下、字被切掉或被字幕蓋住。"
-    if report.unchecked and len(report.unchecked) == len(report.clips):
+    if never:
         sec = CardSection("checks", "自動檢查", [CheckItem(
-            "還沒跑", detail="做好審片用的影片之後、給你看之前，Claude 會跑", status="info")], note=note)
+            "還沒跑", detail="做好審片用的影片之後、給你看之前，Claude 會跑", status="info")])
     else:
         items = [item(f, _where(plan, f)) for f in bad] + [item(f, _where(plan, f)) for f in warn]
         if report.unchecked:
