@@ -40,7 +40,13 @@ Vox 剪報 `clips/y2_vox.js`：
 - `lib/kit.js`：只留 `diagram.js` 用到的 `densify`、`resample`。
 - `lib/fonts/LICENSES.md`：只列附帶的字型，補上原清單沒有的 Noto Sans CJK TC 子集。
 - `clip.js`：缺字除了告警，也記在 `window.__missingGlyphs`。
+- `render.py`、`qa.py`（照上游 57d6760，2026-10-08）：本機伺服器改多執行緒——`LocalServer(socketserver.ThreadingTCPServer)`，
+  `request_queue_size = 128`、`daemon_threads = True`（只用子類別，不改標準庫類別的全域屬性），收尾 `shutdown()` 後加 `server_close()`。
+  Chromium 並行載入腳本時可能先開好閒置連線，單執行緒的伺服器會卡在那條連線上、其他檔案載不到（上游在 Windows 上遇到；
+  Apple Silicon macOS 上量不到差別，是防呆）。測試：`tests/test_engine_server.py`（不開瀏覽器，只連 127.0.0.1）。
 - `render.py`：spec 用 UTF-8 讀；`--ffmpeg <路徑>` 指定 ffmpeg（不靠 PATH）；檢查 ffmpeg 結束碼；`--strict-glyphs` 有缺字就在渲染前失敗；頁面 `console.error` 印成 `[page-error]`，跟告警 `[page]` 分開。
+- `qa.py`（圖表鏡頭快推）：`--spec` 片段模式在 `qa.json` 每段多記 `ts`（每一幀的時刻）與 `pair_diffs`（相鄰兩幀變動的畫面 %），
+  外掛的 `auto_checks.py` 照 spec 裡已知的快推時段拿掉那幾個幀對、用同一套門檻重算跳變。qa 自己的判讀（`spikes_at_lt` 等）不變。
 - `qa.py`：`--project` 預設是本資料夾（qa.py 跟引擎放在一起）；spec、`qa.json`、`qa.md` 用 UTF-8 讀寫。四幀拼圖的頁首改用外掛附帶的繁中字型（`lib/fonts/NotoSansTC-500.woff`）、寫繁中（動態、靜止幀對、跳變、確定性），頁首高 20 → 26 px（原版用 PIL 預設字型，使用者的 Mac 上中文全是豆腐字）。
 - `clips/t3_finance_chart.js`：`data.colors.brand` 品牌色，取代「當品牌用的紅」（頂端色條、小旗、角標、標註圓點、大數字、折線預設色）；沒寫就是原本的紅 `#E3120B`。折線下方漸層改跟著線的顏色（原本寫死紅色）。K 線漲跌的紅綠不變。
 - `clips/t3_finance_chart.js`：`data.colors.ink`：要讀的字與記號（角標、標註圓點、大數字）用的顏色，沒寫就跟 brand 一樣——品牌色太淺時外掛的 `brand.py` 給它同色相加深的版本，色條、小旗照用原色。
@@ -90,3 +96,10 @@ Vox 剪報 `clips/y2_vox.js`：
 - `clips/y2_vox.js`（真實試跑 #5）：有 `data.frame` 的框，鏡頭時間照 spec 的 `data.camera`（外掛給，跟外掛算「框停多久」用同一組數）：揭開後 `pushAt`（0.1）秒開始推、推 `push`（0.8）秒；要先移過去的框提早 `travel`（0.8）秒出發；框之後換下一件素材，鏡頭在它出現前 `itemTravel`＋0.05（0.8）秒才出發、用 sineInOut（原版 longTail 尾巴長，鏡頭早早停在還沒有東西的空位上）。長距離移動時中途拉遠（關鍵幀的 `dip`，`camAt` 在路上把縮放乘上 dip^(4e(1−e))，兩端不變），移到一半時出發點與目的地都還在畫面裡。原版推近 1 秒、下一件出現前 0.95 秒就走，框實際只停 0.4～1 秒，從推近的表格移到下一張卡中間一秒多只剩桌面。沒寫 `data.frame` 的框、不是從框出發的移動，時間照原版（中途拉遠在不需要時等於不變）。
 - `clips/y2_vox.js`（真實試跑 #7）：框的螢光筆改用 `inkSafeHighlight`：形狀、掃過的進度、黃色都跟 `CL.highlight` 一樣，但只上在「紙」上——原圖每個像素依最暗的那個色版有多亮決定上多少黃（≤110 不上、≥200 上滿），深色字、彩色字、色塊保持原色。原版整塊正片疊底，藍字會被染成綠字、紅字變橘，表格「紅跌藍漲」的意思會亂。黃色層每張圖算一次（`PAINT.cached`）。`lib/collage.js` 的 `CL.highlight` 沒改。
 - 配樂：外掛的 `article_to_video/music.py` 改寫自花叔的程式作曲範本 `scripts/audio/synth_艺术史速通.py`（MIT，同一份 `LICENSE`）：照它的樂器與混音做法（加法合成、撥弦、ADSR、鋸齒鋪底、合成殘響、電平對齊與軟限幅），改用 numpy 頻域濾波、不需要 scipy／soundfile，編曲另寫成三首 8 小節可循環的原創樂句。範本本身沒帶進外掛（外掛不呼叫它）。
+- `clips/t3_finance_chart.js`（圖表鏡頭快推，設定 `camera = snap`）：`data.camera`（建置給的，作者不能寫）＝
+  `{dur, box: [左, 上, 右, 下]（佔畫面比例）, snaps: [{at, zoom, index}]}`。有它時不做 `Danny 本机改` 的 `push` 等速慢推，改成：
+  畫面平常停住，每一下在 `at` 那一幀開始、`dur` 秒內推到 `zoom` 倍，曲線是強 ease-out `cubic-bezier(0.23, 1, 0.32, 1)`（`SNAP_EASE`，
+  照 Emil Kowalski 的動效原則：回應事件的動作用 ease-out，一開始就動）。每一下以被標註的點（`index`：柱頂、折線上的點、K 線收盤）為
+  固定點，再把位移夾到「內容框推近後還在 `box` 裡」；放大量也夾在「內容框放得進 `box`」以內（`cameraKeys`）。內容框＝左右邊距之間、
+  標題上的小旗（`safe.top`＋40）到來源行（字幕帶上緣－24，有角標時到角標底）；頂端色條是裝飾、不算。`snaps` 列整串到這個片段為止的
+  每一下（之前分鏡的 `at` 是負的），`camAt` 從頭疊加，接續分鏡從上一個片段停住的鏡頭接著走。沒有 `data.camera` 時跟原本一樣（`push`）。

@@ -122,9 +122,9 @@ def test_a_continued_shot_replays_the_chain_so_far_and_its_carried_label_does_no
     # 上一個分鏡的快推照真正的時刻排（相對這個分鏡是負的），這個分鏡自己的標註再推一次；沿用的標註不推
     assert [s["at"] for s in snaps] == pytest.approx([cue_at(a, "highlight")[0] - a["duration"], own_at], abs=1e-6)
     assert [s["index"] for s in snaps] == [0, 2]
-    # 整串預設總共推近 8%，兩個標註各推一半；SH01 只看得到第一下
-    assert [s["zoom"] for s in snaps] == pytest.approx([1.04, 1.08])
-    assert [s["zoom"] for s in a["data"]["camera"]["snaps"]] == pytest.approx([1.04])
+    # 整串預設總共推近 7%，兩個標註各推一半；SH01 只看得到第一下
+    assert [s["zoom"] for s in snaps] == pytest.approx([1.035, 1.07])
+    assert [s["zoom"] for s in a["data"]["camera"]["snaps"]] == pytest.approx([1.035])
 
 
 def test_push_on_the_first_shot_sets_the_total_and_zero_keeps_the_camera_still(tmp_path):
@@ -256,7 +256,7 @@ def test_a_continued_shot_starts_exactly_where_the_previous_one_left_the_camera(
 
 @pytest.fixture(scope="module", params=["16x9", "9x16"])
 def closest(request, tmp_path_factory):
-    """整串寫 push 0.2（建置允許的最大值）：兩下快推要推到 10%、20%，引擎照版面夾住。渲第一個標註之前（還沒推）跟整串最後一幀。"""
+    """整串寫 push 0.2（建置允許的最大值）：兩下快推要推到 4%、8%（每下最多 4%），引擎照版面夾住。渲第一個標註之前（還沒推）跟整串最後一幀。"""
     fmt = FORMATS[request.param]
     shots = json.loads(json.dumps(SHOTS[:2]))
     shots[0]["chart"]["data"]["push"] = 0.2
@@ -277,7 +277,7 @@ def test_even_the_closest_snap_keeps_every_word_on_screen_and_out_of_the_subtitl
     fmt, before, after = closest
     w0, w1 = (title_box(im)[2] - title_box(im)[0] for im in (before, after))
     assert w1 / w0 > 1.06  # 真的推近了不少（不是什麼都沒做）
-    assert w1 / w0 < 1.2  # 但沒有照寫的 20% 推：夾在版面放得下的範圍
+    assert w1 / w0 < 1.075  # 但沒有推到 8%：夾在版面放得下的範圍
     dark = after.mean(axis=-1) < 160  # 白底上看得見的字、線、柱
     h, w = dark.shape
     assert not dark[h - fmt.safe_bottom:].any()  # 字幕帶裡沒東西
