@@ -44,6 +44,10 @@ Vox 剪報 `clips/y2_vox.js`：
   `request_queue_size = 128`、`daemon_threads = True`（只用子類別，不改標準庫類別的全域屬性），收尾 `shutdown()` 後加 `server_close()`。
   Chromium 並行載入腳本時可能先開好閒置連線，單執行緒的伺服器會卡在那條連線上、其他檔案載不到（上游在 Windows 上遇到；
   Apple Silicon macOS 上量不到差別，是防呆）。測試：`tests/test_engine_server.py`（不開瀏覽器，只連 127.0.0.1）。
+  **外掛另加（上游沒有）**：處理器 `Q.copyfile` 檔案內容一次只送一個（類別上一把鎖；請求、閒置連線照樣各自一條執行緒），
+  `send` 回 ENOBUFS／EAGAIN 時等 0.01 秒再送剩下的（最多 30 秒）。原因：多執行緒後 Chromium 同時要三個 7 MB 多的字型，
+  macOS 機器很忙時網路緩衝區不夠，字型檔沒送完、片段報「字型缺字」失敗——同時渲 8 個、6 輪：照上游原樣 48 次失敗 5 次
+  （`OSError: [Errno 55] No buffer space available`），單執行緒 0 次；加了這兩樣之後 8×10、12×6 都 0 次。
 - `render.py`：spec 用 UTF-8 讀；`--ffmpeg <路徑>` 指定 ffmpeg（不靠 PATH）；檢查 ffmpeg 結束碼；`--strict-glyphs` 有缺字就在渲染前失敗；頁面 `console.error` 印成 `[page-error]`，跟告警 `[page]` 分開。
 - `qa.py`（圖表鏡頭快推）：`--spec` 片段模式在 `qa.json` 每段多記 `ts`（每一幀的時刻）與 `pair_diffs`（相鄰兩幀變動的畫面 %），
   外掛的 `auto_checks.py` 照 spec 裡已知的快推時段拿掉那幾個幀對、用同一套門檻重算跳變。qa 自己的判讀（`spikes_at_lt` 等）不變。

@@ -31,7 +31,7 @@
 
 [article-to-video 內嵌修改] 這份放在引擎資料夾裡，--project 預設就是本資料夾；讀寫 spec／qa.json／qa.md 一律 UTF-8。
 """
-import argparse, base64, functools, http.server, io, json, socketserver, threading, urllib.parse
+import argparse, base64, errno, functools, http.server, io, json, socketserver, threading, time, urllib.parse
 from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -71,6 +71,20 @@ class Q(http.server.SimpleHTTPRequestHandler):
             f = urllib.parse.unquote(path[len('/__file__/'):].split('?')[0])
             return f if f in ALLOWED else '/nonexistent'
         return super().translate_path(path)
+    # [article-to-video 內嵌修改] 多執行緒之後 Chromium 同時要三個 7 MB 多的字型，macOS 很忙時網路緩衝區不夠（send 回 ENOBUFS、
+    # 字型檔沒送完 → 片段報「字型缺字」失敗；同時渲 8 個、6 輪，48 次失敗 5 次，單執行緒 0 次）。檔案內容一次只送一個
+    # （閒置連線、請求本身照樣各自一條執行緒，不會卡住），遇到 ENOBUFS 等一下再送剩下的（send 失敗時一個位元組都沒送出）。
+    _one_file_at_a_time = threading.Lock()
+    def copyfile(self, source, outputfile):
+        with self._one_file_at_a_time:
+            deadline = time.monotonic() + 30
+            while buf := source.read(256 * 1024):
+                view = memoryview(buf)
+                while view:
+                    try: view = view[self.connection.send(view):]
+                    except OSError as e:
+                        if e.errno not in (errno.ENOBUFS, errno.EAGAIN) or time.monotonic() > deadline: raise
+                        time.sleep(0.01)
 # [article-to-video 內嵌修改] 照上游 57d6760（2026-10-08）：多執行緒伺服器。Chromium 並行載入腳本時可能先開好閒置連線，
 # 單執行緒的伺服器會卡在那條連線上、其他檔案載不到。只用子類別，不改標準庫類別的全域屬性。
 class LocalServer(socketserver.ThreadingTCPServer):
