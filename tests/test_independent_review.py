@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -46,6 +47,8 @@ def test_review_material_is_prepared_from_the_finished_video(prepped):
     m = json.loads((kit / "material.json").read_text(encoding="utf-8"))
     tl = timeline(root)
     assert abs(m["duration"] - tl["duration"]) < 0.05
+    assert m["scope"] == "full" and m["round"] == 1 and "整支片" in proc.stdout  # 第一輪審整支片
+    assert m["ranges"] == [{"start": 0, "end": m["duration"]}] and m["previous"] == []
     assert [(s["number"], s["start"], s["end"]) for s in m["shots"]] == [
         (i + 1, round(s["startFrame"] / 30, 3), round(s["endFrame"] / 30, 3)) for i, s in enumerate(tl["shots"])]
 
@@ -246,6 +249,150 @@ def test_independent_review_can_be_turned_off_in_the_user_settings(project, tmp_
 def test_after_a_build_claude_is_told_to_run_the_checks_and_the_review(built_project):
     assert "下一步" in built_project.stdout
     assert "checks" in built_project.stdout and "review-prep" in built_project.stdout
+
+
+# ---------------------------------------------------------------- 審片變輕：整片幾輪、之後只看改過的分鏡
+#
+# 示範片三輪整片審了 28 分鐘。規則：第一輪審整支片；那一輪有必修，改好之後整支片再審一輪核對（整片最多 2 輪）；
+# 其他時候再審只看改過的分鏡（跟上一輪審的成片比，分鏡自己的畫面、長度或旁白變了才算改過）。
+
+
+def material(root: Path) -> dict:
+    return json.loads((root / KIT / "material.json").read_text(encoding="utf-8"))
+
+
+def edit_highlight(root: Path, text: str) -> None:
+    """改分鏡 2 的標註文字（只動那個分鏡的畫面）。"""
+    shots = json.loads((root / "shots.json").read_text(encoding="utf-8"))
+    shots["shots"][1]["chart"]["data"]["highlight"]["text"] = text
+    (root / "shots.json").write_text(json.dumps(shots, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def edited(prepped, tmp_path_factory) -> Path:
+    """審片素材是改之前的成片做的；之後 Claude 改了分鏡 2 的標註、重建（只重渲那個片段）。
+    在這份上記下的審片輪次＝審的是改之前的成片，所以「改過的分鏡」只有分鏡 2。"""
+    root = tmp_path_factory.mktemp("改過分鏡") / "2026-10-09-殖利率曲線"
+    shutil.copytree(prepped[0], root)
+    edit_highlight(root, "長天期反而低")
+    built = run_cli("build", str(root), "--tts", "fake")
+    assert built.returncode == 0, built.stdout + built.stderr
+    return root
+
+
+@pytest.fixture
+def edited_project(edited, tmp_path) -> Path:
+    dst = tmp_path / "2026-10-09-殖利率曲線"
+    shutil.copytree(edited, dst)
+    return dst
+
+
+def test_after_a_round_without_must_fixes_only_the_changed_shots_are_reviewed_again(edited_project):
+    root = edited_project
+    first = {"items": [
+        {"severity": "該修", "shot": 2, "time": 6.0, "title": "標註字太小", "evidence": "實測"},
+        {"severity": "該修", "shot": 1, "time": 1.0, "title": "第一根柱子早出現", "evidence": "推論"},
+    ]}
+    assert record(root, first).returncode == 0
+
+    # 上一輪沒有必修：build 之後不再叫 Claude 派審片員（改過的分鏡自己看靜態圖確認）
+    rebuilt = run_cli("build", str(root), "--tts", "fake", "--no-open")
+    assert rebuilt.returncode == 0, rebuilt.stdout + rebuilt.stderr
+    assert "review-prep" not in rebuilt.stdout and "不用再審" in rebuilt.stdout and "靜態圖" in rebuilt.stdout
+
+    # Claude 判斷改得多、還是要審：只看改過的分鏡
+    prep = run_cli("review-prep", str(root), "--tts", "fake")
+    assert prep.returncode == 0, prep.stdout + prep.stderr
+    assert "只看改過的分鏡" in prep.stdout and "分鏡 2" in prep.stdout
+    m = material(root)
+    tl = timeline(root)
+    shot2 = tl["shots"][1]
+    start, end = shot2["startFrame"] / 30, shot2["endFrame"] / 30
+    assert m["scope"] == "changed" and m["round"] == 2
+    assert [s["number"] for s in m["shots"]] == [2]
+    assert m["cues"] and {c["shot"] for c in m["cues"]} == {2}
+    # 總覽只做改過的分鏡那一段（前後各多 1 秒看換鏡）
+    assert m["ranges"] and all(start - 1.01 <= r["start"] and r["end"] <= end + 1.01 for r in m["ranges"])
+    assert m["ranges"][0]["start"] > 0.5  # 分鏡 1 的開頭沒有重看
+    # 上一輪的問題只帶這個分鏡的
+    assert [p["id"] for p in m["previous"]] == ["R1-1"]
+    prompt = (root / KIT / "prompt.txt").read_text(encoding="utf-8")
+    assert "只看改過的分鏡" in prompt and "分鏡 2" in prompt
+
+    second = {"items": [{"severity": "可改", "time": end - 0.5, "title": "標註停太久", "evidence": "實測"}],
+              "previous": [{"id": "R1-1", "status": "已修好", "note": "字放大了"}]}
+    assert record(root, second).returncode == 0
+    log = json.loads((root / "check_log.json").read_text(encoding="utf-8"))
+    rnd = log["rounds"][1]
+    assert rnd["scope"] == "changed" and [it["id"] for it in rnd["items"]] == ["R2-1"]
+    assert rnd["items"][0]["shot"] == 2
+    assert log["resolutions"]["R1-1"]["status"] == "fixed" and log["resolutions"]["R1-1"]["by"] == "獨立審片第 2 輪"
+
+    # 這版成片審過了、之後沒再改：沒有改過的分鏡可以審
+    again = run_cli("review-prep", str(root), "--tts", "fake")
+    assert again.returncode == 1 and "Traceback" not in again.stderr
+    assert "沒有改過的分鏡" in again.stderr and "--full" in again.stderr
+
+
+def test_a_must_fix_brings_back_the_whole_film_for_at_most_two_rounds(edited_project, tmp_path):
+    root = edited_project
+    must = {"severity": "必修", "shot": 2, "time": 6.0, "title": "標註指錯柱", "evidence": "實測"}
+    assert record(root, {"items": [must]}).returncode == 0
+
+    # 整片審的那一輪有必修：改好之後整支片再審一輪核對（上一輪之後改過的分鏡點出來）
+    prep = run_cli("review-prep", str(root), "--tts", "fake")
+    assert prep.returncode == 0, prep.stdout + prep.stderr
+    m = material(root)
+    assert m["scope"] == "full" and [s["number"] for s in m["shots"]] == [1, 2] and "必修" in prep.stdout
+    assert {c["shot"] for c in m["cues"]} == {1, 2} and m["changedShots"] == [2]
+    assert [p["id"] for p in m["previous"]] == ["R1-1"]
+    assert "分鏡 2" in (root / KIT / "prompt.txt").read_text(encoding="utf-8")
+    second = {"items": [{**must, "title": "標註壓到線"}], "previous": [{"id": "R1-1", "status": "已修好"}]}
+    assert record(root, second).returncode == 0
+
+    # 整片已經審了兩輪：還有必修，改好（又改了分鏡 2）之後這輪只看改過的分鏡；已經核過的 R1-1 不再拿來核
+    edit_highlight(root, "長天期比較低")
+    assert run_cli("build", str(root), "--tts", "fake").returncode == 0
+    prep = run_cli("review-prep", str(root), "--tts", "fake")
+    assert prep.returncode == 0, prep.stdout + prep.stderr
+    m = material(root)
+    assert m["scope"] == "changed" and m["round"] == 3 and [s["number"] for s in m["shots"]] == [2]
+    assert [p["id"] for p in m["previous"]] == ["R2-1"]
+    third = {"items": [{**must, "title": "新標註被字幕蓋住"}], "previous": [{"id": "R2-1", "status": "已修好"}]}
+    assert record(root, third).returncode == 0
+    log = json.loads((root / "check_log.json").read_text(encoding="utf-8"))
+    assert [(r["round"], r["scope"]) for r in log["rounds"]] == [(1, "full"), (2, "full"), (3, "changed")]
+
+    # 只看改過分鏡的那一輪找到的必修照樣擋出片（渲染前就擋）
+    shown = run_cli("open-review", str(root), "--tts", "fake")
+    assert shown.returncode == 0
+    version = re.search(r"第 (\d+) 版", shown.stdout).group(1)
+    blocked = run_cli("publish", str(root), "--version", version, "--tts", "fake", "--out", str(tmp_path / "出片"))
+    assert blocked.returncode == 1 and "R3-1" in blocked.stderr and "新標註被字幕蓋住" in blocked.stderr
+    assert "R1-1" not in blocked.stderr and "R2-1" not in blocked.stderr
+    assert not (tmp_path / "出片").exists()
+
+    # 硬要整支片也可以
+    full = run_cli("review-prep", str(root), "--tts", "fake", "--full")
+    assert full.returncode == 0 and material(root)["scope"] == "full" and material(root)["round"] == 4
+
+
+def test_rounds_recorded_before_this_change_fall_back_to_the_whole_film(project):
+    """舊專案的審片紀錄沒有記分鏡內容：比不出改了哪些，就審整支片；作者接受不改的列在 known（不用核、不要再報）。"""
+    legacy = {"version": 1, "rounds": [{
+        "round": 1, "aspect": "16x9", "videoKey": "舊的成片", "score": 7, "summary": "", "previous": [],
+        "items": [{"id": "R1-1", "severity": "該修", "shot": 2, "shotId": "SH02", "time": 6.0, "title": "標註太小"},
+                  {"id": "R1-2", "severity": "該修", "shot": 1, "shotId": "SH01", "time": 1.0, "title": "柱子早出現"}]}],
+        "resolutions": {"R1-2": {"status": "accepted", "note": "作者說可以", "by": "作者", "at": "2026-10-09T12:00:00+0800"}}}
+    (project / "check_log.json").write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+
+    changed = run_cli("review-prep", str(project), "--tts", "fake", "--changed")
+    assert changed.returncode == 1 and "比不出改了哪些分鏡" in changed.stderr and "Traceback" not in changed.stderr
+    prep = run_cli("review-prep", str(project), "--tts", "fake")
+    assert prep.returncode == 0, prep.stdout + prep.stderr
+    m = material(project)
+    assert m["scope"] == "full" and m["round"] == 2 and "比不出" in prep.stdout
+    assert [p["id"] for p in m["previous"]] == ["R1-1"] and [k["id"] for k in m["known"]] == ["R1-2"]
 
 
 def test_reporting_an_issue_packs_the_review_rounds(project, tmp_path):
