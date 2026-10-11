@@ -284,6 +284,9 @@ def test_json_formats_in_the_skill_docs_are_valid_projects(tmp_path):
     project = load_project(tmp_path)
     assert [s.id for s in project.shots] == ["SH01", "SH02"]
     assert [(f.figure, f.number.text) for f in project.figure_numbers] == [("圖1", "4.58"), ("圖1", "3.96"), ("圖1", "2020")]
+    from article_to_video.build import plan_build
+
+    plan_build(tmp_path, tts="fake")  # 時間軸也排得出來：錨點都在自己的分鏡裡（接續分鏡的 bar cue）
 
 
 def test_the_card_and_comparison_example_in_formats_md_is_a_valid_project(tmp_path):
@@ -299,3 +302,6 @@ def test_the_card_and_comparison_example_in_formats_md_is_a_valid_project(tmp_pa
     project = load_project(tmp_path)
     assert [(s.id, s.continues, s.chart.data.get("chart")) for s in project.shots] == [
         ("SH01", False, "number"), ("SH02", False, "compare"), ("SH03", True, None)]
+    from article_to_video.build import plan_build
+
+    plan_build(tmp_path, tts="fake")  # 時間軸也排得出來：數字落定後停得夠久（計時實測：照舊範例寫，數字 0.4 秒就切走）

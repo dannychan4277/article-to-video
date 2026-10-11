@@ -102,6 +102,22 @@ def bar_cue_past_the_bars(shots, _):
     sh(shots, "SH01")["chart"]["cues"][3]["data"]["index"] = [1, 4]
 
 
+def _card_then_chart(edge: str):
+    """SH01 改成大數字卡（唸到「四點五八」落定），SH02 改成不接續的柱狀圖、從 s02 開頭切入。"""
+    def edit(shots, _):
+        sh1, sh2 = sh(shots, "SH01"), sh(shots, "SH02")
+        sh1["chart"] = {"data": {"title": "短天期利率比較高", "unit": "美國兩年期公債殖利率", "source": "來源：FRED（DGS2），年平均自算",
+                                 "chart": "number"},
+                        "cues": [{"at": 0, "kind": "title"},
+                                 {"at": {"segment": "s01", "word": "四點五八", "edge": edge}, "kind": "number",
+                                  "text": "2023 年平均", "data": {"value": 4.58, "decimals": 2, "suffix": "%"}}]}
+        sh2.update({"continues": False, "start": {"segment": "s02"}, "chart": {
+            "data": {"title": "十年期比較低", "unit": "%", "source": "來源：FRED（DGS10），年平均自算", "decimals": 2,
+                     "series": [{"label": "十年期", "value": 3.96}]},
+            "cues": [{"at": 0, "kind": "title"}, {"at": {"segment": "s02", "word": "十年期"}, "kind": "bar"}]}})
+    return edit
+
+
 def bar_cue_anchored_in_the_next_shot(shots, _):
     """柱要在下一句才長，cue 卻寫在前一個分鏡、錨點指到下一個分鏡的詞（計時實測被擋在「之後」、不知道怎麼辦）。"""
     sh(shots, "SH01")["chart"]["cues"][3]["at"] = {"segment": "s02", "word": "倒掛"}
@@ -126,6 +142,8 @@ CASES = {
     "bar cue 標到不存在的柱": (bar_cue_past_the_bars, ["分鏡 SH01", "chart.cues[3]", "第 4 根", "只有 2 根"]),
     "柱的錨點在下一個分鏡": (bar_cue_anchored_in_the_next_shot,
                     ["分鏡 SH01", "chart.cues[3].at", "之後", "接續分鏡 SH02", "bar cue 搬到"]),
+    # 計時實測 R1-1、R1-3：大數字卡的 at 寫在數字唸完（edge: end），落定 0.4 秒就切走
+    "大數字落定後停太短": (_card_then_chart("end"), ["分鏡 SH01", "chart.cues[1]", "只停", "1.5 秒", "開頭"]),
 }
 
 
@@ -151,13 +169,23 @@ def _no_label_on_chain_head(shots, _):
     cues[:] = [c for c in cues if c["kind"] != "highlight"]
 
 
-def _number_on_continuation_only(shots, _):
+def _number_on_continuation_only(shots, narration):
+    # 數字落定後要停 1.5 秒（timeline.NUMBER_HOLD）：落在旁白最後一個詞會被擋，所以後面多半句
+    narration["segments"]["s02"] = "十年期只有三點九六，曲線倒掛，這種情況不常見。"
     sh(shots, "SH02")["chart"]["cues"].append(
-        {"at": {"segment": "s02", "word": "倒掛"}, "kind": "number", "text": "差", "data": {"value": 1}})
+        {"at": {"segment": "s02", "word": "曲線"}, "kind": "number", "text": "差", "data": {"value": 1}})
+
+
+def _bar_cued_in_the_continuation(shots, _):
+    """十年期那根柱的 bar cue 搬到接續分鏡：那一句才長（前面的分鏡不畫它）。"""
+    cue = sh(shots, "SH01")["chart"]["cues"].pop(3)
+    cue["at"] = {"segment": "s02", "word": "倒掛"}
+    sh(shots, "SH02")["chart"]["cues"].append(cue)
 
 
 @pytest.mark.parametrize("edit", [_sub_on_continuation_only, _no_label_on_chain_head, _number_on_continuation_only,
-                                  continuation_without_its_own_highlight_cue])
+                                  continuation_without_its_own_highlight_cue, _bar_cued_in_the_continuation,
+                                  _card_then_chart("start")])
 def test_a_continuation_may_differ_in_labels_or_big_number(tmp_path, edit):
     """整串接續分鏡的版面由建置一次算好（照整串所有的標註、大數字留空間），所以接續分鏡多一行標註、
     整串第一個分鏡沒有標註、只有後面的分鏡有大數字，刻度都不會跳，不用擋。

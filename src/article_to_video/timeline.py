@@ -63,6 +63,10 @@ OPENING_TITLE_AT = -1.0
 """影片第一個分鏡的 title cue（寫在第 0 秒的）改成這個時間：版式、標題、格線在第一幀就到位（引擎的版式 0.6 秒、
 格線再 0.6 秒），成片第一幀不是一片空白。後面的分鏡照舊在切進來之後淡入。"""
 DEFAULT_AXIS_NOTE = "縱軸未從 0 開始"
+NUMBER_HOLD = 1.5
+"""數字（number cue：大數字卡、兩數對比的數字、圖上右上角的大數字）落定之後至少要在畫面上停這麼久（秒）。
+計時實測：大數字卡的 at 寫在數字唸完、切點緊跟在後，數字落定 0.4 秒就切走，觀眾看到的是滾到一半的數（獨立審片兩項必修）。
+跟 Vox 的框推近停住後要停 vox.MIN_HOLD 同一類規則。"""
 SNAP_DUR = 0.3
 """B 鏡頭（camera = snap）每一下快推多久（秒）。標註的圓點 0.45 秒彈出、字 0.3 秒後才開始淡入：鏡頭在字出來之前就停穩，
 讀字時畫面不動。0.3 秒＝30 fps 的 9 幀；曲線（強 ease-out）在引擎 t3_finance_chart.js 的 SNAP_EASE。"""
@@ -421,11 +425,44 @@ def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: Vid
                 cues.append(ct)
         shots.append(ShotTiming(shot, f0, f1, cues))
 
+    if not problems:
+        _check_number_holds(shots, fps, outro_start, problems)
     if problems:
         raise ProjectError(problems, title="時間軸對不起來")
     return Timeline(fps=fps, segments=segs, shots=shots, narration_end=narration_end,
                     outro=Outro(start_frame=outro_start, frames=total - outro_start),
                     total_frames=total)
+
+
+def _check_number_holds(shots: list[ShotTiming], fps: int, outro_start: int, problems: list[str]) -> None:
+    """每個數字（number cue）落定之後在畫面上停滿 NUMBER_HOLD 秒。數字留到它那一串結束（接續分鏡沿用）；
+    圖上右上角的大數字被後面接續分鏡自己的大數字換掉時，留到那個分鏡切入。"""
+    i = 0
+    while i < len(shots):
+        if shots[i].shot.chart is None:
+            i += 1
+            continue
+        j = i + 1
+        while j < len(shots) and shots[j].shot.continues and shots[j].shot.chart is not None:
+            j += 1
+        chain, layout = shots[i:j], shots[i].shot.chart.data.get("chart", "bar")
+        for k, st in enumerate(chain):
+            for c in st.cues:
+                if c.kind != "number" or c.carried:
+                    continue
+                end = chain[-1].end_frame
+                if layout not in ("number", "compare"):
+                    nxt = next((x for x in chain[k + 1:] if any(q.kind == "number" for q in x.shot.chart.cues)), None)
+                    end = nxt.start_frame if nxt is not None else end
+                hold = (end - c.frame) / fps
+                if hold < NUMBER_HOLD - 1e-9:
+                    then = "旁白就唸完了" if end >= outro_start else "就切走"
+                    problems.append(
+                        f"{c.where}（數字）在 {c.frame / fps:.2f} 秒落定，{end / fps:.2f} 秒{then}，只停 {max(hold, 0):.2f} 秒："
+                        f"落定後至少要停 {NUMBER_HOLD:g} 秒，觀眾才看得清楚（不然看到的是滾到一半的數）。"
+                        "把 at 改到唸到這個數字的那個詞的開頭（edge 用 start，數字在 at 之前就開始滾，唸到時已經落定），"
+                        "或把下一個分鏡的切入點往後移、讓旁白在數字後面多半句")
+        i = j
 
 
 def vox_head(shots: list[Shot], i: int) -> int:
