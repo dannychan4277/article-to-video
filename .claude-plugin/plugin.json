@@ -3,5 +3,6 @@
   "description": "把自己的財經文章做成解說影片（全片財經圖表、文章的圖照數字重畫，zh-TW AI 配音，燒好字幕）",
   "author": { "name": "Danny Chan" },
   "repository": "https://github.com/dannychan4277/article-to-video",
+  "license": "MIT",
   "keywords": ["video", "explainer", "finance", "zh-TW"]
 }

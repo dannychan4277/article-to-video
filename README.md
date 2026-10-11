@@ -62,7 +62,7 @@
 - **不是投資建議。** 每支片的片尾都會註明「僅供教育，非投資建議」。
 - **內嵌的動畫引擎。** `src/article_to_video/engine/` 是 huashu-art-motion 引擎的修改版，採 MIT 授權，作者是花叔（alchaincyf · 花生，[huasheng.ai](https://www.huasheng.ai)）。原授權文字見 [`engine/LICENSE`](src/article_to_video/engine/LICENSE)，修改紀錄見 [`engine/NOTICE.md`](src/article_to_video/engine/NOTICE.md)。
 - **字型。** 隨外掛附帶的字型是思源黑體 Noto Sans CJK TC 的子集，以及 Roboto Condensed，都採 SIL Open Font License 1.1：可以燒進影片、可以商用，但不能單獨販售字型檔。詳見 [`engine/lib/fonts/LICENSES.md`](src/article_to_video/engine/lib/fonts/LICENSES.md) 與 [`OFL.txt`](src/article_to_video/engine/lib/fonts/OFL.txt)。
-- **外掛本身的程式碼。** 授權待定。
+- **外掛本身的程式碼。** MIT 授權，版權人 Danny Chan，全文見 [`LICENSE`](LICENSE)。上面的內嵌引擎維持花叔原本的 MIT 授權（`engine/LICENSE`），字型維持各自的 OFL，不因為外掛的授權而改變。
 
 ## 給維護者
 

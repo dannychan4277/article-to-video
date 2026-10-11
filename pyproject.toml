@@ -3,6 +3,8 @@ name = "article-to-video"
 version = "0.1.0"
 description = "把作者自己的財經文章做成解說影片的 Claude Code 外掛（財經圖表、zh-TW AI 配音）"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "certifi>=2024",
     "edge-tts>=7,<8",

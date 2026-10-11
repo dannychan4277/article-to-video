@@ -40,3 +40,16 @@ def test_the_installed_commit_is_what_an_issue_report_calls_the_plugin_version(t
     installed.mkdir(parents=True)
     assert "3f2a9c1b7d4e" in plugin_version(installed)
     assert plugin_version(tmp_path / "article-to-video")  # 開發中的 repo：Python 套件的版本
+
+
+def test_the_plugin_is_mit_and_the_embedded_engine_keeps_its_own_license():
+    """外掛本身 MIT（版權人 Danny Chan）；內嵌引擎維持花叔的 MIT、字型維持 OFL，不能被外掛的授權蓋掉。"""
+    plugin = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    assert plugin["license"] == "MIT"
+    ours = (ROOT / "LICENSE").read_text(encoding="utf-8")
+    assert ours.startswith("MIT License") and "Copyright (c) 2026 Danny Chan" in ours
+    engine = ROOT / "src" / "article_to_video" / "engine"
+    assert "alchaincyf" in (engine / "LICENSE").read_text(encoding="utf-8")
+    assert (engine / "lib" / "fonts" / "OFL.txt").is_file()
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "授權待定" not in readme and "[`LICENSE`](LICENSE)" in readme
