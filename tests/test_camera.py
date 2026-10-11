@@ -83,17 +83,18 @@ SHOTS = [
     {"id": "SH05", "start": _a("s05"), "chart": {
         "data": {"title": "倒掛了很久", "unit": "示意數據", "source": SOURCE, "chart": "number"},
         "cues": [{"at": 0, "kind": "title"},
-                 {"at": _a("s05", "三百天", "end"), "kind": "number", "text": "連續倒掛", "data": {"value": 300, "suffix": " 天"}}]}},
+                 {"at": _a("s05", "三百天"), "kind": "number", "text": "連續倒掛", "data": {"value": 300, "suffix": " 天"}}]}},
     {"id": "SH06", "start": _a("s06"), "chart": {
         "data": {"title": "甲組比乙組高", "unit": "示意數據，%", "source": SOURCE, "chart": "compare", "decimals": 1,
                  "suffix": "%", "series": [{"label": "甲組", "value": 1.2}, {"label": "乙組", "value": 0.8}],
                  "highlight": {"index": 0}},
         "cues": [{"at": 0, "kind": "title"},
-                 {"at": _a("s06", "一點二", "end"), "kind": "number", "data": {"index": 0}},
-                 {"at": _a("s06", "零點八", "end"), "kind": "number", "data": {"index": 1}},
+                 {"at": _a("s06", "一點二"), "kind": "number", "data": {"index": 0}},
+                 {"at": _a("s06", "零點八"), "kind": "number", "data": {"index": 1}},
                  {"at": _a("s06", "甲高"), "kind": "highlight"}]}},
+    # 從「零點四」切進來、差距晚 0.5 秒落定：差距的動畫在落定前 0.55 秒開始，寫在詞的開頭會在切點前就畫一半、切點跳出來
     {"id": "SH06B", "start": _a("s06", "零點四"), "continues": True, "chart": {
-        "data": {}, "cues": [{"at": _a("s06", "個百分點", "end"), "kind": "gap", "text": "高", "data": {"suffix": " 個百分點"}}]}},
+        "data": {}, "cues": [{"at": {**_a("s06", "零點四"), "offset": 0.5}, "kind": "gap", "text": "高", "data": {"suffix": " 個百分點"}}]}},
     # 引擎沒畫出來：第二個 bar cue 沒寫 index，引擎只照第一個 bar cue 長柱子，這一個什麼都不畫（分鏡設定說這一刻有東西）
     {"id": "SH07", "start": _a("s07"), "chart": {
         "data": {"title": "第二下什麼都沒畫", "unit": "示意數據，%", "source": SOURCE, "chart": "bar", "decimals": 1,

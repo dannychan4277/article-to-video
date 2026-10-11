@@ -101,6 +101,7 @@ __all__ = [
     "parse_derived",
     "read_article",
     "reconcile",
+    "spoken_numbers",
     "summary_line",
 ]
 
@@ -285,6 +286,35 @@ def find_numbers(text: str) -> list[FoundNumber]:
         found.append(FoundNumber(text[m.start():m.end()], sign * value, quantum, m.start(), m.end(),
                                  bare=sign * value / unit if unit != 1 else None,
                                  unit=_unit(m.group("pct") or (after.group(0) if after else ""))))
+    return sorted(found, key=lambda f: f.start)
+
+
+_SPOKEN_RUN_RE = re.compile(rf"[{_CN_CHARS}]+")
+_MONTH_RE = re.compile(r"\s*月")
+
+
+def spoken_numbers(text: str) -> list[FoundNumber]:
+    """旁白裡聽得出來的數字（標註對時用，見 label_timing.py）：find_numbers 找到的，加上它為了數字對帳故意不算的兩種——
+    帶十、百、千、萬的中文整數（「七百八十二天」「二十年」）和月份（「九月」「十二月」）。只拿來跟畫面上的數字比時間，
+    不對出處（「一天」「三個月」這種詞進了數字對帳會要出處）。"""
+    found = find_numbers(text)
+    norm = _normalize(text)
+    taken = [False] * len(norm)
+    for f in found:
+        for i in range(f.start, f.end):
+            taken[i] = True
+    for m in _SPOKEN_RUN_RE.finditer(norm):
+        run = m.group(0)
+        if any(taken[m.start():m.end()]) or run[0] not in _CN_DIGITS and run[0] != "十":
+            continue
+        month = _MONTH_RE.match(norm, m.end()) is not None and len(run) <= 3
+        if not month and (len(run) < 2 or not any(c in "十百千萬万億亿兆" for c in run)):
+            continue
+        parsed = _chinese_int(run)
+        if parsed is None or (month and not 1 <= parsed[0] <= 12):
+            continue
+        value = Fraction(parsed[0])
+        found.append(FoundNumber(text[m.start():m.end()], value, Fraction(parsed[1]), m.start(), m.end()))
     return sorted(found, key=lambda f: f.start)
 
 

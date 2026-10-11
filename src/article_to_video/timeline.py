@@ -224,7 +224,7 @@ class Timeline:
     outro: Outro
     total_frames: int
     notes: tuple[str, ...] = ()
-    """提醒（不擋建置）：preview／build 印出來給 Claude 改，例數字落定後停不到 NUMBER_HOLD 秒。"""
+    """提醒（不擋建置）：preview／build 印出來給 Claude 改，例數字落定後停不到 NUMBER_HOLD 秒、標註比旁白晚（label_timing.py）。"""
 
     @property
     def duration(self) -> float:
@@ -438,9 +438,13 @@ def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: Vid
 
     if problems:
         raise ProjectError(problems, title="時間軸對不起來")
-    return Timeline(fps=fps, segments=segs, shots=shots, narration_end=narration_end,
-                    outro=Outro(start_frame=outro_start, frames=total - outro_start),
-                    total_frames=total, notes=tuple(_dead_main_cues(shots) + _number_holds(shots, fps, outro_start)))
+    from article_to_video.label_timing import timing_notes  # 避免循環匯入（它用 numbers 找數字，numbers 匯入這裡）
+
+    tl = Timeline(fps=fps, segments=segs, shots=shots, narration_end=narration_end,
+                  outro=Outro(start_frame=outro_start, frames=total - outro_start), total_frames=total)
+    holds = _number_holds(shots, fps, outro_start)
+    notes = _dead_main_cues(shots) + [note for _, note in holds] + timing_notes(project, tl, skip=[w for w, _ in holds])
+    return replace(tl, notes=tuple(notes))
 
 
 def _carried_at(ct: CueTiming, own_frame: Mapping[str, int], f0: int, fps: int) -> CueTiming:
@@ -491,10 +495,11 @@ def _carry_label_in_transition(shots: list[Shot], n: int, cues: list[CueTiming],
     return cues[:k] + [extra] + cues[k:]
 
 
-def _number_holds(shots: list[ShotTiming], fps: int, outro_start: int) -> list[str]:
+def _number_holds(shots: list[ShotTiming], fps: int, outro_start: int) -> list[tuple[str, str]]:
     """提醒（不擋）：每個數字（number cue）落定之後要在畫面上停滿 NUMBER_HOLD 秒。數字留到它那一串結束（接續分鏡沿用）；
-    圖上右上角的大數字被後面接續分鏡自己的大數字換掉時，留到那個分鏡切入。只提醒不擋：舊片照舊建得出來，preview／build 印出來給 Claude 改。"""
-    notes: list[str] = []
+    圖上右上角的大數字被後面接續分鏡自己的大數字換掉時，留到那個分鏡切入。只提醒不擋：舊片照舊建得出來，preview／build 印出來給 Claude 改。
+    回傳 (cue 的位置, 提醒)：同一個 cue 的「比旁白晚／早」（label_timing）就不再另外提醒。"""
+    notes: list[tuple[str, str]] = []
     i = 0
     while i < len(shots):
         if shots[i].shot.chart is None:
@@ -515,11 +520,11 @@ def _number_holds(shots: list[ShotTiming], fps: int, outro_start: int) -> list[s
                 hold = (end - c.frame) / fps
                 if hold < NUMBER_HOLD - 1e-9:
                     then = "旁白就唸完了" if end >= outro_start else "就切走"
-                    notes.append(
+                    notes.append((c.where,
                         f"{c.where}（數字）在 {c.frame / fps:.2f} 秒落定，{end / fps:.2f} 秒{then}，只停 {max(hold, 0):.2f} 秒："
                         f"落定後要停 {NUMBER_HOLD:g} 秒以上，觀眾才看得清楚（不然看到的是滾到一半的數，審片會判必修）。"
                         "把 at 改到唸到這個數字的那個詞的開頭（edge 用 start，數字在 at 之前就開始滾，唸到時已經落定），"
-                        "或把下一個分鏡的切入點往後移、讓旁白在數字後面多半句")
+                        "或把下一個分鏡的切入點往後移、讓旁白在數字後面多半句"))
         i = j
     return notes
 

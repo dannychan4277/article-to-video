@@ -27,6 +27,9 @@ qa（內嵌引擎的 engine/qa.py，原樣使用）：在 Chromium 裡把片段�
   近空白      持續 ≥ 1 秒 fail，其他 warn         同左                              同左
   字幕帶      壓進去累計 ≥ 0.3 秒 fail，其他 warn  不查（牛皮紙紋理會誤報）           直式查平台介面區；橫式沒字幕不查
   停太久      旁白期間 > 5 秒沒有新畫面事件 warn（換圖、新的柱／線／標註／卡片／框；慢推不算）
+  標註對時    warn（label_timing.py，只看時間軸）：比旁白晚＝旁白唸到數字之後 0.5 秒以上，標註、大數字、差距、強調才看得清楚；
+              數字比旁白早＝會滾的大數字比旁白唸到它早 1 秒以上落定；標註停太短＝標註出現不到 1.5 秒就被換掉；
+              標註閃一下＝同一點、同一句字只改第二行（引擎整個淡出再長出來）
 理由寫在各常數旁邊。
 
 快推（圖表鏡頭 camera = snap，spec 有 data.camera）：畫面平常停住，標註出現時快推一下（timeline.py）。
@@ -54,7 +57,8 @@ Vox 的「字進字幕帶」：qa 只看字有沒有掉進底部那一條（整�
 真的蓋到的那幾段；字幕框裡只有桌面、紙的就不算。放 build/<比例>/checks/subzone/<片段>.json。
 財經圖表不套這個（白底上的字一掉進那一條就算，字幕帶的像素檢查照舊）。
 
-代號（接受不改時用，見 check_log.py）：qa:<片段>:<檢查>@<片段雜湊前 8 碼>、band:<片段>@…、hold:<分鏡>@…。
+代號（接受不改時用，見 check_log.py）：qa:<片段>:<檢查>@<片段雜湊前 8 碼>、band:<片段>@…、hold:<分鏡>@…、
+late:／early:／short:／flash:<分鏡>:<第幾個 cue>@…（標註對時）。
 片段改了代號就變，舊的接受不會套到新畫面上。
 """
 
@@ -75,7 +79,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from article_to_video.progress import Log, quiet
-from article_to_video.check_log import load_log, now, resolution
+from article_to_video.check_log import AUTO_PREFIXES, load_log, now, resolution
 from article_to_video.clip_cache import clip_hash, clip_is_current, clip_stamp
 from article_to_video.commands import cli_command
 from article_to_video.end_card import END_CARD_ID
@@ -131,6 +135,10 @@ CHECK_LABELS = {
     "blank": "近空白",
     "band": "字幕帶",
     "hold": "停太久",
+    "late-label": "比旁白晚",
+    "early-number": "數字比旁白早",
+    "short-label": "標註停太短",
+    "label-flash": "標註閃一下",
 }
 
 # 動態：相鄰兩幀幾乎沒變（< 0.05% 像素）的幀對占幾 %。財經圖表平常一直在慢推，實測 3～17%；
@@ -189,7 +197,7 @@ class Finding:
     token: str
     """代號（接受這一項時用）：qa:<片段>:<檢查>@<片段雜湊前 8 碼>。片段改了代號就變。"""
     source: str
-    """"qa"、"band"（字幕帶）、"hold"（停太久）。"""
+    """"qa"、"band"（字幕帶）、"hold"（停太久）、"timing"（標註對時，label_timing.py）。"""
     check: str
     """CHECK_LABELS 的鍵。"""
     status: str
@@ -686,7 +694,7 @@ def _findings(plan: BuildPlan, clips: Sequence[ClipCheck]) -> list[Finding]:
             times = tuple((_clip_time(cp, fps, a), _clip_time(cp, fps, b)) for a, b in spans)
             token = _token(source, cc, check) if source == "qa" else f"band:{cc.clip_id}@{cc.hash[:8]}"
             out.append(Finding(token, source, check, status, cc.clip_id, _shots_at(plan, cc, times), times, msg))
-    return out + _hold_findings(plan, clips)
+    return out + _hold_findings(plan, clips) + _timing_findings(plan, clips)
 
 
 def _hold_findings(plan: BuildPlan, clips: Sequence[ClipCheck]) -> list[Finding]:
@@ -713,6 +721,25 @@ def _hold_findings(plan: BuildPlan, clips: Sequence[ClipCheck]) -> list[Finding]
         out.append(Finding(f"hold:{sid}@{cc.hash[:8]}", "hold", "hold", "warn", cc.clip_id, (sid,), times,
                            f"{secs:.1f} 秒沒有新的畫面（慢推不算新資訊）：一句旁白至少配一個新東西，"
                            "或把這段拆成兩個分鏡"))
+    return out
+
+
+_TIMING_CHECKS = {"late": "late-label", "early": "early-number", "short": "short-label", "flash": "label-flash"}
+
+
+def _timing_findings(plan: BuildPlan, clips: Sequence[ClipCheck]) -> list[Finding]:
+    """標註對時（label_timing.py）：標註、數字比旁白晚或早，標註停太短。只看時間軸，跟 qa 跑沒跑無關。只提醒，不擋出片。
+    代號綁在那個分鏡的片段內容上（錨點改了，片段的 spec 就變了，代號跟著變）。"""
+    from article_to_video.label_timing import timing_issues  # 避免循環匯入
+
+    clip_of = {sid: cc for cc in clips for sid in cc.shot_ids}
+    out: list[Finding] = []
+    for i in timing_issues(plan.project, plan.timeline):
+        cc = clip_of.get(i.shot_id)
+        if cc is None:
+            continue
+        out.append(Finding(f"{i.kind}:{i.shot_id}:{i.cue_index}@{cc.hash[:8]}", "timing", _TIMING_CHECKS[i.kind], "warn",
+                           cc.clip_id, (i.shot_id,), ((round(i.start, 3), round(i.end, 3)),), i.message))
     return out
 
 
@@ -931,7 +958,7 @@ def format_report(plan: BuildPlan, report: CheckReport) -> str:
 
 def resolve_hint(root: Path, tokens: Sequence[str], data_dir: str | os.PathLike | None = None) -> str:
     """還沒處理的必修怎麼處理：改（build 重建驗證；獨立審片的改好之後記下來）或接受不改。"""
-    review = [t for t in tokens if not t.startswith(("qa:", "band:", "hold:"))]
+    review = [t for t in tokens if not t.startswith(AUTO_PREFIXES)]
     lines = ["要改：改分鏡設定再 build 驗證（自動檢查的問題：改過的片段 checks 會重查，不用記）。"]
     if review:
         lines.append("  獨立審片的問題改好、重建看過之後記下來："
@@ -975,6 +1002,10 @@ _PLAIN = {
     "blank": "畫面幾乎是空的",
     "band": "畫面上的字或圖壓到字幕的位置，會被字幕蓋住",
     "hold": "超過 5 秒沒有新的畫面，觀眾會覺得停住了",
+    "late-label": "旁白已經唸到這個數字，畫面上的標註（或數字）還沒出來",
+    "early-number": "數字比旁白早好幾秒就數完，畫面空等",
+    "short-label": "標註出現沒多久就換掉，來不及讀",
+    "label-flash": "標註只加一行字，整個標註卻消失一下又出來，像閃了一下",
 }
 """審片頁上給作者看的白話（檢查名稱、像素位置這些給 Claude 的寫在代號那一區）。"""
 

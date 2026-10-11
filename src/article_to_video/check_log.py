@@ -59,7 +59,8 @@ def resolution(log: dict[str, Any], token: str) -> dict[str, Any] | None:
     return r if isinstance(r, dict) and r.get("status") in RESOLVED else None
 
 
-AUTO_PREFIXES = ("qa:", "band:", "hold:")
+AUTO_PREFIXES = ("qa:", "band:", "hold:", "late:", "early:", "short:", "flash:")
+"""自動檢查的代號開頭（qa、字幕帶、停太久、標註對時）：改了分鏡重建就會重查，不用標「改好了」。"""
 
 
 def known_tokens(project_dir: str | os.PathLike) -> dict[str, str]:

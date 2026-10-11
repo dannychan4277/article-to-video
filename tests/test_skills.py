@@ -286,7 +286,10 @@ def test_json_formats_in_the_skill_docs_are_valid_projects(tmp_path):
     assert [(f.figure, f.number.text) for f in project.figure_numbers] == [("圖1", "4.58"), ("圖1", "3.96"), ("圖1", "2020")]
     from article_to_video.build import plan_build
 
-    plan_build(tmp_path, tts="fake")  # 時間軸也排得出來：錨點都在自己的分鏡裡（接續分鏡的 bar cue）
+    lines: list[str] = []
+    plan_build(tmp_path, tts="fake", log=lines.append)  # 時間軸也排得出來：錨點都在自己的分鏡裡（接續分鏡的 bar cue）
+    # 照抄也沒有提醒（計時實測：照舊範例把標註錨在數字唸完，第 1 輪審片 5 項必修全是標註比旁白晚）
+    assert not [line for line in lines if line.startswith("提醒：")], lines
 
 
 def test_the_card_and_comparison_example_in_formats_md_is_a_valid_project(tmp_path):
