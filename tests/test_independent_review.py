@@ -481,6 +481,32 @@ def test_rounds_recorded_before_this_change_fall_back_to_the_whole_film(project)
     assert [p["id"] for p in m["previous"]] == ["R1-1"] and [k["id"] for k in m["known"]] == ["R1-2"]
 
 
+def _legacy_round(n: int, items: list[dict]) -> dict:
+    """舊專案的一輪：沒記 scope（當時都是整支片）、沒記 shotHashes（比不出改了哪些）。"""
+    return {"round": n, "aspect": "16x9", "videoKey": "舊的成片", "score": 7, "summary": "", "previous": [],
+            "items": [{"id": f"R{n}-{k + 1}", "shot": 2, "shotId": "SH02", "time": 6.0, **it} for k, it in enumerate(items)]}
+
+
+def test_an_old_round_without_must_fixes_says_no_review_is_needed_without_contradicting_itself(project):
+    """示範：舊專案沒有待核的必修，build 之後印「獨立審片不用再審（…比不出改了哪些，整支片審）」——同一句又說不用審、
+    又說整支片審。改成：沒有待核的必修＝不用再審、沒有要核的（真的要重看用 --full）；有待核的必修＝照舊整支片再審一輪。"""
+    log = {"version": 1, "rounds": [_legacy_round(1, [{"severity": "該修", "title": "標註太小"}])], "resolutions": {}}
+    (project / "check_log.json").write_text(json.dumps(log, ensure_ascii=False), encoding="utf-8")
+    built = run_cli("build", str(project), "--tts", "fake", "--no-open")
+    assert built.returncode == 0, built.stdout + built.stderr
+    (line,) = [ln for ln in built.stdout.splitlines() if "獨立審片" in ln]
+    assert "不用再審" in line and "沒有必修" in line and "--full" in line, line
+    assert "比不出改了哪些，整支片審" not in built.stdout
+
+    # 有待核的必修（整支片已經審了兩輪）：比不出改了哪些，就整支片再審一輪核對
+    log["rounds"].append(_legacy_round(2, [{"severity": "必修", "title": "標註指錯柱"}]))
+    (project / "check_log.json").write_text(json.dumps(log, ensure_ascii=False), encoding="utf-8")
+    again = run_cli("build", str(project), "--tts", "fake", "--no-open")
+    assert again.returncode == 0, again.stdout + again.stderr
+    (step,) = [ln for ln in again.stdout.splitlines() if "獨立審片（" in ln]
+    assert "整支片" in step and "review-prep" in step and "不用再審" not in again.stdout
+
+
 def test_reporting_an_issue_packs_the_review_rounds(project, tmp_path):
     import zipfile
 

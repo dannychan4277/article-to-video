@@ -24,7 +24,7 @@
   - 上一輪沒有必修（或必修都核過了）就不用再審（needed=False）：Claude 改了該修，自己看改到的靜態圖、checks 確認。
     作者要求大改時 Claude 照 skill 再審一輪，這時也只看改過的分鏡。
   每一輪記下審的範圍（scope）和那份成片每個分鏡的內容雜湊（shotHashes），下一輪拿來比「改過」。
-  舊的紀錄沒有 shotHashes：比不出改了哪些，就整支片審。
+  舊的紀錄沒有 shotHashes：比不出改了哪些——有待核的必修就整支片審；沒有就不用再審（真的要重看只能 --full 整支片）。
 
 審片頁：review_contributor(data_dir) 每張卡列這個分鏡的問題，頁首一區總評。必修沒處理（resolve 沒標改好、也沒接受）
 擋出片：publish 的 auto_checks.require_checks_cleared 會問 unresolved_must()（build 只列出來，不擋）。
@@ -369,8 +369,11 @@ def next_round(plan: BuildPlan) -> NextRound:
     if from_full and fulls < MAX_FULL_ROUNDS:
         return NextRound(FULL, f"整支片審的那一輪有必修（{'、'.join(from_full)}），改好之後整支片再審一輪核對", True,
                          changed, since)
-    if since is None:
-        return NextRound(FULL, f"第 {last.get('round')} 輪的紀錄沒有記分鏡內容，比不出改了哪些，整支片審", bool(pending))
+    if since is None and pending:
+        return NextRound(FULL, f"第 {last.get('round')} 輪的紀錄沒有記分鏡內容，比不出改了哪些，整支片審", True)
+    if since is None:  # 舊紀錄、沒有要核的：不用再審；硬要審只能整支片（沒有能比的）
+        return NextRound(FULL, f"第 {last.get('round')} 輪之後沒有必修要核對；那一輪的紀錄沒記分鏡內容、比不出改了哪些，"
+                               "真的要重看就 review-prep 加 --full 審整支片", False)
     if pending:
         ids = "、".join(it["id"] for _, it in pending)
         if not changed:
