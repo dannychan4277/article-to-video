@@ -1029,6 +1029,8 @@ def number_review(plan: BuildPlan) -> ReviewExtras:
             notes.insert(0, figures)
         if n_bad:
             notes.insert(0, f"有 {n_bad} 個數字找不到出處，擋下出片。")
+        if not items and st.shot.continues and not notes:
+            continue  # 接續上一張、沒有新的數字：卡上已經掛著「接續上一張」，數字記在上一張
         if not items:
             notes.append("沿用上一張的數字" if st.shot.continues else "畫面上沒有數字")
         if n_bad or figures:
@@ -1039,7 +1041,7 @@ def number_review(plan: BuildPlan) -> ReviewExtras:
                                       rest_summary=f"其他 {ok} 個數字都對得到出處")]
             continue
         # 每個數字都對得到出處：安靜的一行，點開看每個數字的出處
-        summary = f"{len(rep.shots[sid])} 個數字都有出處" if items else " ".join(notes)
+        summary = "數字都有出處" if items else " ".join(notes)
         cards[sid] = [CardSection("numbers", "畫面上的數字與出處", items, note=" ".join(notes), summary=summary)]
     bad = rep.unsourced
     if bad:

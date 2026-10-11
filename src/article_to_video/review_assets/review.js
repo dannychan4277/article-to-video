@@ -96,7 +96,7 @@
 
   function showCount() {
     var n = buildText().count;
-    setStatus(n ? '已寫 ' + n + ' 則留言。寫完按「複製給 Claude」。' : '在卡片下方的格子寫想改的地方，寫完按「複製給 Claude」。');
+    setStatus(n ? '已寫 ' + n + ' 則留言。寫完按「複製給 Claude」。' : '寫好留言，按「複製給 Claude」。');
   }
 
   function onEdit() {

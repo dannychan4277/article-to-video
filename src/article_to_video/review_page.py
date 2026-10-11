@@ -179,6 +179,12 @@ def timecode(seconds: float) -> str:
     return f"{tenths // 600}:{tenths % 600 / 10:04.1f}"
 
 
+def clock(seconds: float) -> str:
+    """卡片上的時間：分:秒，四捨五入到整秒（例 65.5 → 1:06）。"""
+    s = int(seconds + 0.5)
+    return f"{s // 60}:{s % 60:02d}"
+
+
 def _asset(name: str) -> str:
     return (_ASSETS / name).read_text(encoding="utf-8")
 
@@ -242,15 +248,17 @@ def _slots(sections: Sequence[CardSection]) -> str:
     return "".join(out)
 
 
-def _card(c: CardModel, has_video: bool) -> str:
-    span = f"{timecode(c.start)}–{timecode(c.end)}"
+def _card(c: CardModel, has_video: bool, *, badge: bool = True) -> str:
+    """一張分鏡卡。badge＝改過的卡要不要掛「這版改過」（每個分鏡都改過時頁首說一次就好，卡上不掛）。"""
+    span = f"{clock(c.start)}–{clock(c.end)}"
+    exact = f"{timecode(c.start)}–{timecode(c.end)}"  # 到十分之一秒：滑鼠停上去才看得到
     if has_video:
         tc = (f'<button type="button" class="timecode seek" data-start="{c.start:.3f}" '
-              f'title="成片跳到這一段">{span} ▶</button>')
+              f'title="{exact}：成片跳到這一段">{span} ▶</button>')
     else:
-        tc = f'<span class="timecode" data-start="{c.start:.3f}">{span}</span>'
+        tc = f'<span class="timecode" data-start="{c.start:.3f}" title="{exact}">{span}</span>'
     badges = ""
-    if c.changed:
+    if c.changed and badge:
         badges += '<span class="badge changed">這版改過</span>'
     if c.continues:
         badges += '<span class="badge tag">接續上一張</span>'
@@ -269,8 +277,7 @@ def _card(c: CardModel, has_video: bool) -> str:
             f'</a></figure>'
             for s in moments
         )
-        media += (f'<p class="moments-title" title="每個新畫面出現之前的樣子">過程</p>'
-                  f'<div class="moments">{figs}</div>')
+        media += f'<div class="moments" title="過程：每個新畫面出現之前的樣子">{figs}</div>'
 
     narr = "".join(
         f'<p>{"…" if mid_start else ""}{_e(text)}{"…" if mid_end else ""}</p>' for text, mid_start, mid_end in c.narration
@@ -282,7 +289,7 @@ def _card(c: CardModel, has_video: bool) -> str:
         f'<div class="card-media">{media}</div>'
         f'<div class="card-body">'
         f'<header class="card-head"><h2>分鏡 {c.number}</h2>{tc}{badges}</header>'
-        f'<div class="narration"><h3>旁白</h3>{narr}</div>'
+        f'<div class="narration" role="group" aria-label="旁白">{narr}</div>'
         f'{_slots(c.sections)}'
         f'<label class="field" for="c-{sid}">想改什麼？</label>'
         f'<textarea id="c-{sid}" class="comment" data-shot-id="{sid}" rows="3" '
@@ -350,7 +357,7 @@ def render_review_html(m: PageModel) -> str:
         + "</ul></div>"
         for title, desc, examples in MENU
     )
-    n_comments_hint = "在卡片下方的格子寫想改的地方，寫完按「複製給 Claude」。"
+    n_comments_hint = "寫好留言，按「複製給 Claude」。"
     return f"""<!doctype html>
 <html lang="zh-Hant-TW" data-stage="{_e(m.stage)}" data-version="{m.version}" data-aspect="{_e(m.aspect)}">
 <head>
@@ -370,8 +377,7 @@ def render_review_html(m: PageModel) -> str:
 </div></header>
 <main class="wrap">
 <section class="panel howto"><h2>怎麼用這一頁</h2><ol>
-<li>一張卡一個分鏡：大圖是最後的畫面，小圖是過程，配上那段旁白。點圖看大張。</li>
-<li>想改哪裡就寫在那張卡的「想改什麼？」，整支片的意見寫在最下面的「整體意見」。</li>
+<li>一張卡一個分鏡（大圖是最後的畫面，小圖是過程）。想改哪裡就寫在那張卡的「想改什麼？」，整支片的意見寫在最下面。</li>
 <li>寫完按最下方的「複製給 Claude」，貼回 Claude 的對話框。寫到一半關掉，留言也會留著。</li>
 </ol></section>
 <section class="panel notice" id="carry" hidden><p id="carry-text"></p>
@@ -381,10 +387,10 @@ def render_review_html(m: PageModel) -> str:
 {film}
 {page_slots}
 <section class="cards" aria-label="分鏡">
-{chr(10).join(_card(c, has_video) for c in m.cards)}
+{chr(10).join(_card(c, has_video, badge=not all(x.changed for x in m.cards)) for c in m.cards)}
 </section>
 <section class="panel overall-box"><h2><label for="overall">整體意見</label></h2>
-<p class="hint">不屬於某一張的意見寫這裡，例如整支片的節奏、聲音、配樂。</p>
+<p class="hint">例如整支片的節奏、聲音、配樂。</p>
 <textarea id="overall" class="overall" rows="4" placeholder="例：整體節奏有點快／聲音想換一個"></textarea></section>
 <section class="panel menu" id="menu"><details class="menu-fold">
 <summary><h2>能加什麼？</h2><span class="hint">點開看範例講法</span></summary>

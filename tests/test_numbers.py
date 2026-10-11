@@ -202,10 +202,10 @@ def test_with_every_number_sourced_the_build_passes_and_each_card_shows_the_sour
     """session 的測試專案（每個數字都在文章裡）照常出片；卡片上列出數字與出處。"""
     page = read_review(built_project.dir)
     assert page.attrs["data-stage"] == "review"
-    sh01, sh02 = (c.slots["numbers"] for c in page.cards)
+    sh01, sh02 = (c.slots.get("numbers", "") for c in page.cards)
     for needle in ("2023", "4.58%", "3.96%", "原文", "原文第 1 段"):
         assert needle in sh01, f"分鏡 1 的數字對帳少了「{needle}」：{sh01}"
-    assert "無出處" not in sh01 and "沿用" in sh02
+    assert "無出處" not in sh01 and not sh02.strip()  # 接續上一張、沒有新的數字：卡上掛著「接續上一張」，不再多寫一行
     assert "都有出處" in page.page_slots["numbers"]
 
 

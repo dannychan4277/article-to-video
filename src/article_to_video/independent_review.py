@@ -597,11 +597,15 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
             done = [ci for ci, _ in items if ci.label in ("已修好", "已接受")]
             open_ = [ci for ci, tuck in items if ci.label not in ("已修好", "已接受") and not tuck]
             later = [ci for ci, tuck in items if ci.label not in ("已修好", "已接受") and tuck]
+            handled = f"已處理 {len(done)} 項（點開看）"
+            if not (open_ or later or note):
+                return [CardSection("review", title, done, summary=f"{title}：{handled}")] if done else []
+            if not later:  # 已處理的接在還沒處理的後面，收成一行
+                return [CardSection("review", title, open_, note=note, rest=done, rest_summary=handled)]
             out = [CardSection("review", title, open_, note=note, rest=later,
-                               rest_summary=f"另外 {len(later)} 項可改，寫在各分鏡卡上（點開看）")
-                   ] if open_ or later or note else []
+                               rest_summary=f"另外 {len(later)} 項可改，寫在各分鏡卡上（點開看）")]
             if done:
-                out.append(CardSection("review", title, done, summary=f"{title}：已處理 {len(done)} 項（點開看）"))
+                out.append(CardSection("review", title, done, summary=f"{title}：{handled}"))
             return out
 
         cards: dict[str, list] = {}
