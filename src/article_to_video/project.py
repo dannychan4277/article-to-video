@@ -83,9 +83,11 @@ CAMERAS = {
     "snap": "停住，標註出現時快推一下",
 }
 """財經圖表的鏡頭（設定 camera）：slow＝A、snap＝B。怎麼動見 timeline.py 開頭與 engine/clips/t3_finance_chart.js。"""
-DEFAULT_CAMERA = "slow"
-"""新做的片預設用哪一種鏡頭。**要換預設只改這一行**（再改 skills/make-video/references/formats.md「圖表鏡頭」一節的「預設」字樣）：
-使用者設定沒寫 camera 的、新專案第一次建置時，都從這裡拿；已經有設定快照的舊片照舊（見 user_settings.snapshot_into_project）。"""
+DEFAULT_CAMERA = "snap"
+"""新做的片預設用哪一種鏡頭（2026-10-11 盲評兩位都偏好快推，Danny 定為預設；之前是 slow）。**要換預設只改這一行**
+（再改 skills/make-video/references/formats.md「圖表鏡頭」一節的「預設」字樣）：使用者設定沒寫 camera 的、新專案第一次建置時，
+都從這裡拿；已經有設定快照的片照舊——快照裡沒有 camera 的（有這個設定之前做的）一律補 slow，重建不換鏡頭
+（見 user_settings.snapshot_into_project）。"""
 
 # t3_finance_chart 認得的 data 欄位（pushFrom 由建置自己算，不讓人寫）＋ publicData（公有數據：
 # 寫系列名稱取代 series 與 source，建置時抓數據換成實際數列、自動寫來源行，見 public_data.py）
