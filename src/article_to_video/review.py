@@ -9,7 +9,7 @@
 鍵＝片段雜湊（spec＋引擎檔＋圖片）＋要渲的時刻，內容沒變就不重渲；並行渲。
 
 版本（build/<比例>/review.json）：**跟著作者看到的走**。每個分鏡有內容雜湊（它自己畫面上的東西＋長度＋它唸的旁白，
-見 _shot_hashes；照分鏡算，不照片段算）。
+見 shot_hashes；照分鏡算，不照片段算）。
 - 打開給作者看（make_review(shown=True)：open-review，或 preview／build 沒加 --no-open）才算一版：
   內容跟作者上次看到的一樣就沿用版本號與標記；不一樣就是下一版，標出比作者上次看到的改過／新加的分鏡、列出拿掉的。
   第一次給作者看是第 1 版，沒有標記。
@@ -65,6 +65,7 @@ __all__ = [
     "open_in_browser",
     "preview_project",
     "render_review_stills",
+    "shot_hashes",
     "seen_version",
     "shot_narration",
 ]
@@ -366,10 +367,13 @@ def _vox_picture(plan: BuildPlan, index: int, cp: ClipPlan) -> list:
     return [engine_fingerprint(cp.grammar), base, own, context]
 
 
-def _shot_hashes(plan: BuildPlan, narration: dict[str, list[NarrationPiece]]) -> dict[str, str]:
+def shot_hashes(plan: BuildPlan, narration: dict[str, list[NarrationPiece]] | None = None) -> dict[str, str]:
     """每個分鏡的內容雜湊＝它自己畫面上的東西（_chart_picture／_vox_picture）＋長度＋它唸的旁白。
     照分鏡算、不照片段算：一串接續的 Vox 分鏡共用一個片段，只改其中一個，只有它（和畫面真的跟著變的）算改過。
-    在成片裡的絕對時間不算：前面的分鏡變長，後面的分鏡往後挪，但畫面沒變就不算改過。"""
+    在成片裡的絕對時間不算：前面的分鏡變長，後面的分鏡往後挪，但畫面沒變就不算改過。
+    審片頁的版本（「這版改過」）和獨立審片的「改過的分鏡」都用它。narration：已經算好的 shot_narration（沒給就算一次）。"""
+    if narration is None:
+        narration = shot_narration(plan.timeline)
     clip_of = _clip_of(plan)
     out: dict[str, str] = {}
     for i, st in enumerate(plan.timeline.shots):
@@ -439,7 +443,7 @@ def seen_version(plan: BuildPlan) -> tuple[int | None, bool]:
     prev = _read_state(plan.paths.review_state)
     if prev is None or prev["version"] < 1:
         return None, False
-    hashes = _shot_hashes(plan, shot_narration(plan.timeline))
+    hashes = shot_hashes(plan)
     same = _pairs(prev["shots"]) == [(st.shot.id, hashes[st.shot.id]) for st in plan.timeline.shots]
     return prev["version"], same
 
@@ -529,7 +533,7 @@ def make_review(
         extras.page.extend(more.page)
     stills = render_review_stills(plan, jobs=jobs, log=log)
     narration = shot_narration(plan.timeline)
-    version = _update_version(plan.paths.review_state, plan, _shot_hashes(plan, narration), shown=shown)
+    version = _update_version(plan.paths.review_state, plan, shot_hashes(plan, narration), shown=shown)
     page = plan.project.paths.review_page(plan.format.name)
     model = _page_model(plan, page, stills, video, narration, version, extras)
     page.write_text(render_review_html(model), encoding="utf-8")

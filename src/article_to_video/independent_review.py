@@ -18,7 +18,7 @@
 每一輪審多少（next_round；示範片三輪整片審了 28 分鐘，所以變輕）：
   - 第一輪審整支片（scope "full"）。
   - 整片審的那一輪有必修：改好之後整支片再審一輪核對——整片最多 MAX_FULL_ROUNDS 輪。
-  - 其他時候再審只看改過的分鏡（scope "changed"）：跟上一輪審的那份成片比，分鏡內容雜湊（review._shot_hashes：
+  - 其他時候再審只看改過的分鏡（scope "changed"）：跟上一輪審的那份成片比，分鏡內容雜湊（review.shot_hashes：
     分鏡自己的畫面＋長度＋它唸的旁白；前面變長、它往後挪不算）不一樣、新加的、或前一個分鏡換了（換鏡變了）。
     素材只做這幾個分鏡前後各 CONTEXT_SECONDS 秒的總覽、它們的畫面事件；上一輪的問題只帶這幾個分鏡的。
   - 上一輪沒有必修（或必修都核過了）就不用再審（needed=False）：Claude 改了該修，自己看改到的靜態圖、checks 確認。
@@ -53,14 +53,16 @@ from article_to_video.commands import PLUGIN_ROOT, aspect_args, cli_command
 from article_to_video.environment import SAY_UPDATE_PLUGIN
 from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.project import ProjectError, ProjectPaths
+from article_to_video.review import CardSection, CheckItem, ReviewExtras, shot_hashes
 from article_to_video.review_page import timecode
 
 if TYPE_CHECKING:
     from article_to_video.build import BuildPlan
-    from article_to_video.review import ReviewExtras
 
 __all__ = [
     "BRIEF",
+    "CHANGED",
+    "FULL",
     "MAX_FULL_ROUNDS",
     "SCOPES",
     "SEVERITIES",
@@ -290,13 +292,6 @@ def _shot_of(plan: BuildPlan, t: float) -> int | None:
 # ---------------------------------------------------------------- 這一輪審多少
 
 
-def _shot_content_hashes(plan: BuildPlan) -> dict[str, str]:
-    """每個分鏡的內容雜湊（跟審片頁「這版改過」同一套：分鏡自己的畫面＋長度＋它唸的旁白）。"""
-    from article_to_video.review import _shot_hashes, shot_narration  # 避免循環匯入
-
-    return _shot_hashes(plan, shot_narration(plan.timeline))
-
-
 def _rounds_of(book: dict[str, Any], aspect: str) -> list[dict[str, Any]]:
     return [r for r in book["rounds"] if isinstance(r, dict) and r.get("aspect") == aspect]
 
@@ -365,7 +360,7 @@ def next_round(plan: BuildPlan) -> NextRound:
     last = rounds[-1]
     baseline = last.get("shotHashes")
     since = last.get("round") if isinstance(baseline, list) else None
-    changed = _changed_shots(plan, _shot_content_hashes(plan), baseline) if since is not None else ()
+    changed = _changed_shots(plan, shot_hashes(plan), baseline) if since is not None else ()
     if from_full and fulls < MAX_FULL_ROUNDS:
         return NextRound(FULL, f"整支片審的那一輪有必修（{'、'.join(from_full)}），改好之後整支片再審一輪核對", True,
                          changed, since)
@@ -430,7 +425,7 @@ def prepare_review_kit(plan: BuildPlan, *, scope: str | None = None, log: Log = 
         raise ProjectError("還沒有能拿來比的審片紀錄（第一輪、或舊的紀錄沒記分鏡內容）", title="比不出改了哪些分鏡",
                            hint=f"這輪審整支片：{cli_command('review-prep', root, *aspect)}")
     scope = scope or nr.scope
-    hashes = _shot_content_hashes(plan)
+    hashes = shot_hashes(plan)
     if scope == CHANGED:
         if not nr.changed:
             raise ProjectError(f"這份成片跟第 {nr.since} 輪審的比，沒有改過的分鏡", title="不用再審",
@@ -793,8 +788,6 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
     """審片頁的獨立審片：頁首一區（第幾輪、分數、總評、每一項與處理狀態），每張卡列這個分鏡的問題。"""
 
     def contribute(plan: BuildPlan) -> ReviewExtras:
-        from article_to_video.review import CardSection, CheckItem, ReviewExtras  # 避免循環匯入
-
         book = load_log(plan.project.root)
         rounds = book["rounds"]
         if not rounds:

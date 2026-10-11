@@ -180,9 +180,11 @@ def _parser() -> argparse.ArgumentParser:
         "tts", "jobs", "data_dir", "aspect", "json")
     rp = add("review-prep", "獨立審片：從成片準備審片素材（總覽圖、畫面事件圖、字幕檔），印出派 agent 的 prompt。"
              "審整支片還是只看改過的分鏡照規則決定（見 independent_review.py）", "tts", "data_dir", "aspect")
+    from article_to_video.independent_review import CHANGED, FULL
+
     scope = rp.add_mutually_exclusive_group()
-    scope.add_argument("--full", dest="scope", action="store_const", const="full", help="這輪硬要審整支片")
-    scope.add_argument("--changed", dest="scope", action="store_const", const="changed",
+    scope.add_argument("--full", dest="scope", action="store_const", const=FULL, help="這輪硬要審整支片")
+    scope.add_argument("--changed", dest="scope", action="store_const", const=CHANGED,
                        help="這輪硬要只看改過的分鏡（跟上一輪審的成片比）")
     rf = add("review-frames", "（審片 agent 用）從成片抽全解析度幀：--at 秒（可重複），或 --from --to --step")
     rf.add_argument("--aspect", type=_aspect, help="哪個比例的成片（預設：最近準備審片素材的那個）")
