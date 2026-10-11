@@ -59,6 +59,11 @@ def test_copy_for_claude_gives_one_line_per_comment_then_the_overall_comment(bro
     assert fb.shots == [ShotComment(2, "SH02", "標註晚一點出來\n等唸到「倒掛」")]
     assert fb.overall == "節奏可以"
     assert copied.splitlines()[1] == "分鏡 2（SH02）：標註晚一點出來"
+    # 格式一字不差鎖住（feedback.py 檔頭；審片頁怎麼精簡都不能動到 Claude 解析的這段文字）
+    assert copied == (f"審片留言｜{PROJECT_NAME}｜第 1 版\n"
+                      "分鏡 2（SH02）：標註晚一點出來\n"
+                      "  等唸到「倒掛」\n"
+                      "整體意見：節奏可以\n")
     page.context.close()
 
 
