@@ -57,7 +57,13 @@ class Q(http.server.SimpleHTTPRequestHandler):
             f = urllib.parse.unquote(path[len('/__file__/'):].split('?')[0])
             return f if spec and f in ALLOWED else '/nonexistent'
         return super().translate_path(path)
-srv = socketserver.TCPServer(('127.0.0.1', 0), functools.partial(Q, directory=str(root)))
+# [article-to-video 內嵌修改] 照上游 57d6760（2026-10-08）：多執行緒伺服器。Chromium 並行載入腳本時可能先開好閒置連線，
+# 單執行緒的伺服器會卡在那條連線上、其他檔案載不到。只用子類別，不改標準庫類別的全域屬性。
+class LocalServer(socketserver.ThreadingTCPServer):
+    request_queue_size = 128
+    daemon_threads = True
+
+srv = LocalServer(('127.0.0.1', 0), functools.partial(Q, directory=str(root)))
 port = srv.server_address[1]
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 
@@ -121,4 +127,5 @@ with sync_playwright() as p:
         print('done ->', a.out)
     b.close()
 srv.shutdown()
+srv.server_close()   # [article-to-video 內嵌修改] 照上游 57d6760：關掉監聽的 socket
 if errors: raise SystemExit(f'❌ 页面报错 {len(errors)} 条（见上方 [page]/[pageerror]）')

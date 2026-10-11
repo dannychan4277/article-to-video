@@ -71,7 +71,13 @@ class Q(http.server.SimpleHTTPRequestHandler):
             f = urllib.parse.unquote(path[len('/__file__/'):].split('?')[0])
             return f if f in ALLOWED else '/nonexistent'
         return super().translate_path(path)
-srv = socketserver.TCPServer(('127.0.0.1', 0), functools.partial(Q, directory=str(root))); port = srv.server_address[1]
+# [article-to-video 內嵌修改] 照上游 57d6760（2026-10-08）：多執行緒伺服器。Chromium 並行載入腳本時可能先開好閒置連線，
+# 單執行緒的伺服器會卡在那條連線上、其他檔案載不到。只用子類別，不改標準庫類別的全域屬性。
+class LocalServer(socketserver.ThreadingTCPServer):
+    request_queue_size = 128
+    daemon_threads = True
+
+srv = LocalServer(('127.0.0.1', 0), functools.partial(Q, directory=str(root))); port = srv.server_address[1]
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 # 框景检查：包一层 fillText/strokeText，记下画在「整屏大小的画布」上的字的屏幕外框（经过当前变换）
@@ -286,6 +292,7 @@ with sync_playwright() as p:
     if report['transitions']: print('转场冒烟', len(report['transitions']), '个，最慢', max((r['ms_max'] or 0, r['type']) for r in report['transitions']))
     br.close()
 srv.shutdown()
+srv.server_close()   # [article-to-video 內嵌修改] 照上游 57d6760：關掉監聽的 socket
 report['page_errors'] = errors
 with open(out / 'qa.json', 'w', encoding='utf-8') as fh: json.dump(report, fh, ensure_ascii=False, indent=1)
 rows = ['| 段 | 运动% | 静止帧对% | 跳变 | 均/峰 ms | 冷启动 ms | 确定性 | 框景 |', '|---|---|---|---|---|---|---|---|']
