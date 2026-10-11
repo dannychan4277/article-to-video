@@ -13,8 +13,15 @@
 - cue 的 at：數字＝片段內秒數原樣（可為負：接續分鏡用）；錨點＝換成片段內的幀再除以 fps。
   錨點落在分鏡開始前一點點（不超過 lead＋1 幀，通常是段落開頭的詞被提早）就夾到 0；更早或落在分鏡結束之後都報錯。
 - 接續分鏡（continues: true）：沿用上一個分鏡的 data（自己只能改 highlight），上一個分鏡的 cue 除了標註（highlight）
-  全部改成負時間（第一幀就畫好），再加上自己的 cue。一個不接續的分鏡加上後面接續它的分鏡＝一串，共用一段連續慢推：
-  每秒推近 min(0.4%, 6% ÷ 整串秒數)（或整串第一個分鏡 data.push 指定的總量），每個片段的 pushFrom 從上一個推到的地方接著推。
+  全部改成負時間（第一幀就畫好），再加上自己的 cue。一個不接續的分鏡加上後面接續它的分鏡＝一串，共用一個鏡頭：
+  - 設定 camera = "slow"（A，等速慢推）：每秒推近 min(0.4%, 6% ÷ 整串秒數)（或整串第一個分鏡 data.push 指定的總量），
+    每個片段的 pushFrom 從上一個推到的地方接著推。
+  - 設定 camera = "snap"（B，停住、標註出現時快推）：鏡頭平常不動；整串每個「新的」標註（highlight cue，不算沿用過來的、
+    跟上一個一模一樣的）出現那一刻推近一下（SNAP_DUR 秒，引擎用強 ease-out），推完停住。整串總共推近 SNAP_TOTAL
+    （或第一個分鏡 data.push），平均分給每個標註、每下最多 SNAP_STEP。大數字（number）不推。每個片段的 data.camera.snaps
+    列出整串到這個分鏡為止的每一下（時刻相對這個片段，之前分鏡的是負的），引擎從頭重算，切點不跳。
+    推近的固定點是被標註的那一點（它在畫面上不動，其他東西往外推開），再夾到「內容不出 camera.box」：標題、來源行、
+    刻度值不會被切掉、不會推進字幕帶或平台介面區（box 見 VideoFormat.camera_box）；引擎另外照版面算最大放大量。
 """
 
 from __future__ import annotations
@@ -55,6 +62,14 @@ OPENING_TITLE_AT = -1.0
 """影片第一個分鏡的 title cue（寫在第 0 秒的）改成這個時間：版式、標題、格線在第一幀就到位（引擎的版式 0.6 秒、
 格線再 0.6 秒），成片第一幀不是一片空白。後面的分鏡照舊在切進來之後淡入。"""
 DEFAULT_AXIS_NOTE = "縱軸未從 0 開始"
+SNAP_DUR = 0.3
+"""B 鏡頭（camera = snap）每一下快推多久（秒）。標註的圓點 0.45 秒彈出、字 0.3 秒後才開始淡入：鏡頭在字出來之前就停穩，
+讀字時畫面不動。0.3 秒＝30 fps 的 9 幀；曲線（強 ease-out）在引擎 t3_finance_chart.js 的 SNAP_EASE。"""
+SNAP_STEP = 0.04
+"""B 鏡頭每一下最多推近多少（4%）。"""
+SNAP_TOTAL = 0.08
+"""B 鏡頭整串總共推近多少（8%，第一個分鏡寫了 data.push 就用它）。引擎另外照版面夾一個上限（內容不出 camera.box），
+16:9 約 8.5%、9:16 約 7.8%：再多標題、來源行、刻度值就會被切掉或推進字幕帶。"""
 
 
 @dataclass(frozen=True)
@@ -98,6 +113,12 @@ class VideoFormat:
     def card_safe(self) -> dict[str, int]:
         """沒有字幕的片段（片尾卡）給引擎的 spec.safe：只讓平台介面區。"""
         return self._nonzero(top=self.ui_top, bottom=self.ui_bottom, right=self.ui_right)
+
+    def camera_box(self) -> list[float]:
+        """B 鏡頭推近時內容可以到的範圍（佔畫面寬高的比例 [左, 上, 右, 下]）：畫面扣掉平台介面區（ui_*）與字幕帶
+        （safe_bottom）。用比例：qa 縮小渲的時候不用跟著換算。"""
+        w, h = self.width, self.height
+        return [0.0, round(self.ui_top / h, 6), round(1 - self.ui_right / w, 6), round(1 - self.safe_bottom / h, 6)]
 
     def spec_base(self) -> dict[str, Any]:
         """旁白期間的片段 spec 共用的部分（fps、寬高、safe）。財經圖表用它；Vox 分鏡（#8）也要用它。"""
@@ -533,6 +554,39 @@ def _opening_at(cue: CueTiming, st: ShotTiming) -> float:
     return cue.at
 
 
+def _snap_events(project: Project, timeline: Timeline, members: list[int]) -> list[tuple[int, float, int]]:
+    """一串分鏡裡會快推的標註：(哪個分鏡（timeline.shots 的位置）, 在成片裡的秒數, 標哪一點)。
+    只算分鏡自己寫的 highlight cue（沿用過來的不算）；跟上一個標註一模一樣（同一點、同樣的字）的不算——引擎不會重畫它。"""
+    fps = timeline.fps
+    out: list[tuple[int, float, int]] = []
+    last: tuple[int, Any, Any] | None = None
+    for n in members:
+        st = timeline.shots[n]
+        data, _ = effective_chart(project.shots, n)
+        points = len(data.get("series") or []) if isinstance(data.get("series"), list) else 0
+        for c in st.cues:
+            if c.kind != "highlight" or c.carried:
+                continue
+            h = resolve_highlight(c.fields, data)
+            index = h["index"] if isinstance(h["index"], int) else points - 1
+            key = (index, h["text"], h["sub"])
+            if key != last:
+                out.append((n, st.start_frame / fps + c.at, index))
+            last = key
+    return out
+
+
+def _snap_camera(st: ShotTiming, events: list[tuple[int, float, int]], upto: int, total: float | None,
+                 fmt: VideoFormat) -> dict[str, Any]:
+    """B 鏡頭給引擎的 data.camera：整串到第 upto 個分鏡為止的每一下快推（時刻相對這個片段）。"""
+    total = SNAP_TOTAL if total is None else float(total)
+    step = min(SNAP_STEP, total / len(events)) if events else 0.0
+    t0 = st.start_frame / fmt.fps
+    snaps = [{"at": round(t - t0, 6), "zoom": round(1 + (k + 1) * step, 6), "index": index}
+             for k, (n, t, index) in enumerate(events) if n <= upto and step > 0]
+    return {"dur": SNAP_DUR, "box": fmt.camera_box(), "snaps": snaps}
+
+
 def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_16x9) -> list[ClipPlan]:
     fps = fmt.fps
     chains = _push_chains(timeline)
@@ -543,6 +597,8 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
             members.setdefault(chains[st.shot.id][2], []).append(n)
     layouts = {head: _chain_layout(project, ns) for head, ns in members.items() if len(ns) > 1}
     _check_highlight_points(project)
+    snap = project.settings.camera == "snap"
+    events = {head: _snap_events(project, timeline, ns) for head, ns in members.items()} if snap else {}
     plans: list[ClipPlan] = []
     for n, st in enumerate(timeline.shots):
         shot = st.shot
@@ -555,11 +611,15 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
         g0, g1, head = chains[shot.id]
         if head in layouts:
             data["chainLayout"] = layouts[head]
-        chain_secs = (g1 - g0) / fps
         total_push = head_push.get(head)
-        rate = total_push / chain_secs if total_push is not None else min(0.004, 0.06 / chain_secs)
-        data["pushFrom"] = round(rate * (st.start_frame - g0) / fps, 6)
-        data["push"] = round(rate * st.frames / fps, 6)
+        if snap:
+            data.pop("push", None)
+            data["camera"] = _snap_camera(st, events[head], n, total_push, fmt)
+        else:
+            chain_secs = (g1 - g0) / fps
+            rate = total_push / chain_secs if total_push is not None else min(0.004, 0.06 / chain_secs)
+            data["pushFrom"] = round(rate * (st.start_frame - g0) / fps, 6)
+            data["push"] = round(rate * st.frames / fps, 6)
         cues = [{**c.fields, "at": _opening_at(c, st)} for c in st.cues]
         spec = {
             "grammar": GRAMMAR_CHART,
