@@ -55,8 +55,9 @@ def test_test_video_uses_the_authors_channel_and_only_the_bundled_sample(test_vi
 
 
 def test_test_video_opens_and_follows_changed_settings(test_video, tmp_path, monkeypatch, capsys):
-    """再做一次（例如換了聲音之後）：設定快照跟著最新的使用者設定，做完用 open 打開成片。
-    假配音層不管聲音，畫面和聲音都一樣，所以整支片走快取，這個測試很快。"""
+    """再做一次（例如換了聲音、把頻道名清掉之後）：設定快照跟著最新的使用者設定，做完用 open 打開成片。
+    頻道名是選填（只想自己看的人不填）：沒填照樣做得出測試片，片尾卡不放名字。
+    假配音層不管聲音，只有片尾卡要重渲，其他片段走快取，這個測試很快。"""
     import shutil
 
     from article_to_video import cli, sample_video
@@ -65,8 +66,7 @@ def test_test_video_opens_and_follows_changed_settings(test_video, tmp_path, mon
     shutil.copytree(test_video[0], out)  # 連 build/ 一起搬：片段快取照樣命中
     data = tmp_path / "資料"
     data.mkdir()
-    (data / "settings.json").write_text(json.dumps({"channel": "測試頻道", "voice": "zh-TW-YunJheNeural"}),
-                                        encoding="utf-8")
+    (data / "settings.json").write_text(json.dumps({"voice": "zh-TW-YunJheNeural"}), encoding="utf-8")  # 沒填頻道名
     snapshot = out / "settings.json"
     assert json.loads(snapshot.read_text(encoding="utf-8"))["voice"] == "zh-TW-HsiaoChenNeural"  # 第一次：預設曉臻
     opened: list[Path] = []
@@ -78,6 +78,8 @@ def test_test_video_opens_and_follows_changed_settings(test_video, tmp_path, mon
     assert code == 0, capsys.readouterr()
     assert opened == [out / "成片.mp4"]
     assert json.loads(snapshot.read_text(encoding="utf-8"))["voice"] == "zh-TW-YunJheNeural"  # 換成雲哲
+    end_card = json.loads((out / "build" / "16x9" / "specs" / "end.card.json").read_text(encoding="utf-8"))
+    assert not end_card["data"].get("channel") and end_card["data"]["sources"]  # 片尾卡不放名字，來源照放
 
 
 def test_test_video_never_overwrites_a_real_project(tmp_path):

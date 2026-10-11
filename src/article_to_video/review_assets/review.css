@@ -100,7 +100,7 @@ a { color: inherit; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 22px; margin: 0 0 18px; }
 .howto ol { margin: 8px 0 0; padding-left: 1.4em; }
 .howto li + li { margin-top: 2px; }
-.howto h2, .overall-box h2, .film h2, .menu > h2 { font-size: 20px; }
+.howto h2, .overall-box h2, .film h2, .menu h2 { font-size: 20px; }
 .notice { border-color: var(--accent); background: var(--accent-soft); }
 .notice strong { color: var(--accent); }
 .notice .actions { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; }
@@ -130,7 +130,6 @@ button.timecode:hover { border-color: var(--ink); }
 
 .main-still { display: block; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); background: #fff; }
 .main-still img, .moment img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: contain; background: #fff; }
-.moments-title { font-size: 14px; color: var(--muted); margin: 10px 0 6px; }
 
 /* 直式（9:16）：靜態圖照直的排，大圖限寬（不然一張就比螢幕還高），成片也直著放 */
 html[data-aspect="9x16"] .main-still img, html[data-aspect="9x16"] .moment img { aspect-ratio: 9 / 16; }
@@ -139,13 +138,12 @@ html[data-aspect="9x16"] .card-media { max-width: 340px; width: 100%; justify-se
   html[data-aspect="9x16"] .card { grid-template-columns: minmax(0, 300px) minmax(0, 1fr); }
 }
 html[data-aspect="9x16"] .film video { width: auto; max-width: 100%; height: 70vh; margin-left: auto; margin-right: auto; }
-.moments { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.moments { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 8px 0 0; }
 .moment { margin: 0; }
 .moment a { display: block; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
-.moment figcaption { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 2px; }
 
 .card-body { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.narration h3, .slot h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin-bottom: 2px; }
+.slot h3 { font-size: 14px; color: var(--muted); font-weight: 600; margin-bottom: 2px; }
 .narration p { font-size: 18px; line-height: 1.8; }
 .narration p + p { margin-top: 4px; }
 
@@ -166,12 +164,19 @@ html[data-aspect="9x16"] .film video { width: auto; max-width: 100%; height: 70v
 .quiet-line::before { content: "\2713  "; color: var(--ok); font-weight: 700; }
 details.fold > summary { cursor: pointer; }
 details.fold[open] > summary { margin-bottom: 6px; }
-/* 給 Claude 的代號：預設收起來 */
-details.codes { margin-top: 6px; font-size: 13px; color: var(--muted); }
-details.codes > summary { cursor: pointer; }
-details.codes ul { margin-top: 4px; gap: 2px; }
-details.codes li { display: block; font-size: 13px; }
-details.codes code { font-size: 12px; word-break: break-all; }
+/* 點一行的字才看的細節（審片員的說明、給 Claude 的代號）：預設收起來 */
+details.more { font-size: 14px; color: var(--muted); min-width: 0; }
+details.more > summary { cursor: pointer; font-size: 15px; color: var(--ink); }
+details.more > summary:hover { text-decoration: underline; text-underline-offset: 3px; }
+details.more[open] > summary { margin-bottom: 4px; }
+details.more p { line-height: 1.65; word-break: break-word; }
+details.more p + p { margin-top: 2px; }
+details.more .codes { font-size: 12px; margin-top: 4px; }
+details.more code { font-size: 12px; word-break: break-all; }
+details.rest { margin-top: 6px; }
+details.rest > summary { cursor: pointer; }
+.rest-line { color: var(--muted); font-size: 14px; }
+details.rest[open] > summary { margin-bottom: 6px; }
 
 label.field { font-weight: 600; font-size: 16px; }
 textarea {
@@ -192,7 +197,10 @@ button { font: inherit; }
 
 /* 能加什麼 */
 .menu { margin-bottom: 28px; }
-.menu > p { color: var(--muted); margin-top: 6px; }
+.menu-fold > summary { cursor: pointer; }
+.menu-fold > summary h2 { display: inline; }
+.menu-fold > summary .hint { display: inline; margin-left: 10px; }
+.menu-fold > p { color: var(--muted); margin-top: 10px; }
 .menu-grid { display: grid; gap: 14px; margin-top: 14px; grid-template-columns: minmax(0, 1fr); }
 @media (min-width: 760px) { .menu-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .menu-group { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; background: var(--bg); }

@@ -130,7 +130,7 @@ def user_data_dir(tmp_path_factory):
     """使用者設定一律放 tmp，絕不讀寫真正的 ~/Library/Application Support/article-to-video。
 
     用環境變數 ARTICLE_TO_VIDEO_DATA 指過去，被測程式另開的子行程也吃得到。
-    裡面先放一份「裝好之後」的使用者設定：只填了頻道名（片尾卡要用），其他用預設。
+    裡面先放一份「裝好之後」的使用者設定：只填了頻道名（片尾卡上的名字；選填，這裡填了好驗片尾卡），其他用預設。
     """
     d = tmp_path_factory.mktemp("使用者資料")
     (d / "settings.json").write_text(json.dumps({"channel": TEST_CHANNEL}, ensure_ascii=False), encoding="utf-8")
@@ -184,6 +184,28 @@ def previewed_project(tmp_path_factory) -> PreviewedProject:
     seconds = time.monotonic() - t0
     assert proc.returncode == 0, f"預覽失敗：\n{proc.stdout}\n{proc.stderr}"
     return PreviewedProject(dir=root, stdout=proc.stdout, seconds=seconds)
+
+
+@pytest.fixture(scope="module")
+def browser():
+    """無頭 Chromium（專案釘的 playwright 自帶，不連網），一個測試模組共用一個。審片頁的瀏覽器測試用。
+    模組範圍、不是 session：同一個執行緒不能同時開兩個 sync_playwright（test_article、test_portrait 自己開）。"""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        b = p.chromium.launch()
+        yield b
+        b.close()
+
+
+def shown_text(page) -> str:
+    """作者沒點任何展開時看得到的字（document.body.innerText：收起來的 <details>、hidden 的都不算）。"""
+    return page.evaluate("document.body.innerText")
+
+
+def char_count(text: str) -> int:
+    """字數：去掉所有空白。"""
+    return len("".join(text.split()))
 
 
 @pytest.fixture(scope="module")

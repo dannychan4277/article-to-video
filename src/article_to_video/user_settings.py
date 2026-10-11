@@ -83,7 +83,7 @@ class SettingsError(ValueError):
 @dataclass(frozen=True)
 class UserSettings:
     channel: str = ""
-    """頻道名（片尾卡上的名字）。"""
+    """頻道名（片尾卡上的名字）。選填：空的＝片尾卡不放名字。"""
     logo: str | None = None
     """logo 檔名（相對資料位置）。"""
     brand_color: str | None = None
@@ -144,7 +144,9 @@ def _is_none(value: Any) -> bool:
 
 def normalize_value(key: str, value: Any) -> Any:
     """把一個設定值換成存檔的樣子（中文名 → 代號、色碼大寫…）；不合法丟 SettingsError（繁中）。logo 另外處理。"""
-    if key == "channel":
+    if key == "channel":  # 選填：空的或 none＝片尾卡不放名字（只想自己看的人不用填）
+        if _is_none(value):
+            return ""
         if not isinstance(value, str):
             raise SettingsError("頻道名要是文字")
         v = " ".join(value.split())

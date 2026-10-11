@@ -80,6 +80,22 @@ def test_bad_values_are_rejected_in_chinese_and_nothing_is_saved(tmp_path):
     assert show(data)["channel"] == "小明"  # 有任何一個不對就整批不改
 
 
+def test_the_channel_name_is_optional_and_can_be_cleared(tmp_path):
+    """只想自己看懂文章、沒有頻道的人：頻道名可以不填，填過也能清掉（空字串，或跟 logo 一樣說 none）。
+    看設定時說片尾卡不放名字就好，不叫他去設定。"""
+    data = tmp_path / "plugin-data"
+    assert run("settings", "set", "--data-dir", str(data), "--channel", "小明").returncode == 0
+    proc = run("settings", "set", "--data-dir", str(data), "--channel", "")
+    assert proc.returncode == 0, proc.stderr
+    assert show(data)["channel"] == ""
+    line = next(ln for ln in run("settings", "show", "--data-dir", str(data)).stdout.splitlines() if "頻道名" in ln)
+    assert "片尾卡不放" in line and "請設定" not in line, line
+
+    assert run("settings", "set", "--data-dir", str(data), "--channel", "小明").returncode == 0
+    assert run("settings", "set", "--data-dir", str(data), "--channel", "none").returncode == 0
+    assert show(data)["channel"] == ""
+
+
 def test_a_light_brand_color_is_kept_and_the_charts_take_care_of_readability(tmp_path):
     """作者真正的品牌色可能很淺（例如淡黃）：照樣存起來，跟他說圖表上的字和線會用加深的版本。"""
     data = tmp_path / "plugin-data"

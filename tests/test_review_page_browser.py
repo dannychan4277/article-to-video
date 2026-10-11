@@ -11,20 +11,12 @@ import shutil
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import Page
 
 from article_to_video.feedback import ShotComment, parse_feedback
 
 PROJECT_NAME = "殖利率曲線"
 """「複製給 Claude」標頭寫的是片名：專案資料夾「2026-10-09-殖利率曲線」去掉日期。"""
-
-
-@pytest.fixture(scope="module")
-def browser():
-    with sync_playwright() as p:
-        b = p.chromium.launch()
-        yield b
-        b.close()
 
 
 @pytest.fixture
@@ -67,6 +59,11 @@ def test_copy_for_claude_gives_one_line_per_comment_then_the_overall_comment(bro
     assert fb.shots == [ShotComment(2, "SH02", "標註晚一點出來\n等唸到「倒掛」")]
     assert fb.overall == "節奏可以"
     assert copied.splitlines()[1] == "分鏡 2（SH02）：標註晚一點出來"
+    # 格式一字不差鎖住（feedback.py 檔頭；審片頁怎麼精簡都不能動到 Claude 解析的這段文字）
+    assert copied == (f"審片留言｜{PROJECT_NAME}｜第 1 版\n"
+                      "分鏡 2（SH02）：標註晚一點出來\n"
+                      "  等唸到「倒掛」\n"
+                      "整體意見：節奏可以\n")
     page.context.close()
 
 
@@ -122,11 +119,14 @@ def test_page_still_works_when_the_browser_blocks_storage(browser, page_url):
 
 
 def test_menu_examples_go_into_the_overall_comment(browser, page_url):
+    """「能加什麼」是參考用的（八組說明＋範例，近千字）：預設收成一行，作者想看再點開。"""
     page = open_page(browser, page_url)
     menu = page.locator("#menu")
     assert "能加什麼" in menu.inner_text()
     examples = menu.locator("button.example")
     assert examples.count() >= 10
+    assert not examples.nth(0).is_visible()
+    menu.get_by_text("能加什麼").first.click()
     first, second = examples.nth(0).inner_text().strip(), examples.nth(1).inner_text().strip()
     examples.nth(0).click()
     examples.nth(1).click()

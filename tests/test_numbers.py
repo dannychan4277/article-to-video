@@ -202,10 +202,10 @@ def test_with_every_number_sourced_the_build_passes_and_each_card_shows_the_sour
     """session 的測試專案（每個數字都在文章裡）照常出片；卡片上列出數字與出處。"""
     page = read_review(built_project.dir)
     assert page.attrs["data-stage"] == "review"
-    sh01, sh02 = (c.slots["numbers"] for c in page.cards)
+    sh01, sh02 = (c.slots.get("numbers", "") for c in page.cards)
     for needle in ("2023", "4.58%", "3.96%", "原文", "原文第 1 段"):
         assert needle in sh01, f"分鏡 1 的數字對帳少了「{needle}」：{sh01}"
-    assert "無出處" not in sh01 and "沿用" in sh02
+    assert "無出處" not in sh01 and not sh02.strip()  # 接續上一張、沒有新的數字：卡上掛著「接續上一張」，不再多寫一行
     assert "都有出處" in page.page_slots["numbers"]
 
 
@@ -380,6 +380,21 @@ def test_the_review_card_asks_the_author_to_check_figure_numbers_against_his_fig
     assert all(it.status == "warn" for it in figure_items)  # 要看一下，不是擋下出片
     [page] = review.page
     assert "原文圖表" in page.summary + page.note + page.title
+
+
+def test_only_the_numbers_the_author_must_check_are_spread_out_on_the_card(tmp_path):
+    """示範片：一張重畫圖1 的柱狀圖，卡片上攤開十幾行出處，作者要對照的只有三個讀圖的數字。
+    攤開的只有要作者看的（原文圖表、無出處）；其他對得到出處的收成一行，點開才看。"""
+    def edit(shots: dict) -> None:
+        redrawn_figure(shots)
+        shots["shots"][0]["chart"]["data"]["title"] = "2023 年的殖利率"  # 2023 文章文字裡有
+
+    root = with_figure(make_project(tmp_path, edit), FIG1)
+    [section] = number_review(plan_build(root, tts="fake")).cards["SH01"]
+    assert {it.text for it in section.items} == {"5.12%", "4.21%"}
+    assert "2023" in {it.text for it in section.rest}
+    assert all(it.status == "ok" for it in section.rest)
+    assert "1 個" in section.rest_summary and "出處" in section.rest_summary
 
 
 def test_years_on_a_redrawn_figures_axis_point_to_the_figure_reading(tmp_path):

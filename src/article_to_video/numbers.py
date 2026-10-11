@@ -1029,12 +1029,19 @@ def number_review(plan: BuildPlan) -> ReviewExtras:
             notes.insert(0, figures)
         if n_bad:
             notes.insert(0, f"有 {n_bad} 個數字找不到出處，擋下出片。")
+        if not items and st.shot.continues and not notes:
+            continue  # 接續上一張、沒有新的數字：卡上已經掛著「接續上一張」，數字記在上一張
         if not items:
-            notes.append("沿用上一張的圖，數字記在上一張；這一張沒有新的數字。" if st.shot.continues
-                         else "畫面上沒有數字。")
-        # 每個數字都對得到出處：安靜的一行，點開看每個數字的出處；有找不到出處、或有 Claude 讀圖讀的數字才整區攤開
-        summary = "" if n_bad or figures else (
-            f"畫面上 {len(rep.shots[sid])} 個數字都對得到出處" if items else " ".join(notes))
+            notes.append("沿用上一張的數字" if st.shot.continues else "畫面上沒有數字")
+        if n_bad or figures:
+            # 有找不到出處、或有 Claude 讀圖讀的數字：只攤開這些（作者要一個一個看），其他對得到出處的收成一行
+            ok = sum(1 for n in rep.shots[sid] if n.kind not in ("none", "figure"))
+            cards[sid] = [CardSection("numbers", "畫面上的數字與出處", [it for it in items if it.status != "ok"],
+                                      note=" ".join(notes), rest=[it for it in items if it.status == "ok"],
+                                      rest_summary=f"其他 {ok} 個數字都對得到出處")]
+            continue
+        # 每個數字都對得到出處：安靜的一行，點開看每個數字的出處
+        summary = "數字都有出處" if items else " ".join(notes)
         cards[sid] = [CardSection("numbers", "畫面上的數字與出處", items, note=" ".join(notes), summary=summary)]
     bad = rep.unsourced
     if bad:
