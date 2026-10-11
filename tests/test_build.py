@@ -264,7 +264,8 @@ def test_continuation_starts_fully_drawn(built_project):
     spec = json.loads((built_project.dir / "build" / "16x9" / "specs" / "SH02.json").read_text(encoding="utf-8"))
     carried = [c for c in spec["cues"] if c["at"] < 0]
     assert sorted(c["kind"] for c in carried) == ["bar", "bar", "highlight", "title"]
-    assert all(c["at"] <= -3 for c in carried)
+    # 沿用的 cue 照它真正的時刻排（切點前還在動的才接得上）；這裡每個都在切點前 1 秒以上就開始，柱、標註 0.7 秒內長完
+    assert all(c["at"] <= -1 for c in carried), [(c["kind"], c["at"]) for c in carried]
     [label] = [c for c in carried if c["kind"] == "highlight"]
     assert (label["text"], label["data"]["index"]) == ("短天期較高", 0)  # SH01 的標註，不是 SH02 data.highlight 的字
 
