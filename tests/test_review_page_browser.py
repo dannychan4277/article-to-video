@@ -114,11 +114,14 @@ def test_page_still_works_when_the_browser_blocks_storage(browser, page_url):
 
 
 def test_menu_examples_go_into_the_overall_comment(browser, page_url):
+    """「能加什麼」是參考用的（八組說明＋範例，近千字）：預設收成一行，作者想看再點開。"""
     page = open_page(browser, page_url)
     menu = page.locator("#menu")
     assert "能加什麼" in menu.inner_text()
     examples = menu.locator("button.example")
     assert examples.count() >= 10
+    assert not examples.nth(0).is_visible()
+    menu.get_by_text("能加什麼").first.click()
     first, second = examples.nth(0).inner_text().strip(), examples.nth(1).inner_text().strip()
     examples.nth(0).click()
     examples.nth(1).click()

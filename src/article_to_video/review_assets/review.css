@@ -100,7 +100,7 @@ a { color: inherit; }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 22px; margin: 0 0 18px; }
 .howto ol { margin: 8px 0 0; padding-left: 1.4em; }
 .howto li + li { margin-top: 2px; }
-.howto h2, .overall-box h2, .film h2, .menu > h2 { font-size: 20px; }
+.howto h2, .overall-box h2, .film h2, .menu h2 { font-size: 20px; }
 .notice { border-color: var(--accent); background: var(--accent-soft); }
 .notice strong { color: var(--accent); }
 .notice .actions { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; }
@@ -197,7 +197,10 @@ button { font: inherit; }
 
 /* 能加什麼 */
 .menu { margin-bottom: 28px; }
-.menu > p { color: var(--muted); margin-top: 6px; }
+.menu-fold > summary { cursor: pointer; }
+.menu-fold > summary h2 { display: inline; }
+.menu-fold > summary .hint { display: inline; margin-left: 10px; }
+.menu-fold > p { color: var(--muted); margin-top: 10px; }
 .menu-grid { display: grid; gap: 14px; margin-top: 14px; grid-template-columns: minmax(0, 1fr); }
 @media (min-width: 760px) { .menu-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .menu-group { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; background: var(--bg); }

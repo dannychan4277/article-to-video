@@ -379,9 +379,10 @@ def render_review_html(m: PageModel) -> str:
 <section class="panel overall-box"><h2><label for="overall">整體意見</label></h2>
 <p class="hint">不屬於某一張的意見寫這裡，例如整支片的節奏、聲音、配樂。</p>
 <textarea id="overall" class="overall" rows="4" placeholder="例：整體節奏有點快／聲音想換一個"></textarea></section>
-<section class="panel menu" id="menu"><h2>能加什麼？</h2>
+<section class="panel menu" id="menu"><details class="menu-fold">
+<summary><h2>能加什麼？</h2><span class="hint">點開看範例講法</span></summary>
 <p>照下面的講法寫在留言格裡就行，不用講得很精確。點一下範例會放進「整體意見」，再改成你要的。</p>
-<div class="menu-grid">{menu}</div></section>
+<div class="menu-grid">{menu}</div></details></section>
 </main>
 <div class="dock" role="region" aria-label="複製留言給 Claude"><div class="wrap">
 <div class="dock-row"><p class="status" id="copy-status" aria-live="polite">{n_comments_hint}</p>
