@@ -122,9 +122,9 @@ def test_a_continued_shot_replays_the_chain_so_far_and_its_carried_label_does_no
     # 上一個分鏡的快推照真正的時刻排（相對這個分鏡是負的），這個分鏡自己的標註再推一次；沿用的標註不推
     assert [s["at"] for s in snaps] == pytest.approx([cue_at(a, "highlight")[0] - a["duration"], own_at], abs=1e-6)
     assert [s["index"] for s in snaps] == [0, 2]
-    # 整串預設總共推近 7%，兩個標註各推一半；SH01 只看得到第一下
-    assert [s["zoom"] for s in snaps] == pytest.approx([1.035, 1.07])
-    assert [s["zoom"] for s in a["data"]["camera"]["snaps"]] == pytest.approx([1.035])
+    # 整串預設總共推近 6%，兩個標註各推一半；SH01 只看得到第一下
+    assert [s["zoom"] for s in snaps] == pytest.approx([1.03, 1.06])
+    assert [s["zoom"] for s in a["data"]["camera"]["snaps"]] == pytest.approx([1.03])
 
 
 def test_push_on_the_first_shot_sets_the_total_and_zero_keeps_the_camera_still(tmp_path):
@@ -254,40 +254,61 @@ def test_a_continued_shot_starts_exactly_where_the_previous_one_left_the_camera(
 # ---------------------------------------------------------------- 推到最近：字不出畫面、不進字幕帶與平台介面區
 
 
+LONG = [round(0.6 * ((i % 24) / 12 - 1) ** 2 - 0.3 + i * 0.01, 2) for i in range(60)]
+"""自製的 60 個月數字：點多，x 軸最左、最右的名字（以點為中心）會超出左右邊距一截。"""
+LINE_CHAIN = [
+    {"id": "SL1", "start": _a("s03"), "chart": {
+        "data": {"title": "五年的利差，最後回到正的", "unit": "示意數據，百分點", "source": SOURCE, "chart": "line",
+                 "decimals": 2, "xTicks": [0, 12, 24, 36, 48, 59],
+                 "series": [{"label": f"{2020 + i // 12}-{i % 12 + 1:02d}", "value": v} for i, v in enumerate(LONG)],
+                 "highlight": {"text": "回到正的"}},
+        "cues": [{"at": 0, "kind": "title"}, {"at": _a("s03"), "kind": "line", "dur": 1.0},
+                 {"at": _a("s03", "回到正的"), "kind": "highlight"}]}},
+    {"id": "SL2", "start": _a("s04"), "continues": True, "chart": {
+        "data": {"highlight": {"text": "最高"}},
+        "cues": [{"at": _a("s04", "六根"), "kind": "highlight", "text": "第 30 個月", "data": {"index": 30}},
+                 {"at": _a("s04", "最高"), "kind": "highlight"}]}},
+]
+
+
 @pytest.fixture(scope="module", params=["16x9", "9x16"])
 def closest(request, tmp_path_factory):
-    """整串寫 push 0.2（建置允許的最大值）：兩下快推要推到 4%、8%（每下最多 4%），引擎照版面夾住。渲第一個標註之前（還沒推）跟整串最後一幀。"""
+    """兩串都在第一個分鏡寫 push 0.2（建置允許的最大值）：柱那串兩下快推要推到 4%、8%；60 個點的折線那串三下要推到
+    4%、8%、12%（每下最多 4%），引擎照版面夾住。折線先標最後一點：往右邊推近，左邊的東西被推向畫面左緣。
+    每串渲第一個標註之前（還沒推）跟整串最後一幀。"""
     fmt = FORMATS[request.param]
-    shots = json.loads(json.dumps(SHOTS[:2]))
-    shots[0]["chart"]["data"]["push"] = 0.2
+    shots = json.loads(json.dumps(SHOTS[:2] + LINE_CHAIN))
+    for sh in (shots[0], shots[2]):
+        sh["chart"]["data"]["push"] = 0.2
     root = write_project(tmp_path_factory.mktemp(f"推到最近 {fmt.name}") / "專案", shots=shots)
     specs = specs_of(root, fmt.name)
-    jobs = [("SH01", frame_t(label_at(specs["SH01"]), -1)), ("SH02", specs["SH02"]["duration"] - 1 / FPS)]
+    jobs = [(a, frame_t(label_at(specs[a]), -1)) for a in ("SH01", "SL1")]
+    jobs += [(b, specs[b]["duration"] - 1 / FPS) for b in ("SH02", "SL2")]
 
     def work(job):
         sid, t = job
         (path,) = render_stills(specs[sid], root / "stills" / sid, [t]).paths
         return np.asarray(Image.open(path).convert("RGB")).astype(int)
 
-    before, after = run_parallel(jobs, work, jobs=2)
-    return fmt, before, after
+    b1, b2, a1, a2 = run_parallel(jobs, work, jobs=4)
+    return fmt, [(b1, a1), (b2, a2)]
 
 
 def test_even_the_closest_snap_keeps_every_word_on_screen_and_out_of_the_subtitle_band(closest):
-    fmt, before, after = closest
-    w0, w1 = (title_box(im)[2] - title_box(im)[0] for im in (before, after))
-    assert w1 / w0 > 1.06  # 真的推近了不少（不是什麼都沒做）
-    assert w1 / w0 < 1.075  # 但沒有推到 8%：夾在版面放得下的範圍
-    dark = after.mean(axis=-1) < 160  # 白底上看得見的字、線、柱
-    h, w = dark.shape
-    assert not dark[h - fmt.safe_bottom:].any()  # 字幕帶裡沒東西
-    below_bar = slice(fmt.ui_top + 12, h - fmt.safe_bottom)  # 頂端色條（裝飾）推出去無妨
-    assert not dark[below_bar, :3].any() and not dark[below_bar, w - 3:].any()  # 左右邊緣沒有被切到的字
-    assert not (after[:3].max(axis=-1) < 90).any()  # 上緣沒有被切到的標題
-    if fmt.ui_right:
-        assert not dark[below_bar, w - fmt.ui_right:].any()  # 直式：右側按鈕欄底下沒有字
-    if fmt.ui_top:
-        assert not (after[: fmt.ui_top].max(axis=-1) < 90).any()  # 直式：頂端分頁列底下沒有標題
+    fmt, chains = closest
+    for before, after in chains:
+        w0, w1 = (title_box(im)[2] - title_box(im)[0] for im in (before, after))
+        assert 1.025 < w1 / w0 < 1.085  # 真的推近了（不是什麼都沒做）；折線那串要 12% 也被夾在版面放得下的範圍
+        dark = after.mean(axis=-1) < 160  # 白底上看得見的字、線、柱
+        h, w = dark.shape
+        assert not dark[h - fmt.safe_bottom:].any()  # 字幕帶裡沒東西
+        below_bar = slice(fmt.ui_top + 12, h - fmt.safe_bottom)  # 頂端色條（裝飾）推出去無妨
+        assert not dark[below_bar, :3].any() and not dark[below_bar, w - 3:].any()  # 左右邊緣沒有被切到的字（含 x 軸兩端的名字）
+        assert not (after[:3].max(axis=-1) < 90).any()  # 上緣沒有被切到的標題
+        if fmt.ui_right:
+            assert not dark[below_bar, w - fmt.ui_right:].any()  # 直式：右側按鈕欄底下沒有字
+        if fmt.ui_top:
+            assert not (after[: fmt.ui_top].max(axis=-1) < 90).any()  # 直式：頂端分頁列底下沒有標題
 
 
 # ---------------------------------------------------------------- 自動檢查

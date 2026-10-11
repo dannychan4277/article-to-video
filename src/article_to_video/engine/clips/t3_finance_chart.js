@@ -23,6 +23,7 @@ const LEADER_MIN = 40;
 // 鏡頭是在回應「標註出現」這個事件：ease-out 一開始就動（觀眾眼睛正看著圓點彈出的那一刻），後段慢慢停穩；
 // ease-in-out 前幾幀幾乎不動，看起來像遲到的運鏡。時長由 spec 給（建置的 SNAP_DUR）。
 const SNAP_EASE = MO.bezier(0.23, 1, 0.32, 1);
+const CAM_SIDE = 12;                                                      // B 鏡頭推近後，字離畫面左右邊至少這麼多（×u）
 const rgba = (col, a, fb) => { const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(col || ''); if (!m) return fb; let h = m[1]; if (h.length === 3) h = [...h].map(x => x + x).join('');
   return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`; };
 return {
@@ -120,7 +121,7 @@ return {
     L.hl.forEach((h, j) => { const p = L.hl[j - 1]; h.start = p && p.index === h.index && p.lines.join('\n') === h.lines.join('\n') ? p.start : h.q.at; });
     if (kind === 'line') { placeLineText(ctx, c); L.hl.forEach(h => { h.co = placeLineLabel(ctx, c, h); }); }
     if (kind === 'bar') L.hl.forEach(h => { h.mode = barMode(ctx, c, h); });
-    L.cam = d.camera ? cameraKeys(ctx, d.camera) : null;
+    L.cam = d.camera ? cameraKeys(ctx, c, d.camera) : null;
   },
   draw(c0, t, ctx) {
     // alpha：图是白纸黑字，叠在深色画面上墨色看不见。先画进缓冲，再带一圈白色光晕合成（和 t1 同一招）
@@ -231,11 +232,16 @@ function C(...a) { return a.find(v => v != null && v !== ''); }
 // 畫面扣掉平台介面區與字幕帶）, snaps: [{at, zoom（推到多大，1.04＝推近 4%）, index（標哪一點）}]}：整串到這個片段為止的每一下，
 // 之前分鏡的 at 是負的，所以接續分鏡從同一個鏡頭接著走。鏡頭＝畫面座標 = s × 原座標 + (tx, ty)：
 // 每一下以被標註的點為固定點（它在畫面上不動、其他東西往外推開），再把 (tx, ty) 夾到「內容框推近後還在 box 裡」；
-// 放大量也夾在「內容框放得進 box」以內。內容框＝標題（含左上小旗）到來源行（含右下角標）、左右邊距之間；頂端色條不算（裝飾，推出畫面無妨）。
-function cameraKeys(ctx, cam) {
+// 放大量也夾在「內容框放得進 box」以內。內容框＝標題上的小旗到來源行（有角標時到角標底）、左右邊距之間，再加上超出邊距的
+// x 軸名字（以點為中心，點多時最左、最右的名字會超出邊距一截）；頂端色條是裝飾、不算。box 左右再各內縮 CAM_SIDE，字不貼著畫面邊。
+function cameraKeys(ctx, c, cam) {
   const { W, H, u, safe, data: d } = ctx, { S, xs, yS, kind } = L, b = cam.box || [0, 0, 1, 1];
-  const A = [b[0] * W, b[1] * H, b[2] * W, b[3] * H];
-  const C = [L.m, safe.top + 40 * u, W - L.mR, Math.max(H - safe.bottom - 24 * u, d.badge ? H - safe.bottom - 50 * u + 24 : 0)];
+  const A = [b[0] * W + CAM_SIDE * u, b[1] * H, b[2] * W - CAM_SIDE * u, b[3] * H];
+  let x0 = L.m, x1 = W - L.mR;
+  c.save(); c.font = `400 ${L.xFont}px ${NUM}`;
+  S.forEach((r, i) => { if (L.xKeep && !L.xKeep.has(i)) return; const hw = c.measureText(String(r.label ?? '')).width / 2; x0 = Math.min(x0, xs[i] - hw); x1 = Math.max(x1, xs[i] + hw); });
+  c.restore();
+  const C = [x0, safe.top + 52 * u, x1, Math.max(H - safe.bottom - 24 * u, d.badge ? H - safe.bottom - 50 * u + 24 : 0)];
   const fit = Math.min((A[2] - A[0]) / (C[2] - C[0]), (A[3] - A[1]) / (C[3] - C[1]));
   const keys = []; let s = 1, tx = 0, ty = 0;
   for (const q of cam.snaps || []) {
