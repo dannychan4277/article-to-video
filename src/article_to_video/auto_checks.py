@@ -17,7 +17,9 @@ qa（內嵌引擎的 engine/qa.py，原樣使用）：在 Chromium 裡把片段�
   頁面報錯    fail                               fail                              fail
   確定性      像素差 > 24 fail，> 0 warn          同左                              同左
   動態        靜止幀對 ≥ 60% fail，≥ 40% warn     不判（一拍二動畫平常就 40～50%）  不判（本來就停著）
-  跳變        有就 fail                          不判（滑入、推鏡就是這樣）        有就 warn
+              （B 鏡頭不判：停住是設計，改看停太久）
+  跳變        有就 fail（B 鏡頭：spec 裡的快推時段  不判（滑入、推鏡就是這樣）        有就 warn
+              不算，其他照判）
   半截字、疊字 持續 ≥ 0.5 秒 fail，其他 warn       warn（鏡頭經過的卡片本來會被切到）  同財經圖表
   字進字幕帶  持續 ≥ 0.5 秒 fail，其他 warn       字幕框真的蓋到字才算（見下）；     同財經圖表（直式才有帶子）
                                                  持續 ≥ 1 秒 fail，其他 warn
@@ -25,6 +27,13 @@ qa（內嵌引擎的 engine/qa.py，原樣使用）：在 Chromium 裡把片段�
   字幕帶      壓進去累計 ≥ 0.3 秒 fail，其他 warn  不查（牛皮紙紋理會誤報）           直式查平台介面區；橫式沒字幕不查
   停太久      旁白期間 > 5 秒沒有新畫面事件 warn（換圖、新的柱／線／標註／卡片／框；慢推不算）
 理由寫在各常數旁邊。
+
+B 鏡頭（設定 camera = snap，spec 有 data.camera）：畫面平常停住，標註出現時快推一下（timeline.py）。
+- 動態：不判。靜止幀對多是故意的；畫面該有新東西卻沒有，由「停太久」（看畫面事件，不看像素）提醒。
+- 跳變：快推那幾幀整張圖一起放大，qa 看起來就是跳變（一幀變了好幾 %）。spec 裡寫了每一下快推的時刻與長度，
+  只把「這兩幀之間鏡頭在動」的幀對拿掉，其餘幀對用 qa 同一套門檻重算（qa.json 的 ts、pair_diffs）。
+  不用上游 huashu 的「0.35 秒內單調變化就算鏡頭事件」：那會把幾幀內長完的柱子也放過。
+  盲點：真的跳變剛好落在快推那 0.3 秒裡會被放過（快推只在標註出現時發生，那一刻同時跳出別的東西的機會很小）。
 
 快取：qa 的結果放 build/<比例>/checks/qa/<片段>/（clip.json、qa.json、qa.md、qa.log、<片段>.jpg 四幀拼圖＋運動熱圖、
 stamp.json），鍵＝QA_VERSION＋片段雜湊（spec＋引擎檔＋圖片）＋取樣設定＋qa.py 本身；片段沒變就不重跑。
@@ -142,6 +151,11 @@ SUBZONE_DARK = 70
 """Vox 畫面上的字與標籤是近黑色（引擎 C.ink #171716、剪報的字）；牛皮紙纖維、暗角都在灰階 95 以上（實測），不會被當成字。"""
 SUBZONE_RATIO = 0.003
 """字幕框裡深色像素超過框面積的這個比例，就算字幕蓋到了東西。"""
+SPIKE_MIN, SPIKE_RATIO, SPIKE_FLOOR = 3.0, 6.0, 0.05
+"""跳變的門檻，跟 engine/qa.py 片段模式同一組：一個幀對變了超過 SPIKE_MIN % 的畫面、而且是前後各 3 個幀對中位數
+（至少 SPIKE_FLOOR）的 SPIKE_RATIO 倍以上。B 鏡頭拿掉快推的幀對之後用它重算。"""
+SNAP_EPS = 0.002
+"""快推時段前後多放的秒數：cue 的時刻存到小數 6 位，跟幀的時刻差一點點。"""
 HOLD_WARN = 5.0
 """旁白期間超過這麼多秒沒有新的畫面事件就提醒（審片規則：一句旁白一個畫面事件，6 秒沒新資訊就算靜止）。"""
 
@@ -200,6 +214,9 @@ class ClipCheck:
     subzone: dict[str, Any] | None = None
     """Vox 片段 qa 報了「字進字幕帶」時，字幕框真的蓋到東西的時段：{"spans": [[起, 迄], …]}（片段內秒）；
     還沒看過（片段還沒渲、只讀快取）是 {"pending": True}，照 qa 原本的結果判；用不到是 None。"""
+    snaps: tuple[tuple[float, float], ...] | None = None
+    """B 鏡頭（停住、標註出現時快推）的片段：鏡頭在動的時段（片段內秒，從 spec 的 data.camera 算）；
+    不是 B 鏡頭（等速慢推、Vox、片尾卡）是 None。"""
 
 
 @dataclass(frozen=True)
@@ -486,19 +503,49 @@ def _qa_findings(cc: ClipCheck) -> list[tuple[str, str, list[tuple[float, float]
     if det > 0:
         out.append(("determinism", "fail" if det > DET_FAIL else "warn", [],
                     f"同一幀渲三次結果不一樣（像素最多差 {det}）：分鏡靜態圖可能跟成片對不上"))
-    if cc.grammar == CHART:
+    if cc.grammar == CHART and cc.snaps is None:  # B 鏡頭停住是設計，不判（見檔頭）
         still = float(rec.get("still_pairs_pct", 0.0))
         if still >= STILL_WARN:
             status = "fail" if still >= STILL_FAIL else "warn"
             out.append(("motion", status, [], f"畫面幾乎沒在動：{still:.0f}% 的相鄰兩幀沒有變化（慢推也沒有）"))
     spikes = [float(t) for t in rec.get("spikes_at_lt") or []]
+    biggest = float(rec.get("motion_max", 0))
+    if cc.snaps is not None and rec.get("pair_diffs") is not None:
+        spikes, biggest = _spikes_besides(rec["ts"], rec["pair_diffs"], cc.snaps)
     if spikes and cc.grammar in (CHART, CARD):
         spans = _merge_spans([(t - 1 / QA_FPS, t) for t in spikes], gap=0.2)
         out.append(("jump", "fail" if cc.grammar == CHART else "warn", spans,
-                    f"有 {len(spans)} 處畫面在一幀裡突然變了一大塊（最多 {float(rec.get('motion_max', 0)):.0f}% 的畫面），"
+                    f"有 {len(spans)} 處畫面在一幀裡突然變了一大塊（最多 {biggest:.0f}% 的畫面），"
                     "看起來會閃一下；財經圖表的動畫應該是慢慢長出來的"))
     out.extend(_framing_findings(cc.grammar, rec.get("framing") or [], cc.subzone))
     return out
+
+
+def _snap_windows(spec: dict[str, Any]) -> tuple[tuple[float, float], ...] | None:
+    """B 鏡頭的片段：每一下快推鏡頭在動的時段（片段內秒）。引擎在 cue 的 at 那一幀第一次動、dur 秒後（少一幀）停穩，
+    所以是 (at − 1 幀, at + dur − 1 幀)，再各放寬 SNAP_EPS。不是 B 鏡頭回傳 None。"""
+    cam = (spec.get("data") or {}).get("camera") if spec.get("grammar") == CHART else None
+    if not isinstance(cam, dict):
+        return None
+    frame = 1 / float(spec.get("fps", QA_FPS))
+    dur = float(cam.get("dur", 0.3))
+    out = [(float(q["at"]) - frame - SNAP_EPS, float(q["at"]) + dur - frame + SNAP_EPS) for q in cam.get("snaps") or []]
+    return tuple((a, b) for a, b in out if b > 0 and a < float(spec.get("duration", 0)))
+
+
+def _spikes_besides(ts: Sequence[float], diffs: Sequence[float],
+                    windows: Sequence[tuple[float, float]]) -> tuple[list[float], float]:
+    """拿掉「鏡頭在動」的幀對（兩幀之間跟某個快推時段重疊），剩下的照 qa 同一套門檻找跳變：
+    (跳變的時刻（後一幀，片段內秒）, 剩下的幀對裡最大的變動 %)。拿掉的幀對也不算進鄰居的中位數。"""
+    kept = [i for i in range(len(diffs)) if not any(a < ts[i + 1] and ts[i] < b for a, b in windows)]
+    d = [float(diffs[i]) for i in kept]
+    spikes = []
+    for j, i in enumerate(kept):
+        near = d[max(0, j - 3):j] + d[j + 1:j + 4]
+        loc = float(sorted(near)[len(near) // 2] if len(near) % 2 else sum(sorted(near)[len(near) // 2 - 1:len(near) // 2 + 1]) / 2) if near else 0.0
+        if d[j] > SPIKE_MIN and d[j] > SPIKE_RATIO * max(loc, SPIKE_FLOOR):
+            spikes.append(round(float(ts[i + 1]), 3))
+    return spikes, max(d, default=0.0)
 
 
 _FRAMING_KINDS = {"半截字": "cut-text", "叠字": "overlap", "进字幕带": "text-in-band", "近空白": "blank"}
@@ -648,7 +695,8 @@ def _collect(plan: BuildPlan, *, run: bool, jobs: int | None, log: Log) -> Check
     clips = [
         ClipCheck(clip_id=cp.id, shot_ids=tuple(cp.shot_ids), grammar=cp.grammar, start=cp.start_frame / fps,
                   end=cp.end_frame / fps, hash=clip_hash(cp), qa=results.get(cp.id), qa_dir=root / cp.id,
-                  band=_check_band(plan, cp, ffmpeg), subzone=_check_subzone(plan, cp, results.get(cp.id), ffmpeg))
+                  band=_check_band(plan, cp, ffmpeg), subzone=_check_subzone(plan, cp, results.get(cp.id), ffmpeg),
+                  snaps=_snap_windows(cp.spec))
         for cp in plan.clips
     ]
     book = load_log(plan.project.root)

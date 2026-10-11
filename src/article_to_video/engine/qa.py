@@ -252,6 +252,8 @@ with sync_playwright() as p:
                'deterministic': det == 0 and det_cold == 0, 'det_maxdiff': max(det, det_cold),
                'motion_pct': round(float(diffs.mean()), 2), 'motion_max': round(float(diffs.max()), 2), 'still_pairs_pct': round(still, 1),
                'spike_ratio': round(float(diffs.max() / max(med, 0.05)), 1), 'spikes_at_lt': spikes}
+        if spec:   # [article-to-video 內嵌修改] 片段：每一幀對的時刻與變動（%），外掛照 spec 裡已知的鏡頭快推時段重算跳變（auto_checks.py）
+            rec['ts'] = [round(t, 4) for t in ts]; rec['pair_diffs'] = [round(float(d), 3) for d in diffs]
         frame_runs = merge_runs(persistent(ts, [frame_issues(tb, a.sub_band) for tb in tbs]) +
                                 persistent(ts, [[('近空白', '')] if near_blank(f) else [] for f in frames]))
         rec['framing'] = [{'kind': k, 'text': txt, 'lt': [round(t0, 2), round(t1, 2)], 't': [round(s['t0'] + t0, 2), round(s['t0'] + t1, 2)]} for k, txt, t0, t1 in frame_runs]

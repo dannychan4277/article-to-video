@@ -19,6 +19,10 @@ const NEG_LABEL = 50, NEG_GAP = 18, NEG_LINE1 = 44, NEG_LINE2 = 40;
 const LEADER_MIN = 40;
 // [article-to-video 內嵌修改] 品牌色：data.colors.brand 取代「當品牌用的紅」（頂端色條、小旗、角標、標註圓點、大數字、折線預設色）；
 // 沒寫就是原本的紅。K 線的漲跌紅綠是語意色，不跟品牌走。#RRGGBB／#RGB 換成 rgba（折線下方漸層、角標底色用）。
+// [article-to-video 內嵌修改] B 鏡頭（data.camera，建置給的）：快推的曲線＝Emil Kowalski 的強 ease-out cubic-bezier(0.23, 1, 0.32, 1)。
+// 鏡頭是在回應「標註出現」這個事件：ease-out 一開始就動（觀眾眼睛正看著圓點彈出的那一刻），後段慢慢停穩；
+// ease-in-out 前幾幀幾乎不動，看起來像遲到的運鏡。時長由 spec 給（建置的 SNAP_DUR）。
+const SNAP_EASE = MO.bezier(0.23, 1, 0.32, 1);
 const rgba = (col, a, fb) => { const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(col || ''); if (!m) return fb; let h = m[1]; if (h.length === 3) h = [...h].map(x => x + x).join('');
   return `rgba(${parseInt(h.slice(0, 2), 16)},${parseInt(h.slice(2, 4), 16)},${parseInt(h.slice(4, 6), 16)},${a})`; };
 return {
@@ -116,6 +120,7 @@ return {
     L.hl.forEach((h, j) => { const p = L.hl[j - 1]; h.start = p && p.index === h.index && p.lines.join('\n') === h.lines.join('\n') ? p.start : h.q.at; });
     if (kind === 'line') { placeLineText(ctx, c); L.hl.forEach(h => { h.co = placeLineLabel(ctx, c, h); }); }
     if (kind === 'bar') L.hl.forEach(h => { h.mode = barMode(ctx, c, h); });
+    L.cam = d.camera ? cameraKeys(ctx, d.camera) : null;
   },
   draw(c0, t, ctx) {
     // alpha：图是白纸黑字，叠在深色画面上墨色看不见。先画进缓冲，再带一圈白色光晕合成（和 t1 同一招）
@@ -123,7 +128,9 @@ return {
     const { W, H, u, data: d } = ctx, { m, F, yS, xs, S, kind } = L, fs = ctx.portrait ? 1.2 : 1;   // 竖屏在手机上看：小字放大两成
     const qt = ctx.of('title')[0] || { at: 0 }, lt = ctx.lt(t, qt.at);
     if (!ctx.alpha) { c.fillStyle = '#FFFFFF'; c.fillRect(0, 0, W, H); }
-    c.save(); if (d.push) { const s = 1 + (d.pushFrom || 0) + d.push * clamp(t / ctx.dur); c.translate(W / 2, H / 2); c.scale(s, s); c.translate(-W / 2, -H / 2); }   // [Danny 本机改] data.push：整镜匀速矢量慢推（语法卡 ③「图表镜头匀速慢推 1→1.03」），默认 0 不推
+    c.save();
+    if (L.cam) { const [s, tx, ty] = camAt(ctx, t); c.translate(tx, ty); c.scale(s, s); }   // [article-to-video 內嵌修改] B 鏡頭：停住，標註出現時快推
+    else if (d.push) { const s = 1 + (d.pushFrom || 0) + d.push * clamp(t / ctx.dur); c.translate(W / 2, H / 2); c.scale(s, s); c.translate(-W / 2, -H / 2); }   // [Danny 本机改] data.push：整镜匀速矢量慢推（语法卡 ③「图表镜头匀速慢推 1→1.03」），默认 0 不推
     // ---- 版式：顶红线 → 小旗 → 标题 → 副标题（单位/口径）→ 来源 → 角标 ----
     if (lt > 0) {
       const p = MO.quintOut(MO.seg(lt, 0, 0.45));
@@ -220,6 +227,31 @@ return {
   },
 };
 function C(...a) { return a.find(v => v != null && v !== ''); }
+// [article-to-video 內嵌修改] B 鏡頭的關鍵幀（init 算好）。cam = {dur, box: [左, 上, 右, 下]（佔畫面比例：內容推近後可以到的範圍，
+// 畫面扣掉平台介面區與字幕帶）, snaps: [{at, zoom（推到多大，1.04＝推近 4%）, index（標哪一點）}]}：整串到這個片段為止的每一下，
+// 之前分鏡的 at 是負的，所以接續分鏡從同一個鏡頭接著走。鏡頭＝畫面座標 = s × 原座標 + (tx, ty)：
+// 每一下以被標註的點為固定點（它在畫面上不動、其他東西往外推開），再把 (tx, ty) 夾到「內容框推近後還在 box 裡」；
+// 放大量也夾在「內容框放得進 box」以內。內容框＝標題（含左上小旗）到來源行（含右下角標）、左右邊距之間；頂端色條不算（裝飾，推出畫面無妨）。
+function cameraKeys(ctx, cam) {
+  const { W, H, u, safe, data: d } = ctx, { S, xs, yS, kind } = L, b = cam.box || [0, 0, 1, 1];
+  const A = [b[0] * W, b[1] * H, b[2] * W, b[3] * H];
+  const C = [L.m, safe.top + 40 * u, W - L.mR, Math.max(H - safe.bottom - 24 * u, d.badge ? H - safe.bottom - 50 * u + 24 : 0)];
+  const fit = Math.min((A[2] - A[0]) / (C[2] - C[0]), (A[3] - A[1]) / (C[3] - C[1]));
+  const keys = []; let s = 1, tx = 0, ty = 0;
+  for (const q of cam.snaps || []) {
+    const i = q.index != null && S[q.index] ? q.index : S.length - 1, P = [xs[i], yS(kind === 'candle' ? S[i].c : S[i].value)];
+    const s1 = clamp(+q.zoom || 1, 1, Math.max(1, fit));
+    const nx = clamp(tx + (s - s1) * P[0], A[0] - s1 * C[0], A[2] - s1 * C[2]), ny = clamp(ty + (s - s1) * P[1], A[1] - s1 * C[1], A[3] - s1 * C[3]);
+    keys.push({ at: +q.at || 0, dur: cam.dur || 0.3, d: [s1 - s, nx - tx, ny - ty] }); s = s1; tx = nx; ty = ny;
+  }
+  return keys;
+}
+// t 時的鏡頭 [s, tx, ty]：每一下從上一下的終點出發（at 這一幀第一次動，跟 cue 的對齊約定一樣），幾下疊在一起也連續
+function camAt(ctx, t) {
+  const v = [1, 0, 0];
+  for (const k of L.cam) { const e = SNAP_EASE(clamp(ctx.lt(t, k.at) / k.dur)); if (e > 0) for (let j = 0; j < 3; j++) v[j] += k.d[j] * e; }
+  return v;
+}
 // [article-to-video 內嵌修改] 一個 highlight cue 標哪一點、寫哪幾行：cue 自己寫的優先，沒寫用 data.highlight，index 再沒有就是最後一點。
 // data.carried（建置從上一個分鏡沿用過來的標註、chainLayout 列的標註）：字和 index 都已經寫死，不看這個分鏡的 data.highlight
 function hlOf(q, d, n) {

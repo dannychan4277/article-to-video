@@ -14,18 +14,27 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pytest
+from PIL import Image
 
-from article_to_video.build import plan_build
-from article_to_video.timeline import FORMATS
+from article_to_video.auto_checks import CheckReport, run_checks
+from article_to_video.build import BuildResult, build_project, plan_build
+from article_to_video.clips import default_jobs, render_stills, run_parallel
+from article_to_video.timeline import FORMATS, VideoFormat
+
+SMALL = VideoFormat(name="test360", width=640, height=360, fps=30, safe_bottom=47, sub_size=18,
+                    sub_margin_v=15, sub_margin_lr=20, sub_pad=4)
+"""跟 test_auto_checks.py 同一個小畫面：建置、qa 都快；量的是比例。"""
 
 FPS = 30
 NARRATION = {
-    "s01": "三組數字裡，甲最高。",
+    "s01": "三組數字裡，甲最高，比另外兩組都高出不少。",
     "s02": "丙是負的，而且跌最深。",
-    "s03": "換成折線來看，最後回到正的，之後就一直停在這裡讓大家看清楚。",
+    "s03": "換成折線來看，這條線先往下再往上，最後回到正的，之後停在這裡。",
     "s04": "六根柱子一起跳出來，第三根最高。",
 }
 SOURCE = "來源：測試用自製數字"
@@ -59,7 +68,7 @@ SHOTS = [
                  "decimals": 2, "xTicks": [0, 12, 23],
                  "series": [{"label": f"{2024 + i // 12}-{i % 12 + 1:02d}", "value": v} for i, v in enumerate(DIP)],
                  "highlight": {"text": "回到正的"}},
-        "cues": [{"at": 0, "kind": "title"}, {"at": _a("s03"), "kind": "line", "dur": 1.2},
+        "cues": [{"at": 0, "kind": "title"}, {"at": _a("s03"), "kind": "line", "dur": 1.0},
                  {"at": _a("s03", "回到正的"), "kind": "highlight"}]}},
     {"id": "SH04", "start": _a("s04"), "chart": {
         "data": {"title": "六根柱子一起跳出來", "unit": "示意數據，%", "source": SOURCE, "chart": "bar", "decimals": 1,
@@ -132,3 +141,173 @@ def test_the_slow_push_is_still_what_a_video_gets_with_camera_set_to_slow(tmp_pa
     a, b = specs["SH01"]["data"], specs["SH02"]["data"]
     assert "camera" not in a and a["pushFrom"] == 0 and a["push"] > 0
     assert b["pushFrom"] == pytest.approx(a["push"], abs=1e-6)
+
+
+# ---------------------------------------------------------------- 引擎：渲出來的畫面
+
+
+@dataclass(frozen=True)
+class Lab:
+    root: Path
+    build: BuildResult
+    report: CheckReport
+    stills: dict[tuple[str, float], np.ndarray]
+
+    def spec(self, sid: str) -> dict:
+        return next(c.spec for c in self.build.plan.clips if c.id == sid)
+
+    def frame(self, sid: str, t: float) -> np.ndarray:
+        return self.stills[(sid, round(t, 4))]
+
+
+def label_at(spec: dict) -> float:
+    (at,) = cue_at(spec, "highlight")
+    return at
+
+
+def frame_t(at: float, k: int = 0) -> float:
+    """at（cue 的秒數，量化到幀、小數 6 位）之後第 k 幀的時刻，跟成片裡的幀一樣是 幀號 ÷ fps。"""
+    return (round(at * FPS) + k) / FPS
+
+
+def _still_times(spec: dict, sid: str) -> list[float]:
+    """每個分鏡要渲哪幾幀（都在 30 fps 的幀上）：標註前 0.3 秒、前一幀（還沒動）、出現後 2、3、9 幀與 0.8、1.2 秒；第一幀、最後一幀。"""
+    last = spec["duration"] - 1 / FPS
+    out = [0.0, last]
+    if sid in ("SH01", "SH03"):
+        at = label_at(spec)
+        out += [frame_t(at, k) for k in (-9, -2, -1, 2, 3, 9, 24, 36)]
+    return sorted(t for t in out if 0 <= t <= last + 1e-9)
+
+
+@pytest.fixture(scope="module")
+def lab(tmp_path_factory) -> Lab:
+    root = write_project(tmp_path_factory.mktemp("快推實驗室") / "專案")
+    res = build_project(root, fmt=SMALL)
+    report = run_checks(res.plan)
+    specs = {c.id: c.spec for c in res.plan.clips}
+
+    def work(sid: str) -> list[tuple[tuple[str, float], np.ndarray]]:
+        times = _still_times(specs[sid], sid)
+        paths = render_stills(specs[sid], root / "stills" / sid, times).paths
+        return [((sid, round(t, 4)), np.asarray(Image.open(p).convert("RGB")).astype(int)) for t, p in zip(times, paths)]
+
+    stills = dict(pair for out in run_parallel(["SH01", "SH02", "SH03"], work, jobs=default_jobs()) for pair in out)
+    return Lab(root, res, report, stills)
+
+
+def changed(a: np.ndarray, b: np.ndarray, thresh: int = 40) -> int:
+    return int((np.abs(a - b).max(axis=-1) > thresh).sum())
+
+
+def title_box(img: np.ndarray) -> tuple[int, int, int, int]:
+    """標題的外框 (x0, y0, x1, y1)：畫面上方兩成裡近黑色的字（標題是 #0C0C0C；品牌色條、小旗、副標都比它淺）。"""
+    top = img[: int(img.shape[0] * 0.22)]
+    ys, xs = np.nonzero(top.max(axis=-1) < 90)
+    return int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())
+
+
+def test_the_chart_holds_still_snaps_in_when_the_label_appears_then_holds_still_again(lab):
+    spec = lab.spec("SH03")
+    at = label_at(spec)
+    # 標註出現前：停住（A 這時候一直在慢推）。比到前兩幀：cue 的時刻存到小數 6 位，有時會比幀早一點點，
+    # 標註的光圈就在前一幀先閃出來（引擎原本就這樣，跟鏡頭無關）
+    assert changed(lab.frame("SH03", frame_t(at, -9)), lab.frame("SH03", frame_t(at, -2))) == 0
+    unzoomed = lab.frame("SH03", frame_t(at, -1))
+    w0 = title_box(unzoomed)[2] - title_box(unzoomed)[0]
+    w = {k: title_box(lab.frame("SH03", frame_t(at, k)))[2] - title_box(lab.frame("SH03", frame_t(at, k)))[0]
+         for k in (2, 9, 24)}
+    assert w[24] / w0 == pytest.approx(1.04, abs=0.01)  # 推近 4%（整串只有這一個標註，一下推到每下的上限）
+    assert w[2] - w0 > 0.5 * (w[24] - w0)  # 快：出現後兩幀就推了一半以上（ease-out，先快後慢）
+    assert w[9] == w[24]  # 0.3 秒內推完
+
+    settled, later = lab.frame("SH03", frame_t(at, 24)), lab.frame("SH03", frame_t(at, 36))
+    assert changed(settled, later) == 0  # 標註畫完之後：又停住
+
+
+def bar_top_center(img: np.ndarray, color=(0, 107, 162)) -> tuple[float, int]:
+    """主色（#006BA2）柱子裡最左邊那根的中心 x、頂端 y。"""
+    mask = (np.abs(img - np.array(color)).max(axis=-1) < 30)
+    ys, xs = np.nonzero(mask)
+    left = xs.min()
+    col = xs < left + 6  # 最左那根柱的左緣附近
+    xs_row = xs[ys == ys[col].min() + 4]
+    first = xs_row[xs_row < left + 60]
+    return (first.min() + first.max()) / 2, int(ys[col].min())
+
+
+def test_the_snap_zooms_toward_the_labelled_bar_which_stays_put(lab):
+    spec = lab.spec("SH01")
+    at = label_at(spec)
+    before, after = lab.frame("SH01", frame_t(at, -1)), lab.frame("SH01", frame_t(at, 9))
+    (bx0, by0), (bx1, by1) = bar_top_center(before), bar_top_center(after)
+    assert abs(bx1 - bx0) <= 1 and abs(by1 - by0) <= 1  # 被標註的柱（甲）頂端在畫面上不動
+    t0, t1 = title_box(before), title_box(after)
+    assert t1[0] < t0[0] - 2 and t1[2] > t0[2] + 2  # 其他東西往外推開（標題變寬）
+
+
+def test_a_continued_shot_starts_exactly_where_the_previous_one_left_the_camera(lab):
+    a, b = lab.spec("SH01"), lab.spec("SH02")
+    assert changed(lab.frame("SH01", a["duration"] - 1 / FPS), lab.frame("SH02", 0.0)) < 30
+
+
+# ---------------------------------------------------------------- 推到最近：字不出畫面、不進字幕帶與平台介面區
+
+
+@pytest.fixture(scope="module", params=["16x9", "9x16"])
+def closest(request, tmp_path_factory):
+    """整串寫 push 0.2（建置允許的最大值）：兩下快推要推到 10%、20%，引擎照版面夾住。渲第一個標註之前（還沒推）跟整串最後一幀。"""
+    fmt = FORMATS[request.param]
+    shots = json.loads(json.dumps(SHOTS[:2]))
+    shots[0]["chart"]["data"]["push"] = 0.2
+    root = write_project(tmp_path_factory.mktemp(f"推到最近 {fmt.name}") / "專案", shots=shots)
+    specs = specs_of(root, fmt.name)
+    jobs = [("SH01", frame_t(label_at(specs["SH01"]), -1)), ("SH02", specs["SH02"]["duration"] - 1 / FPS)]
+
+    def work(job):
+        sid, t = job
+        (path,) = render_stills(specs[sid], root / "stills" / sid, [t]).paths
+        return np.asarray(Image.open(path).convert("RGB")).astype(int)
+
+    before, after = run_parallel(jobs, work, jobs=2)
+    return fmt, before, after
+
+
+def test_even_the_closest_snap_keeps_every_word_on_screen_and_out_of_the_subtitle_band(closest):
+    fmt, before, after = closest
+    w0, w1 = (title_box(im)[2] - title_box(im)[0] for im in (before, after))
+    assert w1 / w0 > 1.06  # 真的推近了不少（不是什麼都沒做）
+    assert w1 / w0 < 1.2  # 但沒有照寫的 20% 推：夾在版面放得下的範圍
+    dark = after.mean(axis=-1) < 160  # 白底上看得見的字、線、柱
+    h, w = dark.shape
+    assert not dark[h - fmt.safe_bottom:].any()  # 字幕帶裡沒東西
+    below_bar = slice(fmt.ui_top + 12, h - fmt.safe_bottom)  # 頂端色條（裝飾）推出去無妨
+    assert not dark[below_bar, :3].any() and not dark[below_bar, w - 3:].any()  # 左右邊緣沒有被切到的字
+    assert not (after[:3].max(axis=-1) < 90).any()  # 上緣沒有被切到的標題
+    if fmt.ui_right:
+        assert not dark[below_bar, w - fmt.ui_right:].any()  # 直式：右側按鈕欄底下沒有字
+    if fmt.ui_top:
+        assert not (after[: fmt.ui_top].max(axis=-1) < 90).any()  # 直式：頂端分頁列底下沒有標題
+
+
+# ---------------------------------------------------------------- 自動檢查
+
+
+def findings(report: CheckReport, shot: str, check: str | None = None) -> list:
+    return [f for f in report.findings if shot in f.shot_ids and (check is None or f.check == check)]
+
+
+def test_holding_still_and_snapping_in_pass_every_check(lab):
+    for sid in ("SH01", "SH02", "SH03"):
+        assert findings(lab.report, sid) == [], sid
+    sh03 = next(c for c in lab.report.clips if c.clip_id == "SH03").qa
+    assert sh03["still_pairs_pct"] >= 60  # 等速慢推（A）的判法會把這麼多靜止判成「沒在動」
+
+
+def test_a_bar_popping_in_one_frame_is_still_a_jump_with_the_snap_camera(lab):
+    jump = findings(lab.report, "SH04", "jump")
+    assert [f.status for f in jump] == ["fail"]
+    st = next(st for st in lab.build.plan.timeline.shots if st.shot.id == "SH04")
+    pop = st.start_frame / FPS + cue_at(lab.spec("SH04"), "bar")[0]
+    (t0, t1), = jump[0].times
+    assert t0 - 0.1 <= pop <= t1 + 0.1  # 抓到的是柱子跳出來那一刻，不是後面標註的快推
