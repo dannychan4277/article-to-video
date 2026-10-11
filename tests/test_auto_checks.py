@@ -271,7 +271,7 @@ def test_the_review_page_sums_up_the_checks_on_top_and_quiet_cards_say_nothing(c
 
 
 def test_problems_on_the_page_are_in_plain_words_and_the_codes_are_tucked_away(lab, tmp_path):
-    """作者看到的是白話（哪裡、怎麼了、什麼時候）；代號、檢查名稱、像素位置收在「給 Claude 的代號」裡。"""
+    """作者看到的是白話（哪裡、怎麼了、什麼時候）；代號、檢查名稱、像素位置收在那一行點開才看的「給 Claude」裡。"""
     from article_to_video.auto_checks import checks_contributor
     from article_to_video.review import make_review
     from test_review_page import parse_review

@@ -40,7 +40,7 @@ class Card:
     slots: dict[str, str] = field(default_factory=dict)
     """data-slot → 裡面作者看得到的文字（數字對帳、自動檢查）；收起來給 Claude 的代號不算（在 codes）。"""
     codes: str = ""
-    """收起來的「給 Claude 的代號」區（.codes）裡的文字。"""
+    """收起來的「給 Claude」代號（.codes，在每一行點開才看的 details.more 裡）的文字。"""
     folded: str = ""
     """點開才看得到的細節（details.fold）裡的文字；這些字也算在 slots 裡。"""
 
