@@ -10,6 +10,7 @@
 - SH08～SH09：柱狀圖一串、一句長一根柱（計時實測的卡點）。甲、乙在 SH08 唸到時長（乙比甲低：「降到」），丙的 bar cue
   寫在接續分鏡 SH09。SH08 唸完乙標「不到一半」（乙旁邊有高一倍多的甲：標註放在乙的正上方）。
 - SH10～SH11：第一個分鏡沒寫 bar cue（柱在版式之後自己長），接續分鏡才寫第三根柱的 bar cue。
+- SH12：先長「子」（帶 index 的 bar cue），其他柱等沒帶 index 的 bar cue（寫在後面）才一起長。
 
 整串的第一個分鏡寫 push 0（不慢推），同一串裡不同時刻的畫面可以逐像素比；慢推的連續性另有測試（test_build.py）。
 """
@@ -41,6 +42,7 @@ NARRATION = {
     "s09": "再看丙組，回到二十。",
     "s10": "先放兩組。",
     "s11": "第三組，最後才來。",
+    "s12": "先看子組，其他幾組隨後。",
 }
 # 自製的月資料（跟 test_render_clip.py 的 DIP 同一組）：先倒掛、谷底在第 9 個月、回正
 DIP = [0.80, 0.55, 0.30, 0.10, -0.15, -0.40, -0.60, -0.75, -0.85, -0.80, -0.70, -0.55,
@@ -109,6 +111,12 @@ SHOTS = [
         "cues": [{"at": 0, "kind": "title"}]}},
     {"id": "SH11", "start": _a("s11"), "continues": True, "chart": {
         "cues": [{"at": _a("s11", "最後"), "kind": "bar", "data": {"index": 2}}]}},
+    # 先長一根（帶 index），其他的稍後一起長（沒帶 index 的 bar cue 寫在後面）
+    {"id": "SH12", "start": _a("s12"), "chart": {
+        "data": {"title": "先一根，其他隨後", "unit": "示意數據", "source": SOURCE, "chart": "bar", "decimals": 1, "push": 0,
+                 "series": [{"label": "子", "value": 2}, {"label": "丑", "value": 3}, {"label": "寅", "value": 4}]},
+        "cues": [{"at": 0, "kind": "title"}, {"at": _a("s12", "子組"), "kind": "bar", "data": {"index": 0}},
+                 {"at": _a("s12", "其他"), "kind": "bar"}]}},
 ]
 
 LAST = -1.0
@@ -125,6 +133,7 @@ STILLS = {
     "SH09": [0.0, 0.7, LAST],   # 0.7 秒：還沒唸到「回到」
     "SH10": [LAST],
     "SH11": [0.0, LAST],
+    "SH12": [0.85, LAST],   # 0.85 秒：唸過「子組」、還沒唸到「其他」
 }
 
 
@@ -342,3 +351,20 @@ def test_bars_without_a_cue_stay_grown_when_a_continuation_cues_another_bar(chai
     cut = changed(chain.last("SH10"), chain.at("SH11", 0.0))
     assert cut < 400, f"SH10→SH11 切點前後有 {cut} 個像素變了"
     assert changed(chain.at("SH11", 0.0), chain.last("SH11")) > 5000, "寅沒在 SH11 長出來"
+
+
+BLUE = np.array([0x00, 0x6B, 0xA2])
+
+
+def visible_bars(img: np.ndarray) -> int:
+    """畫面上有幾根（預設藍色的）柱：有藍色像素的直欄連成幾段。"""
+    cols = (np.abs(img - BLUE).max(axis=-1) <= 40).any(axis=0)
+    return int(np.count_nonzero(np.diff(cols.astype(int)) == 1) + cols[0])
+
+
+def test_bars_without_an_index_wait_for_their_own_cue_written_after_an_indexed_one(chain):
+    """先長一根（帶 index 的 bar cue）、其他的等後面那個沒帶 index 的 bar cue 一起長：唸到「其他」之前只有「子」。
+    原本沒帶 index 的柱跟著時間最早的 bar cue 長（後面那個 cue 寫了也沒作用），「子」一出來就全部跟著出來。"""
+    early, settled = visible_bars(chain.at("SH12", 0.85)), visible_bars(chain.last("SH12"))
+    assert early == 1, f"唸到「其他」之前畫面上就有 {early} 根柱"
+    assert settled == 3, f"最後只有 {settled} 根柱"

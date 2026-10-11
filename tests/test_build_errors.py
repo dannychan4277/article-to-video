@@ -83,6 +83,30 @@ def narration_char_missing_from_subtitle_font(_, narration):
     narration["segments"]["s01"] = "兩年期殖利率𠀋，平均四點五八。"
 
 
+# 寫了也沒作用的 cue（計時實測：preview 對接續分鏡裡的 bar cue 什麼都沒說，做片的人以為它會動）
+def continuation_bar_cue_without_index(shots, _):
+    """接續分鏡的 bar cue 沒寫 data.index：沒寫 index 的柱在第一個分鏡就長好了。"""
+    sh(shots, "SH02")["chart"]["cues"].append({"at": {"segment": "s02", "word": "倒掛"}, "kind": "bar"})
+
+
+def bar_grown_twice_in_a_chain(shots, _):
+    """十年期（第 1 根）在 SH01 已經長了，接續分鏡又寫一次。"""
+    sh(shots, "SH02")["chart"]["cues"].append({"at": {"segment": "s02", "word": "倒掛"}, "kind": "bar", "data": {"index": 1}})
+
+
+def line_cue_in_a_continuation(shots, _):
+    sh(shots, "SH02")["chart"]["cues"].append({"at": {"segment": "s02", "word": "倒掛"}, "kind": "line"})
+
+
+def bar_cue_past_the_bars(shots, _):
+    sh(shots, "SH01")["chart"]["cues"][3]["data"]["index"] = [1, 4]
+
+
+def bar_cue_anchored_in_the_next_shot(shots, _):
+    """柱要在下一句才長，cue 卻寫在前一個分鏡、錨點指到下一個分鏡的詞（計時實測被擋在「之後」、不知道怎麼辦）。"""
+    sh(shots, "SH01")["chart"]["cues"][3]["at"] = {"segment": "s02", "word": "倒掛"}
+
+
 CASES = {
     "詞找不到": (word_not_found, ["分鏡 SH01", "chart.cues[2].at", "s01", "找不到「五點」"]),
     "詞重複出現": (ambiguous_word, ["分鏡 SH01", "chart.cues[1].at", "「兩年期」", "出現 2 次", "occurrence"]),
@@ -95,6 +119,13 @@ CASES = {
     "不認得的 cue": (unknown_cue_kind,["分鏡 SH01", "chart.cues[0]", "titel"]),
     "cue 時間超出分鏡": (number_cue_past_shot_end, ["分鏡 SH02", "chart.cues[1]", "超出"]),
     "旁白有字幕字型沒有的字": (narration_char_missing_from_subtitle_font, ["旁白段 s01", "𠀋"]),
+    "接續分鏡的 bar cue 沒寫 index": (continuation_bar_cue_without_index,
+                                 ["分鏡 SH02", "chart.cues[1]", "沒有作用", "data.index"]),
+    "同一根柱長兩次": (bar_grown_twice_in_a_chain, ["分鏡 SH02", "chart.cues[1]", "第 1 根柱", "SH01", "chart.cues[3]"]),
+    "接續分鏡的 line cue": (line_cue_in_a_continuation, ["分鏡 SH02", "chart.cues[1]", "沒有作用", "line"]),
+    "bar cue 標到不存在的柱": (bar_cue_past_the_bars, ["分鏡 SH01", "chart.cues[3]", "第 4 根", "只有 2 根"]),
+    "柱的錨點在下一個分鏡": (bar_cue_anchored_in_the_next_shot,
+                    ["分鏡 SH01", "chart.cues[3].at", "之後", "接續分鏡 SH02", "bar cue 搬到"]),
 }
 
 

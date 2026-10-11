@@ -26,8 +26,9 @@
 
 from __future__ import annotations
 
+import bisect
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -398,7 +399,8 @@ def build_timeline(project: Project, audio: Mapping[str, SegmentAudio], fmt: Vid
         if shot.chart is not None:
             _, eff = effective_chart(project.shots, n)
             for cue in eff:
-                ct = _cue_timing(cue, f0, f1, segs, s.lead, fps, problems, shot)
+                ct = _cue_timing(cue, f0, f1, segs, s.lead, fps, problems, shot,
+                                 shot_at=lambda f: project.shots[bisect.bisect_right(starts, f) - 1])
                 if ct is not None:
                     cues.append(ct)
         elif shot.vox is not None:
@@ -433,10 +435,22 @@ def vox_head(shots: list[Shot], i: int) -> int:
     return i
 
 
+def _later_bar_hint(cue: Cue, owner: Shot) -> str:
+    """柱的錨點落在後面的分鏡：告訴做片的人把 bar cue 搬過去（接續分鏡的 bar cue＝那根柱在那一句才長）。"""
+    if cue.kind != "bar":
+        return ""
+    if owner.continues:
+        return f"。要這根柱在那一句才長，把這個 bar cue 搬到接續分鏡 {owner.id} 的 chart.cues（前面的分鏡就不會先畫它）"
+    return (f"。要這根柱在那一句才長，把 {owner.id} 改成接續分鏡（\"continues\": true），再把這個 bar cue 搬到"
+            "它的 chart.cues")
+
+
 def _cue_timing(cue: Cue, f0: int, f1: int, segs: Mapping[str, SegmentTiming], lead: float, fps: int,
-                problems: list[str], shot: Shot, *, clip_f0: int | None = None) -> CueTiming | None:
+                problems: list[str], shot: Shot, *, clip_f0: int | None = None,
+                shot_at: Callable[[int], Shot] | None = None) -> CueTiming | None:
     """cue → 在成片裡的幀與片段內秒數。錨點與數字 at 都要落在這個分鏡自己的時段裡；
-    clip_f0：片段的起點幀（Vox 接續分鏡跟前面的分鏡同一個片段，片段內秒數從那裡算）。"""
+    clip_f0：片段的起點幀（Vox 接續分鏡跟前面的分鏡同一個片段，片段內秒數從那裡算）；
+    shot_at：成片的幀 → 那時候在畫面上的分鏡（錯誤訊息指路用）。"""
     frames = f1 - f0
     base = f0 if clip_f0 is None else clip_f0
     if not isinstance(cue.at, Anchor):
@@ -463,9 +477,11 @@ def _cue_timing(cue: Cue, f0: int, f1: int, segs: Mapping[str, SegmentTiming], l
             )
             return None
     if local >= frames:
+        owner = shot_at(f0 + local) if shot_at is not None else None
         problems.append(
             f"{cue.where}.at 的錨點（{_describe(cue.at)}，{g:.2f} 秒）在 {shot.id} 結束（{f1 / fps:.2f} 秒）之後，"
             "會被下一個分鏡切掉、根本不會出現。改指這個分鏡唸到的詞，或把下一個分鏡的切入點往後移"
+            + (_later_bar_hint(cue, owner) if owner is not None and owner is not shot else "")
         )
         return None
     return CueTiming(cue.where, cue.kind, round((f0 + local - base) / fps, 6), f0 + local, cue.at, dict(cue.fields))
@@ -581,6 +597,20 @@ def _check_highlight_points(project: Project) -> None:
                                 f"（0～{len(series) - 1}）：改 data.highlight.index 或 cue 的 data.index")
     if problems:
         raise ProjectError(problems, title="標註標到不存在的點")
+    for n, shot in enumerate(project.shots):
+        if shot.chart is None:
+            continue
+        data, _ = effective_chart(project.shots, n)
+        series = data.get("series") if isinstance(data.get("series"), list) else []
+        if data.get("chart", "bar") != "bar":
+            continue
+        for cue in shot.chart.cues:
+            past = [i for i in bar_indices(cue) if i >= len(series)] if cue.kind == "bar" else []
+            if past:
+                problems.append(f"{cue.where} 沒有作用：要長第 {'、'.join(map(str, past))} 根柱（0 起算），但這張圖只有 "
+                                f"{len(series)} 根（0～{len(series) - 1}）：改 data.index")
+    if problems:
+        raise ProjectError(problems, title="bar cue 標到不存在的柱")
 
 
 def _opening_at(cue: CueTiming, st: ShotTiming) -> float:

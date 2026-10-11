@@ -190,12 +190,15 @@ return {
       const opt = { dimCol: L.col.dim, fmt: v => fmtv(d, v), font: `600 ${Math.max(24 * u * fs, Math.min(34 * u * fs, L.slot * 0.3))}px ${NUM}`, labelCol: INK, label: n <= 14 };
       const own = {};                                                      // 带 data.index 的 bar cue：这几根柱子从它的 at 起单独长
       for (const q of ctx.of('bar')) if (q.data && q.data.index != null) [].concat(q.data.index).forEach(i => { own[i] = q; });
+      // [article-to-video 內嵌修改] 沒有自己時刻的柱跟著「沒帶 index 的 bar cue」長（原版跟著時間最早的資料 cue：先寫一根帶 index 的、
+      // 後面再寫一個沒帶 index 的「其他一起長」，後面那個沒作用、其他柱跟第一根一起出來）。沒有沒帶 index 的 bar cue 時照原版
+      const qb = ctx.of('bar').find(q => !(q.data && q.data.index != null)), bp = qb ? ctx.p(t, qb.at, qb.dur || ddur) : dp;
       const perBar = Object.keys(own).length > 0 || S.some(r => r.color);   // 原版「逐根長出」的路徑（series[i].text 只在這條路徑生效）
       // [article-to-video 內嵌修改] data.barsLater（建置給的）：這一串後面的分鏡才長的柱（bar cue 寫在接續分鏡），這個片段不畫
       const later = new Set(d.barsLater || []);
       // [article-to-video 內嵌修改] 一律逐根畫（跟原版整排一起畫的錯開時間一樣：MO.lagged），每根柱自己的淡掉程度 dimA[i]
       tops = S.map((r, i) => {
-        const q = own[i], p = later.has(i) ? 0 : q ? ctx.p(t, q.at, q.dur || 0.7) : MO.lagged(i, n, dp, Math.min(0.22, 2 / n));
+        const q = own[i], p = later.has(i) ? 0 : q ? ctx.p(t, q.at, q.dur || 0.7) : MO.lagged(i, n, bp, Math.min(0.22, 2 / n));
         const base = r.color || L.col.main, col = i === curI ? (perBar ? base : L.col.accent) : base;
         const dim = r.color ? 0 : dimA[i];   // [article-to-video 內嵌修改] 自己寫了 color 的柱不淡掉：顏色是作者指定的（跟片裡別處同一個量的配色對上），不是強調；原版標註一出現就跟著淡成灰
         return CH.bars(c, [{ x: xs[i], v: r.value }], yS, bw, p, { ...opt, ...(perBar && r.text != null ? { fmt: () => r.text } : {}), lag: 0, col, hi: dim > 0 ? 1 : -1, hiP: dim })[0];   // [Danny 本机改] series 项可写 text 覆盖柱上数值（如「＞50%」；只在逐根长出的路径生效：有 data.index 的 bar cue 或 color）

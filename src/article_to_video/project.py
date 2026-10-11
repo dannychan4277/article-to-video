@@ -447,6 +447,7 @@ def load_project(root: str | Path, *, overrides: Mapping[str, Any] | None = None
     problems.raise_if_any()
     _check_continuations(shots, problems)
     _check_layouts(shots, problems)
+    _check_data_cues(shots, problems)
     _check_vox_boxes(shots, problems)
     problems.raise_if_any()
     return Project(paths=paths, segments=segments, shots=shots, settings=settings, figure_numbers=figure_numbers)
@@ -1041,6 +1042,55 @@ def _index_list(v: Any) -> list[int] | None:
     vs = v if isinstance(v, list) else [v]
     ok = vs and all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in vs)
     return list(vs) if ok else None
+
+
+def _check_data_cues(shots: list[Shot], problems: _Problems) -> None:
+    """柱、線的 cue 寫了也沒作用的，擋下來（整串一起看：第一個分鏡＋接續它的）：
+    - 帶 data.index 的 bar cue＝那幾根柱在這一刻才長（可以寫在接續分鏡：前面的分鏡不畫它們）；同一根柱整串只能長一次。
+    - 沒帶 index 的 bar cue＝其他柱一起長的時刻，line／candle cue＝線、K 線長出來的時刻：整串只能有一個，寫在第一個分鏡。
+      接續分鏡沿用的圖第一幀就畫好了，在那裡寫等於沒寫。
+    柱的根數要等公有數據抓到才知道，標到不存在的柱在建置時查（timeline._check_highlight_points）。"""
+    grown: dict[int, tuple[Shot, Cue]] = {}
+    main: tuple[Shot, Cue] | None = None
+    for i, shot in enumerate(shots):
+        if shot.chart is None:
+            continue
+        if _layout_head(shots, i) == i:
+            grown, main = {}, None
+        layout = shots[_layout_head(shots, i)].chart.data.get("chart")
+        if layout in ("number", "compare"):
+            continue  # 這兩種版面不收柱、線（_check_layouts）
+        for cue in shot.chart.cues:
+            if cue.kind not in ("bar", "line", "candle"):
+                continue
+            d = cue.fields.get("data") if isinstance(cue.fields.get("data"), dict) else {}
+            idx = _index_list(d.get("index")) if cue.kind == "bar" and "index" in d else None
+            if idx is not None:
+                for x in idx:
+                    if x in grown:
+                        first_shot, first = grown[x]
+                        where = "這個分鏡" if first_shot is shot else first_shot.id
+                        problems.add(f"{cue.where} 沒有作用：第 {x} 根柱（0 起算）已經在 {where} 的 "
+                                     f"{first.where.removeprefix(first_shot.label + ' 的 ')} 長過了，"
+                                     "同一根柱只長一次。拿掉這個 index，或改成還沒長的柱")
+                    else:
+                        grown[x] = (shot, cue)
+                continue
+            if layout is not None and cue.kind != layout:
+                problems.add(f"{cue.where} 是 {cue.kind} cue，但這張圖是 {layout}，沒有作用："
+                             f"{CHART_LAYOUTS.get(layout, layout)}用 {layout} cue")
+            elif shot.continues:
+                what = "其他柱一起長" if cue.kind == "bar" else "線長出來" if cue.kind == "line" else "K 線長出來"
+                hint = ("要某根柱在這一句才長，寫 data.index（第幾根，0 起算），例 "
+                        "{\"at\": 錨點, \"kind\": \"bar\", \"data\": {\"index\": 2}}" if cue.kind == "bar"
+                        else "這一句要有新東西就換標註（highlight）")
+                problems.add(f"{cue.where} 沒有作用：{shot.label} 是接續分鏡，沿用的圖第一幀就畫好了，"
+                             f"{what}的時刻只能寫在這一串的第一個分鏡。{hint}")
+            elif main is not None:
+                problems.add(f"{cue.where} 沒有作用：{main[1].where} 已經是{'柱一起長' if cue.kind == 'bar' else '圖長出來'}的時刻，"
+                             f"一個分鏡只看第一個。拿掉這個 cue" + ("；要某根柱另外在這一刻長，寫 data.index" if cue.kind == "bar" else ""))
+            else:
+                main = (shot, cue)
 
 
 def _check_layouts(shots: list[Shot], problems: _Problems) -> None:
