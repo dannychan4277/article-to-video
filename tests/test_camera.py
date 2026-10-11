@@ -1,4 +1,4 @@
-"""財經圖表的鏡頭 B（設定 camera = snap）：畫面平常停住，標註出現的那一刻快推一下，然後停住。
+"""財經圖表的快推（設定 camera = snap）：畫面平常停住，標註出現的那一刻快推一下，然後停住。
 
 切點：
 - 建置計畫（`plan_build`，假配音層）給引擎的 spec：快推排在哪些時刻、推多少。
@@ -7,7 +7,7 @@
 
 測試專案是自製的（數字是自製示意數字）：
 - SH01～SH02：柱狀圖一串。SH01 先滾大數字（不推），唸到「甲最高」標甲；SH02 接續，唸到「跌最深」換標丙。
-- SH03：折線，長完之後唸到「回到正的」標最後一點，之後一直停著（停住的比例遠超過 A 的「沒在動」門檻）。
+- SH03：折線，長完之後唸到「回到正的」標最後一點，之後一直停著（停住的比例遠超過慢推的「沒在動」門檻）。
 - SH04：柱子在一幀裡全部跳出來（真的跳變），之後才標註。
 - SH07：分鏡設定寫了第二個畫面事件，引擎卻什麼都沒畫（快推片段的「動態」要抓到）。
 """
@@ -370,7 +370,7 @@ def test_holding_still_and_snapping_in_pass_every_check(lab):
     for sid in ("SH01", "SH02", "SH03"):
         assert findings(lab.report, sid) == [], sid
     sh03 = next(c for c in lab.report.clips if c.clip_id == "SH03").qa
-    assert sh03["still_pairs_pct"] >= 60  # 等速慢推（A）的判法會把這麼多靜止判成「沒在動」
+    assert sh03["still_pairs_pct"] >= 60  # 慢推的判法會把這麼多靜止判成「沒在動」
 
 
 def test_a_big_number_card_and_a_comparison_pass_every_check_with_the_snap_camera(lab):
