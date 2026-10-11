@@ -88,20 +88,23 @@ return {
     let tdec = 0; while (tdec < 4 && Math.abs(step * 10 ** tdec - Math.round(step * 10 ** tdec)) > 1e-6) tdec++;
     const roomFor = need => { if (F.h - need < 60 * u) throw new Error(`[article-to-video 內嵌] 圖區太矮：讓開上下 safe（字幕、平台介面）之後只剩 ${Math.round(F.h)}px 畫資料，標註留白要 ${Math.round(need)}px。標題、副標或來源太長，或多了大數字那一條：請縮短文字、拿掉大數字，或把標註改短`); };   // [article-to-video 內嵌] 原版這裡放不下時下面的 while 會無限加刻度，當掉時只看到 Invalid array length
     roomFor(0);
+    // [article-to-video 內嵌修改] 柱狀圖上下要留的白（下面三項）一起算到都夠：原版照順序各算一次，後面往下加的刻度把前面在上面留的白壓扁
+    // （同時標正數柱、負數柱的一串：標最高那根的斜向標註被夾在圖區上緣，壓到柱上的數值）。只有一項時跟原版一樣
+    const span = () => ticks[ticks.length - 1] - ticks[0], rooms = [];
+    const below = need => { let k = false; while ((Math.min(...vals) - ticks[0]) / span() * F.h < need) { ticks.unshift(+(ticks[0] - step).toFixed(10)); k = true; } return k; };
+    const above = need => { let k = false; while ((ticks[ticks.length - 1] - Math.max(...vals)) / span() * F.h < need) { ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10)); k = true; } return k; };
     if (!yr && kind === 'bar' && Math.min(...vals) < 0) {                // 负数柱的数值写在柱底下方：最低那根下面留出一行，不然压到类目名
-      const vmin = Math.min(...vals), need = 56 * u * fs0; roomFor(need);
-      while ((vmin - ticks[0]) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.unshift(+(ticks[0] - step).toFixed(10));
+      const need = 56 * u * fs0; roomFor(need); rooms.push(() => below(need));
     }
     const posL = hls.filter(h => S[h.index] && S[h.index].value >= 0), negL = hls.filter(h => S[h.index] && S[h.index].value < 0);   // [article-to-video 內嵌修改] 整串的標註（見上面 chainLayout）
     if (!yr && kind === 'bar' && posL.length) {   // 标注的柱子上方要留够文字块（[Danny 本机改] 原本只管「不是最高那根」；标最高那根时斜向标注被 ty 夹在 F.y+60，文字压回柱子上）
-      const nL = Math.max(...posL.map(h => h.lines.length)), need = (52 * nL + 44 + 30) * u * fs0, vmax = Math.max(...vals); roomFor(need);
-      while ((ticks[ticks.length - 1] - vmax) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
+      const nL = Math.max(...posL.map(h => h.lines.length)), need = (52 * nL + 44 + 30) * u * fs0; roomFor(need); rooms.push(() => above(need));
     }
     if (!yr && kind === 'bar' && negL.length) {    // [article-to-video 內嵌修改] 負數柱的標註放在數值標籤正下方：最低那根柱下面再留出標註文字的高度
-      const nL = Math.max(...negL.map(h => h.lines.length)), vmin = Math.min(...vals);
-      const need = (NEG_LABEL + NEG_DOT + NEG_LINE1 + NEG_LINE2 * (nL - 1) + 12) * u * fs0; roomFor(need);
-      while ((vmin - ticks[0]) / (ticks[ticks.length - 1] - ticks[0]) * F.h < need) ticks.unshift(+(ticks[0] - step).toFixed(10));
+      const nL = Math.max(...negL.map(h => h.lines.length));
+      const need = (NEG_LABEL + NEG_DOT + NEG_LINE1 + NEG_LINE2 * (nL - 1) + 12) * u * fs0; roomFor(need); rooms.push(() => below(need));
     }
+    for (let k = 0; k < 20 && rooms.map(f => f()).some(Boolean); k++);
     if (!yr && kind === 'line' && hls.length) {                           // [Danny 本机改] 折线标注：线的最高点之上留够文字块，斜向标注才不会压在线上
       // [article-to-video 內嵌修改] 先不留白，每個標註（含整串的）都放得到不壓線、不壓線尾數值、不壓零軸、引線不穿過折線的位置就好；
       // 放不下才往上加一格刻度再試，最多加到原版的「最高點上方 170」。原版一律留 170：圖區被大數字那一條吃掉時，縱軸被撐到資料的兩三倍高（−0.93～1.5 畫成 −1～4）
@@ -511,8 +514,13 @@ function barMode(ctx, c, h) {
   let ty = Math.max(F.y + 60 * u, anchor[1] - 140 * u);
   // [article-to-video 內嵌修改] 斜向文字也不能壓到這根柱自己的數值（柱頂正中）：柱寬隨根數變寬之後，數值會落到文字底下
   // （標最高那根、文字被夾在圖區上緣 +60 時最明顯）。橫向疊到時，文字往上抬到數值上面（最多抬到圖區上緣 +20）
-  const lf = Math.max(24 * u * fs, Math.min(34 * u * fs, L.slot * 0.3)); c.save(); c.font = `600 ${lf}px ${NUM}`; const lw = c.measureText(fmtv(ctx.data, v)).width; c.restore();
-  if (bx0 < anchor[0] + lw / 2 + 6 * u && bx1 > anchor[0] - lw / 2 - 6 * u) ty = Math.max(F.y + 20 * u, Math.min(ty, anchor[1] - 14 - lf - drop - 4 * u));
+  const lf = Math.max(24 * u * fs, Math.min(34 * u * fs, L.slot * 0.3)); c.save(); c.font = `600 ${lf}px ${NUM}`; const lw = c.measureText(fmtv(ctx.data, v)).width;
+  // [article-to-video 內嵌修改] 再照量到的字算一次（數值標籤的字頂、標註最後一行的字底；CH.bars、CH.callout 的 14、8、40 是像素，不跟 u 縮），
+  // 取抬得比較高的：畫面縮小渲（qa、測試的 640×360）時，原本的算法只剩 1～2 像素，標註的字會壓到數值
+  const labTop = anchor[1] - 14 - c.measureText('0').actualBoundingBoxAscent, last = ls.length - 1;
+  c.font = last > 0 ? `400 ${28 * u * fs}px ${CN}` : `700 ${50 * u}px ${NUM}`; const desc = c.measureText(ls[last] || '').actualBoundingBoxDescent; c.restore();
+  const fit = labTop - 4 * u - 2 - desc - 8 - 40 * last;
+  if (bx0 < anchor[0] + lw / 2 + 6 * u && bx1 > anchor[0] - lw / 2 - 6 * u) ty = Math.max(F.y + 20 * u, Math.min(ty, anchor[1] - 14 - lf - drop - 4 * u, fit));
   h.ty = ty;
   const by1 = ty + drop;
   return tops.some(([bx, by], j) => j !== hi && bx + L.slot * 0.45 > bx0 && bx - L.slot * 0.45 < bx1 && by - 44 * u * fs < by1) ? 'above' : 'diag';
