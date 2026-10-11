@@ -213,7 +213,8 @@ def test_the_reviewers_long_explanations_stay_folded_until_the_author_opens_them
 
 SHOWN_LIMIT = 600
 """這個測試專案（兩張卡、三項審片問題）改之前預設攤開 2,006 字，改完約 500 字。
-示範片（25 張卡、三輪審片）改之前 13,044 字、改完不到 2,900 字（量法見 item-7 交接筆記）。"""
+示範片（25 張卡、三輪審片）改之前 13,044 字、改完不到 2,900 字（量法見 item-7 交接筆記）；審了四輪的新版面示範片
+卡上累積各輪的可改長到 3,109 字，卡上只攤開最新一輪的可改之後 2,802 字（review-fixes-2 交接筆記）。"""
 
 
 def test_what_the_author_sees_before_opening_anything_stays_short(project, browser):
@@ -243,6 +244,30 @@ def test_the_top_of_the_page_lists_what_needs_fixing_and_leaves_nice_to_haves_on
     assert "第一根柱子停太久" in folded  # 分鏡 1 的可改：頁首收起來
     cards = {c.id: c for c in page.cards}
     assert "第一根柱子停太久" in cards["SH01"].slots["review"] and "第一根柱子停太久" not in cards["SH01"].folded
+
+
+def test_cards_spread_out_only_the_latest_rounds_nice_to_haves(project):
+    """示範片審了四輪：每張卡把每一輪還開著的「可改」都攤開（多出兩百多字），舊的又沒人重新核對、有些早就過時
+    （分鏡改成大數字卡了，卡上還掛著折線刻度的問題）。卡上只攤開最新一輪的可改（含最新一輪核過、說沒修好的），
+    較早幾輪還開著的收成一行；必修、該修照舊攤開。"""
+    from test_review_page import read_review
+
+    first = {"items": [
+        {"severity": "可改", "shot": 1, "time": 1.0, "title": "第一輪的可改", "evidence": "猜測"},
+        {"severity": "該修", "shot": 1, "time": 1.5, "title": "第一輪的該修", "evidence": "實測"},
+        {"severity": "可改", "shot": 2, "time": 6.0, "title": "第二輪核過還沒修好的可改", "evidence": "實測"},
+    ]}
+    second = {"items": [{"severity": "可改", "shot": 1, "time": 2.0, "title": "第二輪的可改", "evidence": "推論"}],
+              "previous": [{"id": "R1-3", "status": "沒修好", "note": "還是一樣"}]}
+    assert record(project, first).returncode == 0
+    assert record(project, second).returncode == 0
+    cards = {c.id: c for c in read_review(project).cards}
+    sh01, sh02 = cards["SH01"], cards["SH02"]
+    for shown in ("第二輪的可改", "第一輪的該修"):
+        assert shown in sh01.slots["review"] and shown not in sh01.folded, shown
+    assert "第一輪的可改" in sh01.folded and "較早幾輪還有 1 項可改" in sh01.slots["review"]
+    assert "第二輪核過還沒修好的可改" in sh02.slots["review"] and "第二輪核過還沒修好的可改" not in sh02.folded
+    assert "較早幾輪" not in sh02.slots["review"]
 
 
 def test_an_answer_piped_in_is_read_as_utf8_whatever_the_macs_language_setting(project):
@@ -479,6 +504,32 @@ def test_rounds_recorded_before_this_change_fall_back_to_the_whole_film(project)
     m = material(project)
     assert m["scope"] == "full" and m["round"] == 2 and "比不出" in prep.stdout
     assert [p["id"] for p in m["previous"]] == ["R1-1"] and [k["id"] for k in m["known"]] == ["R1-2"]
+
+
+def _legacy_round(n: int, items: list[dict]) -> dict:
+    """舊專案的一輪：沒記 scope（當時都是整支片）、沒記 shotHashes（比不出改了哪些）。"""
+    return {"round": n, "aspect": "16x9", "videoKey": "舊的成片", "score": 7, "summary": "", "previous": [],
+            "items": [{"id": f"R{n}-{k + 1}", "shot": 2, "shotId": "SH02", "time": 6.0, **it} for k, it in enumerate(items)]}
+
+
+def test_an_old_round_without_must_fixes_says_no_review_is_needed_without_contradicting_itself(project):
+    """示範：舊專案沒有待核的必修，build 之後印「獨立審片不用再審（…比不出改了哪些，整支片審）」——同一句又說不用審、
+    又說整支片審。改成：沒有待核的必修＝不用再審、沒有要核的（真的要重看用 --full）；有待核的必修＝照舊整支片再審一輪。"""
+    log = {"version": 1, "rounds": [_legacy_round(1, [{"severity": "該修", "title": "標註太小"}])], "resolutions": {}}
+    (project / "check_log.json").write_text(json.dumps(log, ensure_ascii=False), encoding="utf-8")
+    built = run_cli("build", str(project), "--tts", "fake", "--no-open")
+    assert built.returncode == 0, built.stdout + built.stderr
+    (line,) = [ln for ln in built.stdout.splitlines() if "獨立審片" in ln]
+    assert "不用再審" in line and "沒有必修" in line and "--full" in line, line
+    assert "比不出改了哪些，整支片審" not in built.stdout
+
+    # 有待核的必修（整支片已經審了兩輪）：比不出改了哪些，就整支片再審一輪核對
+    log["rounds"].append(_legacy_round(2, [{"severity": "必修", "title": "標註指錯柱"}]))
+    (project / "check_log.json").write_text(json.dumps(log, ensure_ascii=False), encoding="utf-8")
+    again = run_cli("build", str(project), "--tts", "fake", "--no-open")
+    assert again.returncode == 0, again.stdout + again.stderr
+    (step,) = [ln for ln in again.stdout.splitlines() if "獨立審片（" in ln]
+    assert "整支片" in step and "review-prep" in step and "不用再審" not in again.stdout
 
 
 def test_reporting_an_issue_packs_the_review_rounds(project, tmp_path):

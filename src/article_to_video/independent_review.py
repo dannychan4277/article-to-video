@@ -18,13 +18,13 @@
 每一輪審多少（next_round；示範片三輪整片審了 28 分鐘，所以變輕）：
   - 第一輪審整支片（scope "full"）。
   - 整片審的那一輪有必修：改好之後整支片再審一輪核對——整片最多 MAX_FULL_ROUNDS 輪。
-  - 其他時候再審只看改過的分鏡（scope "changed"）：跟上一輪審的那份成片比，分鏡內容雜湊（review._shot_hashes：
+  - 其他時候再審只看改過的分鏡（scope "changed"）：跟上一輪審的那份成片比，分鏡內容雜湊（review.shot_hashes：
     分鏡自己的畫面＋長度＋它唸的旁白；前面變長、它往後挪不算）不一樣、新加的、或前一個分鏡換了（換鏡變了）。
     素材只做這幾個分鏡前後各 CONTEXT_SECONDS 秒的總覽、它們的畫面事件；上一輪的問題只帶這幾個分鏡的。
   - 上一輪沒有必修（或必修都核過了）就不用再審（needed=False）：Claude 改了該修，自己看改到的靜態圖、checks 確認。
     作者要求大改時 Claude 照 skill 再審一輪，這時也只看改過的分鏡。
   每一輪記下審的範圍（scope）和那份成片每個分鏡的內容雜湊（shotHashes），下一輪拿來比「改過」。
-  舊的紀錄沒有 shotHashes：比不出改了哪些，就整支片審。
+  舊的紀錄沒有 shotHashes：比不出改了哪些——有待核的必修就整支片審；沒有就不用再審（真的要重看只能 --full 整支片）。
 
 審片頁：review_contributor(data_dir) 每張卡列這個分鏡的問題，頁首一區總評。必修沒處理（resolve 沒標改好、也沒接受）
 擋出片：publish 的 auto_checks.require_checks_cleared 會問 unresolved_must()（build 只列出來，不擋）。
@@ -53,14 +53,16 @@ from article_to_video.commands import PLUGIN_ROOT, aspect_args, cli_command
 from article_to_video.environment import SAY_UPDATE_PLUGIN
 from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.project import ProjectError, ProjectPaths
+from article_to_video.review import CardSection, CheckItem, ReviewExtras, shot_hashes
 from article_to_video.review_page import timecode
 
 if TYPE_CHECKING:
     from article_to_video.build import BuildPlan
-    from article_to_video.review import ReviewExtras
 
 __all__ = [
     "BRIEF",
+    "CHANGED",
+    "FULL",
     "MAX_FULL_ROUNDS",
     "SCOPES",
     "SEVERITIES",
@@ -290,13 +292,6 @@ def _shot_of(plan: BuildPlan, t: float) -> int | None:
 # ---------------------------------------------------------------- 這一輪審多少
 
 
-def _shot_content_hashes(plan: BuildPlan) -> dict[str, str]:
-    """每個分鏡的內容雜湊（跟審片頁「這版改過」同一套：分鏡自己的畫面＋長度＋它唸的旁白）。"""
-    from article_to_video.review import _shot_hashes, shot_narration  # 避免循環匯入
-
-    return _shot_hashes(plan, shot_narration(plan.timeline))
-
-
 def _rounds_of(book: dict[str, Any], aspect: str) -> list[dict[str, Any]]:
     return [r for r in book["rounds"] if isinstance(r, dict) and r.get("aspect") == aspect]
 
@@ -365,12 +360,15 @@ def next_round(plan: BuildPlan) -> NextRound:
     last = rounds[-1]
     baseline = last.get("shotHashes")
     since = last.get("round") if isinstance(baseline, list) else None
-    changed = _changed_shots(plan, _shot_content_hashes(plan), baseline) if since is not None else ()
+    changed = _changed_shots(plan, shot_hashes(plan), baseline) if since is not None else ()
     if from_full and fulls < MAX_FULL_ROUNDS:
         return NextRound(FULL, f"整支片審的那一輪有必修（{'、'.join(from_full)}），改好之後整支片再審一輪核對", True,
                          changed, since)
-    if since is None:
-        return NextRound(FULL, f"第 {last.get('round')} 輪的紀錄沒有記分鏡內容，比不出改了哪些，整支片審", bool(pending))
+    if since is None and pending:
+        return NextRound(FULL, f"第 {last.get('round')} 輪的紀錄沒有記分鏡內容，比不出改了哪些，整支片審", True)
+    if since is None:  # 舊紀錄、沒有要核的：不用再審；硬要審只能整支片（沒有能比的）
+        return NextRound(FULL, f"第 {last.get('round')} 輪之後沒有必修要核對；那一輪的紀錄沒記分鏡內容、比不出改了哪些，"
+                               "真的要重看就 review-prep 加 --full 審整支片", False)
     if pending:
         ids = "、".join(it["id"] for _, it in pending)
         if not changed:
@@ -427,7 +425,7 @@ def prepare_review_kit(plan: BuildPlan, *, scope: str | None = None, log: Log = 
         raise ProjectError("還沒有能拿來比的審片紀錄（第一輪、或舊的紀錄沒記分鏡內容）", title="比不出改了哪些分鏡",
                            hint=f"這輪審整支片：{cli_command('review-prep', root, *aspect)}")
     scope = scope or nr.scope
-    hashes = _shot_content_hashes(plan)
+    hashes = shot_hashes(plan)
     if scope == CHANGED:
         if not nr.changed:
             raise ProjectError(f"這份成片跟第 {nr.since} 輪審的比，沒有改過的分鏡", title="不用再審",
@@ -790,8 +788,6 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
     """審片頁的獨立審片：頁首一區（第幾輪、分數、總評、每一項與處理狀態），每張卡列這個分鏡的問題。"""
 
     def contribute(plan: BuildPlan) -> ReviewExtras:
-        from article_to_video.review import CardSection, CheckItem, ReviewExtras  # 避免循環匯入
-
         book = load_log(plan.project.root)
         rounds = book["rounds"]
         if not rounds:
@@ -818,23 +814,26 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
             status = {"必修": "block", "該修": "warn"}.get(it["severity"], "info")
             return CheckItem(text, status=status, label=it["severity"], more=more, code=code)
 
-        def sections(items: list[tuple[CheckItem, bool]], title: str, note: str = "") -> list:
-            """還沒處理的攤開（第二個值是 True 的收成一行「另外 N 項可改」）；已經處理（改好、接受）的
-            收成一行「已處理 N 項」，點開才看。"""
+        def sections(items: list[tuple[CheckItem, bool]], title: str, note: str = "", *, tucked: str) -> list:
+            """還沒處理的攤開；第二個值是 True 的（還沒處理、但不用攤開）和已經處理（改好、接受）的，接在後面收成一行
+            「tucked（{n}＝幾項）；已處理 N 項（點開看）」，點開才看。"""
             done = [ci for ci, _ in items if ci.label in ("已修好", "已接受")]
             open_ = [ci for ci, tuck in items if ci.label not in ("已修好", "已接受") and not tuck]
             later = [ci for ci, tuck in items if ci.label not in ("已修好", "已接受") and tuck]
-            handled = f"已處理 {len(done)} 項（點開看）"
+            handled = f"已處理 {len(done)} 項"
             if not (open_ or later or note):
-                return [CardSection("review", title, done, summary=f"{title}：{handled}")] if done else []
-            if not later:  # 已處理的接在還沒處理的後面，收成一行
-                return [CardSection("review", title, open_, note=note, rest=done, rest_summary=handled)]
-            out = [CardSection("review", title, open_, note=note, rest=later, rest_ok=False,
-                               rest_summary=f"另外 {len(later)} 項可改，寫在各分鏡卡上（點開看）")]
-            if done:
-                out.append(CardSection("review", title, done, summary=f"{title}：{handled}"))
-            return out
+                return [CardSection("review", title, done, summary=f"{title}：{handled}（點開看）")] if done else []
+            if not later:
+                return [CardSection("review", title, open_, note=note, rest=done, rest_summary=f"{handled}（點開看）")]
+            folded = tucked.format(n=len(later)) + (f"；{handled}" if done else "")
+            return [CardSection("review", title, open_, note=note, rest=later + done, rest_ok=False,
+                                rest_summary=f"{folded}（點開看）")]
 
+        last = rounds[-1]
+        # 卡上只攤開最新一輪的「可改」（含最新一輪核過、說沒修好的）：較早幾輪的沒人重新核對，有些早就過時
+        # （示範片審了四輪，卡上累積的可改多出兩百多字，還有分鏡改成大數字卡了、卡上還掛著折線刻度的問題）
+        recent = {it["id"] for it in last.get("items") or []} | {
+            p.get("id") for p in last.get("previous") or [] if isinstance(p, dict)}
         cards: dict[str, list] = {}
         page_items = []
         for rnd in rounds:
@@ -845,8 +844,7 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
                 tuck = it["severity"] == "可改" and bool(it.get("shotId"))
                 page_items.append((dataclasses.replace(ci, text=f"{where}　{ci.text}"), tuck))
                 if it.get("shotId"):
-                    cards.setdefault(it["shotId"], []).append((ci, False))
-        last = rounds[-1]
+                    cards.setdefault(it["shotId"], []).append((ci, it["severity"] == "可改" and it["id"] not in recent))
         must = [it for r in rounds for it in r.get("items") or [] if it["severity"] == "必修"
                 and resolution(book, it["id"]) is None]
         counts = "、".join(f"{s} {sum(1 for it in last['items'] if it['severity'] == s)}" for s in SEVERITIES)
@@ -860,7 +858,8 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
         if not page_items:
             page = [CardSection("review", title, [], summary=f"{title}：沒有找到問題。{last.get('summary') or ''}".strip())]
         else:
-            page = sections(page_items, title, note)
-        return ReviewExtras(cards={sid: sections(items, "獨立審片") for sid, items in cards.items()}, page=page)
+            page = sections(page_items, title, note, tucked="另外 {n} 項可改，寫在各分鏡卡上")
+        return ReviewExtras(cards={sid: sections(items, "獨立審片", tucked="較早幾輪還有 {n} 項可改")
+                                   for sid, items in cards.items()}, page=page)
 
     return contribute

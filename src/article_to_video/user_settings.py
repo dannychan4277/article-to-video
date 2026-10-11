@@ -60,8 +60,9 @@ ASPECTS = {"16x9": "橫式 16:9", "9x16": "直式 9:16"}
 _ASPECT_ALIASES = {"16x9": "16x9", "16:9": "16x9", "橫式": "16x9", "横式": "16x9",
                    "9x16": "9x16", "9:16": "9x16", "直式": "9x16"}
 _NONE_WORDS = {"", "none", "無", "不要", "沒有", "null"}
-_CAMERA_ALIASES = {"slow": "slow", "a": "slow", "慢推": "slow", "等速慢推": "slow", "等速": "slow",
-                   "snap": "snap", "b": "snap", "快推": "snap", "停住": "snap", "停住快推": "snap"}
+_CAMERA_ALIASES = {"slow": "slow", "慢推": "slow", "等速慢推": "slow", "等速": "slow",
+                   "snap": "snap", "快推": "snap", "停住": "snap", "停住快推": "snap"}
+"""圖表鏡頭的說法（用語是慢推、快推）。A／B 只是盲評時給兩種鏡頭的代號，不收。"""
 _TTS_ALIASES = {"edge": "edge", "edge-tts": "edge", "微軟": "edge", "免費": "edge",
                 "elevenlabs": "elevenlabs", "11labs": "elevenlabs",
                 "google": "google", "google-tts": "google", "谷歌": "google", "fake": "fake"}

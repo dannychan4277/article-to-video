@@ -217,6 +217,9 @@ def test_the_chart_camera_is_snapshotted_and_can_be_switched_for_one_video(tmp_p
     bad = run("settings", "set", "--project", str(root), "--camera", "飛來飛去")
     assert bad.returncode == 1 and "Traceback" not in bad.stderr
     assert "圖表鏡頭「飛來飛去」" in bad.stderr and "慢推" in bad.stderr and "快推" in bad.stderr
+    for code in ("A", "b"):  # A／B 只是盲評時給兩種鏡頭的代號，不是設定的名字（用語是慢推、快推）
+        blind = run("settings", "set", "--project", str(root), "--camera", code)
+        assert blind.returncode == 1 and f"圖表鏡頭「{code}」" in blind.stderr, blind.stdout
 
     (root / "settings.json").write_text(json.dumps({"channel": "小明", "camera": "亂寫"}), encoding="utf-8")
     with pytest.raises(ProjectError, match="settings.json 的 camera：圖表鏡頭「亂寫」看不懂"):

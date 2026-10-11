@@ -82,7 +82,7 @@ CAMERAS = {
     "slow": "等速慢推（整串分鏡一直慢慢推近）",
     "snap": "停住，標註出現時快推一下",
 }
-"""財經圖表的鏡頭（設定 camera）：slow＝A、snap＝B。怎麼動見 timeline.py 開頭與 engine/clips/t3_finance_chart.js。"""
+"""財經圖表的鏡頭（設定 camera）：slow＝慢推、snap＝快推。怎麼動見 timeline.py 開頭與 engine/clips/t3_finance_chart.js。"""
 DEFAULT_CAMERA = "snap"
 """新做的片預設用哪一種鏡頭（2026-10-11 盲評兩位都偏好快推，Danny 定為預設；之前是 slow）。**要換預設只改這一行**
 （再改 skills/make-video/references/formats.md「圖表鏡頭」一節的「預設」字樣）：使用者設定沒寫 camera 的、新專案第一次建置時，

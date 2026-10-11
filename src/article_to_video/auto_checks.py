@@ -16,9 +16,10 @@ qa（內嵌引擎的 engine/qa.py，原樣使用）：在 Chromium 裡把片段�
   檢查        財經圖表                           Vox                               片尾卡
   頁面報錯    fail                               fail                              fail
   確定性      像素差 > 24 fail，> 0 warn          同左                              同左
-  動態        靜止幀對 ≥ 60% fail，≥ 40% warn     不判（一拍二動畫平常就 40～50%）  不判（本來就停著）
-              （B 鏡頭不判：停住是設計，改看停太久）
-  跳變        有就 fail（B 鏡頭：spec 裡的快推時段  不判（滑入、推鏡就是這樣）        有就 warn
+  動態        慢推：靜止幀對 ≥ 60% fail，≥ 40% warn  不判（一拍二動畫平常就 40～50%）  不判（本來就停著）
+              快推：畫面事件那一刻幾乎沒變 fail
+              （見下面「快推」）
+  跳變        有就 fail（快推：spec 裡的快推時段  不判（滑入、推鏡就是這樣）        有就 warn
               不算，其他照判）
   半截字、疊字 持續 ≥ 0.5 秒 fail，其他 warn       warn（鏡頭經過的卡片本來會被切到）  同財經圖表
   字進字幕帶  持續 ≥ 0.5 秒 fail，其他 warn       字幕框真的蓋到字才算（見下）；     同財經圖表（直式才有帶子）
@@ -28,8 +29,16 @@ qa（內嵌引擎的 engine/qa.py，原樣使用）：在 Chromium 裡把片段�
   停太久      旁白期間 > 5 秒沒有新畫面事件 warn（換圖、新的柱／線／標註／卡片／框；慢推不算）
 理由寫在各常數旁邊。
 
-B 鏡頭（設定 camera = snap，spec 有 data.camera）：畫面平常停住，標註出現時快推一下（timeline.py）。
-- 動態：不判。靜止幀對多是故意的；畫面該有新東西卻沒有，由「停太久」（看畫面事件，不看像素）提醒。
+快推（圖表鏡頭 camera = snap，spec 有 data.camera）：畫面平常停住，標註出現時快推一下（timeline.py）。
+慢推（camera = slow）照上面的表判，沒變。
+- 動態：不看整段有幾成幀沒動（停住是設計，示範片 25 個圖表片段有 18 個 ≥ 60%）。改看分鏡設定寫的每個畫面事件
+  （_cue_windows）：那一刻畫面該長出東西（標題、柱、線、標註、數字、差距），qa 量到的幀對卻每一對都變不到 CUE_STILL
+  ＝引擎沒畫出來（cue 寫了、引擎不認，或動畫壞了），fail。量的時段：大數字、差距在 at 落定，看 at 之前 CUE_LOOK 秒到
+  at 後 0.1 秒；其他從 at 起看 CUE_LOOK 秒。快推那幾幀整張圖在動，不拿來判（柱、線的標註看快推之後字淡入那段）。
+  不判的：沿用過來的（at 是負的，第一幀就在）、跟前一個標註一模一樣的（同一點、同樣的字：引擎本來就不重畫）、
+  時段裡一個幀對都沒有的（片段結束前一刻才出現）。
+  盲點：兩數對比的強調在快推那 0.3 秒裡就換完色，分不出是鏡頭還是換色在動，有快推時那一下的鏡頭算數；
+  畫面事件之間停太久不是這裡管的，由「停太久」（看畫面事件，不看像素）提醒。
 - 跳變：快推那幾幀整張圖一起放大，qa 看起來就是跳變（一幀變了好幾 %）。spec 裡寫了每一下快推的時刻與長度，
   只把「這兩幀之間鏡頭在動」的幀對拿掉，其餘幀對用 qa 同一套門檻重算（qa.json 的 ts、pair_diffs）。
   不用上游 huashu 的「0.35 秒內單調變化就算鏡頭事件」：那會把幾幀內長完的柱子也放過。
@@ -77,6 +86,7 @@ from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.project import ProjectError
 from article_to_video.review_page import timecode
 from article_to_video.textio import read_json_or_none
+from article_to_video.timeline import resolve_highlight
 
 if TYPE_CHECKING:
     from article_to_video.build import BuildPlan
@@ -154,9 +164,17 @@ SUBZONE_RATIO = 0.003
 """字幕框裡深色像素超過框面積的這個比例，就算字幕蓋到了東西。"""
 SPIKE_MIN, SPIKE_RATIO, SPIKE_FLOOR = 3.0, 6.0, 0.05
 """跳變的門檻，跟 engine/qa.py 片段模式同一組：一個幀對變了超過 SPIKE_MIN % 的畫面、而且是前後各 3 個幀對中位數
-（至少 SPIKE_FLOOR）的 SPIKE_RATIO 倍以上。B 鏡頭拿掉快推的幀對之後用它重算。"""
+（至少 SPIKE_FLOOR）的 SPIKE_RATIO 倍以上。快推片段拿掉快推的幀對之後用它重算。"""
 SNAP_EPS = 0.002
 """快推時段前後多放的秒數：cue 的時刻存到小數 6 位，跟幀的時刻差一點點。"""
+CUE_STILL = 0.01
+"""快推片段：畫面事件的時段裡，每個幀對都變不到這麼多 % 的畫面＝沒畫出來。什麼都沒畫時是 0（qa 重渲是確定的，停住的兩幀
+一個像素都不差）；正常的畫面事件最小的是直式一根細柱長出來，0.065（示範片 9:16 的 SH03）。qa 的「靜止幀對」門檻 0.05
+離它太近，所以用 0.01（＝16:9 qa 畫面約 13 個像素）。"""
+CUE_LOOK = 0.9
+"""畫面事件的動畫看多久（秒）：標題 0.6 秒長完、柱子預設至少長 0.9 秒、標註的字 0.3～0.7 秒淡入、大數字滾 0.9 秒落定。"""
+CUE_SETTLE_KINDS = ("number", "gap")
+"""at 是「落定」時刻的畫面事件（動畫在 at 之前）：大數字、兩數對比的數字、差距。"""
 HOLD_WARN = 5.0
 """旁白期間超過這麼多秒沒有新的畫面事件就提醒（審片規則：一句旁白一個畫面事件，6 秒沒新資訊就算靜止）。"""
 
@@ -216,8 +234,11 @@ class ClipCheck:
     """Vox 片段 qa 報了「字進字幕帶」時，字幕框真的蓋到東西的時段：{"spans": [[起, 迄], …]}（片段內秒）；
     還沒看過（片段還沒渲、只讀快取）是 {"pending": True}，照 qa 原本的結果判；用不到是 None。"""
     snaps: tuple[tuple[float, float], ...] | None = None
-    """B 鏡頭（停住、標註出現時快推）的片段：鏡頭在動的時段（片段內秒，從 spec 的 data.camera 算）；
-    不是 B 鏡頭（等速慢推、Vox、片尾卡）是 None。"""
+    """快推（停住、標註出現時快推）的片段：鏡頭在動的時段（片段內秒，從 spec 的 data.camera 算）；
+    不是快推（等速慢推、Vox、片尾卡）是 None。"""
+    cues: tuple[tuple[str, float, float, bool], ...] = ()
+    """快推的片段：分鏡設定寫的每個畫面事件，畫面該在動的時段 (kind, 起, 迄, 快推算不算數)（片段內秒，_cue_windows）；
+    不是快推是空的。"""
 
 
 @dataclass(frozen=True)
@@ -504,11 +525,18 @@ def _qa_findings(cc: ClipCheck) -> list[tuple[str, str, list[tuple[float, float]
     if det > 0:
         out.append(("determinism", "fail" if det > DET_FAIL else "warn", [],
                     f"同一幀渲三次結果不一樣（像素最多差 {det}）：分鏡靜態圖可能跟成片對不上"))
-    if cc.grammar == CHART and cc.snaps is None:  # B 鏡頭停住是設計，不判（見檔頭）
+    if cc.grammar == CHART and cc.snaps is None:  # 慢推
         still = float(rec.get("still_pairs_pct", 0.0))
         if still >= STILL_WARN:
             status = "fail" if still >= STILL_FAIL else "warn"
             out.append(("motion", status, [], f"畫面幾乎沒在動：{still:.0f}% 的相鄰兩幀沒有變化（慢推也沒有）"))
+    elif cc.grammar == CHART and rec.get("pair_diffs") is not None:  # 快推：停住是設計，看畫面事件那一刻（見檔頭）
+        missed = _undrawn_cues(rec["ts"], rec["pair_diffs"], cc.cues, cc.snaps or ())
+        if missed:
+            kinds = "、".join(dict.fromkeys(CUE_NAMES.get(k, k) for k, _, _ in missed))
+            out.append(("motion", "fail", [(a, b) for _, a, b in missed],
+                        f"分鏡設定在這{'幾' if len(missed) > 1 else '一'}刻有畫面事件（{kinds}），畫面卻幾乎沒變"
+                        f"（每一幀都變不到 {CUE_STILL:g}%）：動畫沒畫出來"))
     spikes = [float(t) for t in rec.get("spikes_at_lt") or []]
     biggest = float(rec.get("motion_max", 0))
     if cc.snaps is not None and rec.get("pair_diffs") is not None:
@@ -523,8 +551,8 @@ def _qa_findings(cc: ClipCheck) -> list[tuple[str, str, list[tuple[float, float]
 
 
 def _snap_windows(spec: dict[str, Any]) -> tuple[tuple[float, float], ...] | None:
-    """B 鏡頭的片段：每一下快推鏡頭在動的時段（片段內秒）。引擎在 cue 的 at 那一幀第一次動、dur 秒後（少一幀）停穩，
-    所以是 (at − 1 幀, at + dur − 1 幀)，再各放寬 SNAP_EPS。不是 B 鏡頭回傳 None。"""
+    """快推的片段：每一下快推鏡頭在動的時段（片段內秒）。引擎在 cue 的 at 那一幀第一次動、dur 秒後（少一幀）停穩，
+    所以是 (at − 1 幀, at + dur − 1 幀)，再各放寬 SNAP_EPS。不是快推回傳 None。"""
     cam = (spec.get("data") or {}).get("camera") if spec.get("grammar") == CHART else None
     if not isinstance(cam, dict):
         return None
@@ -532,6 +560,49 @@ def _snap_windows(spec: dict[str, Any]) -> tuple[tuple[float, float], ...] | Non
     dur = float(cam.get("dur", 0.3))
     out = [(float(q["at"]) - frame - SNAP_EPS, float(q["at"]) + dur - frame + SNAP_EPS) for q in cam.get("snaps") or []]
     return tuple((a, b) for a, b in out if b > 0 and a < float(spec.get("duration", 0)))
+
+
+CUE_NAMES = {"title": "標題", "bar": "柱", "line": "線", "candle": "K 線", "highlight": "標註", "number": "數字", "gap": "差距"}
+
+
+def _cue_windows(spec: dict[str, Any]) -> tuple[tuple[str, float, float, bool], ...]:
+    """快推的片段：分鏡設定寫的每個畫面事件，畫面該在動的時段 (kind, 起, 迄, 快推算不算數)（片段內秒）。
+    跟引擎一樣照 at 排；沿用過來的、跟前一個一模一樣的標註不算（見檔頭）。快推算不算數：兩數對比的強調（換色跟快推同時做完）。
+    不是快推回傳空的。"""
+    if _snap_windows(spec) is None:
+        return ()
+    data = spec.get("data") or {}
+    points = len(data["series"]) if isinstance(data.get("series"), list) else 0
+    out: list[tuple[str, float, float, bool]] = []
+    last = None
+    for q in sorted(spec.get("cues") or [], key=lambda q: float(q.get("at") or 0)):
+        kind, at = str(q.get("kind")), float(q.get("at") or 0)
+        if kind == "highlight":
+            h = resolve_highlight(q, data)
+            key = (h["index"] if isinstance(h["index"], int) else points - 1, h["text"], h["sub"])
+            same, last = key == last, key
+            if same:
+                continue
+        if at < 0 or (q.get("data") or {}).get("carried"):
+            continue
+        if kind in CUE_SETTLE_KINDS:
+            out.append((kind, round(at - CUE_LOOK, 6), round(at + 0.1, 6), False))
+        else:
+            out.append((kind, at, round(at + CUE_LOOK, 6), kind == "highlight" and data.get("chart") == "compare"))
+    return tuple(out)
+
+
+def _undrawn_cues(ts: Sequence[float], diffs: Sequence[float], cues: Sequence[tuple[str, float, float, bool]],
+                  snaps: Sequence[tuple[float, float]]) -> list[tuple[str, float, float]]:
+    """沒畫出來的畫面事件 (kind, 起, 迄)：時段裡（拿掉鏡頭在動的幀對，除非快推算數）每個幀對都變不到 CUE_STILL %。
+    時段裡一個幀對都沒有的不判。"""
+    out = []
+    for kind, a, b, camera_counts in cues:
+        pairs = [i for i in range(len(diffs)) if ts[i] < b and ts[i + 1] > a
+                 and (camera_counts or not any(s0 < ts[i + 1] and ts[i] < s1 for s0, s1 in snaps))]
+        if pairs and max(float(diffs[i]) for i in pairs) < CUE_STILL:
+            out.append((kind, max(a, 0.0), b))
+    return out
 
 
 def _spikes_besides(ts: Sequence[float], diffs: Sequence[float],
@@ -697,7 +768,7 @@ def _collect(plan: BuildPlan, *, run: bool, jobs: int | None, log: Log) -> Check
         ClipCheck(clip_id=cp.id, shot_ids=tuple(cp.shot_ids), grammar=cp.grammar, start=cp.start_frame / fps,
                   end=cp.end_frame / fps, hash=clip_hash(cp), qa=results.get(cp.id), qa_dir=root / cp.id,
                   band=_check_band(plan, cp, ffmpeg), subzone=_check_subzone(plan, cp, results.get(cp.id), ffmpeg),
-                  snaps=_snap_windows(cp.spec))
+                  snaps=_snap_windows(cp.spec), cues=_cue_windows(cp.spec))
         for cp in plan.clips
     ]
     book = load_log(plan.project.root)
@@ -911,6 +982,8 @@ _PLAIN = {
 def _plain(f: Finding) -> str:
     if f.check == "band" and f.clip_id == END_CARD_ID:
         return "片尾卡的字壓到直式影片底部會被平台蓋住的地方"
+    if f.check == "motion" and f.times:  # 快推：指得出是哪一刻（慢推看整段，沒有時段）
+        return "這一刻該出現的東西沒畫出來，畫面停著沒變"
     return _PLAIN[f.check]
 
 
