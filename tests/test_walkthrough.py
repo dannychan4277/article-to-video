@@ -272,6 +272,9 @@ def test_the_review_page_says_published_only_after_publishing_and_where_it_went(
     after = parse_review(walk.pages["publish"])
     assert after.attrs["data-stage"] == "published"
     assert "已出片" in after.stage_text and walk.folder.name in after.stage_text, after.stage_text
+    out = after.page_slots["output"]  # 作者看 Finder 的說法；完整路徑是給 Claude 的，收起來
+    assert walk.folder.name in out and str(walk.folder) not in out, out
+    assert str(walk.folder) in after.page_codes
     changed = parse_review(walk.pages["preview3"])
     assert walk.steps["preview3"].code == 0, walk.steps["preview3"].err
     assert changed.attrs["data-stage"] == "preview" and "已出片" not in changed.stage_text
