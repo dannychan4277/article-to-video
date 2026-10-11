@@ -100,6 +100,18 @@ def test_the_reviewer_can_pull_full_resolution_frames_from_the_video(prepped):
     assert burst.returncode == 0, burst.stderr
     frames = [ln for ln in burst.stdout.splitlines() if ln.endswith(".png") and "拼在一起" not in ln]
     assert len(frames) == 3 and "拼在一起" in burst.stdout
+    # 超過 16 格：每 16 格拼一張，一格都不漏（示範：要了 6.5 秒、只拼出前 4 秒，審片員只好一張張打開）
+    single = run_cli("review-frames", str(root), "--at", "4.5")
+    with Image.open(single.stdout.split()[0]) as im:
+        alone = im.convert("RGB").tobytes()
+    long = run_cli("review-frames", str(root), "--from", "0", "--to", "8", "--step", "0.5")
+    assert long.returncode == 0, long.stderr
+    with Image.open(next(ln for ln in long.stdout.splitlines() if ln.endswith("t0004.50.png"))) as im:
+        assert im.convert("RGB").tobytes() == alone  # 連續幀跟單獨抽的是同一幀
+    sheets = [ln.split("：", 1)[1] for ln in long.stdout.splitlines() if ln.startswith("拼在一起")]
+    assert len(sheets) == 2, long.stdout
+    with Image.open(sheets[1]) as im:
+        assert im.height < im.width  # 第二張只有 1 格（第 17 格），一列
     late = run_cli("review-frames", str(root), "--at", "99")
     assert late.returncode == 1 and "不在成片裡" in late.stderr
 

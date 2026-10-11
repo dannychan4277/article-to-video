@@ -191,18 +191,35 @@ def _extract_small(video: Path, frames: Sequence[int], out_dir: Path, *, size: t
     return out
 
 
+BURST_GAP = 60
+"""抽全解析度幀時，幀號相隔不到這麼多幀的併成一段、只跳一次、一路解碼挑出來（連續幀每張各跳一次太慢：
+審片員要 4 秒的連續幀＝17 次跳轉）；隔得遠的各跳一次，免得為了兩張圖解碼一大段。"""
+
+
 def _extract_full(video: Path, frames: Sequence[int], fps: int, out_dir: Path, ffmpeg: Path) -> dict[int, Path]:
-    """照幀號抽全解析度圖：每張各跳一次（-ss 在 -i 前面＝跳到那個時間點之後的第一幀，往前讓 0.25 幀確保是這一幀）。"""
+    """照幀號抽全解析度圖。每一段跳一次（-ss 在 -i 前面＝跳到那個時間點之後的第一幀，往前讓 0.25 幀確保是那一段的
+    第一幀），之後解碼出來的第 k 幀就是第「段首＋k」幀，用 select 挑要的。"""
     out: dict[int, Path] = {}
     out_dir.mkdir(parents=True, exist_ok=True)
+    groups: list[list[int]] = []
     for n in sorted(set(frames)):
-        dest = out_dir / f"{n:06d}.png"
-        proc = subprocess.run([str(ffmpeg), "-v", "error", "-y", "-ss", f"{max(0.0, (n - 0.25) / fps):.4f}",
-                               "-i", str(video), "-frames:v", "1", str(dest)],
+        if groups and n - groups[-1][-1] <= BURST_GAP:
+            groups[-1].append(n)
+        else:
+            groups.append([n])
+    for group in groups:
+        first = group[0]
+        pick = "+".join(f"eq(n\\,{n - first})" for n in group)
+        pattern = out_dir / f"g{first:06d}-%03d.png"
+        proc = subprocess.run([str(ffmpeg), "-v", "error", "-y", "-ss", f"{max(0.0, (first - 0.25) / fps):.4f}",
+                               "-i", str(video), "-vf", f"select='{pick}'", "-fps_mode", "passthrough",
+                               "-frames:v", str(len(group)), str(pattern)],
                               capture_output=True, text=True, encoding="utf-8", errors="replace")
-        if proc.returncode != 0 or not dest.is_file():
-            raise ProjectError(f"從成片抽圖失敗（第 {n} 幀）：{proc.stderr.strip()[-300:]}", title="抽不了幀")
-        out[n] = dest
+        for k, n in enumerate(group, start=1):
+            dest = out_dir / f"g{first:06d}-{k:03d}.png"
+            if proc.returncode != 0 or not dest.is_file():
+                raise ProjectError(f"從成片抽圖失敗（第 {n} 幀）：{proc.stderr.strip()[-300:]}", title="抽不了幀")
+            out[n] = dest
     return out
 
 
@@ -600,8 +617,8 @@ def parse_time_arg(s: str) -> float:
     return t
 
 
-def extract_review_frames(kit: ReviewKit, times: Sequence[float]) -> tuple[list[Path], Path | None]:
-    """成片的全解析度幀（frames/t<秒>.png）；超過一張另外拼一張總覽（frames/burst-<起>-<迄>.png）。"""
+def extract_review_frames(kit: ReviewKit, times: Sequence[float]) -> tuple[list[Path], list[Path]]:
+    """成片的全解析度幀（frames/t<秒>.png）；超過一張另外拼總覽（frames/burst-<起>-<迄>-NN.png，16 格一張，一格都不漏）。"""
     m = kit.material
     video, fps, duration = Path(m["video"]), int(m["fps"]), float(m["duration"])
     if not video.is_file():
@@ -619,14 +636,14 @@ def extract_review_frames(kit: ReviewKit, times: Sequence[float]) -> tuple[list[
             dest = out / f"t{n / fps:07.2f}.png"
             shutil.copyfile(by_frame[n], dest)
             paths.append(dest)
-    sheet = None
+    sheets: list[Path] = []
     if len(paths) > 1:
         subs = _parse_srt(kit.dir / m.get("subtitles", "subtitles.srt")) if (kit.dir / "subtitles.srt").is_file() else []
         tiles = [(p, f"{timecode(n / fps)}（{n / fps:.2f} 秒）", _subtitle_at(subs, n / fps)) for p, n in zip(paths, nums)]
-        name = _sheets(tiles[:SHEET_COLS * SHEET_ROWS], out, f"burst-{nums[0] / fps:.2f}-{nums[-1] / fps:.2f}",
-                       480 if int(m["width"]) >= int(m["height"]) else 270)[0]
-        sheet = out / name
-    return paths, sheet
+        names = _sheets(tiles, out, f"burst-{nums[0] / fps:.2f}-{nums[-1] / fps:.2f}",
+                        480 if int(m["width"]) >= int(m["height"]) else 270)
+        sheets = [out / name for name in names]
+    return paths, sheets
 
 
 # ---------------------------------------------------------------- 記錄

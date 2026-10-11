@@ -585,12 +585,12 @@ def _review_frames(args: argparse.Namespace) -> int:
             times += [round(a + k * args.step, 3) for k in range(n + 1)]
         if not times:
             raise ProjectError("要給 --at 秒數，或 --from／--to", title="抽不了幀")
-        paths, sheet = ir.extract_review_frames(kit, times)
+        paths, sheets = ir.extract_review_frames(kit, times)
     except ProjectError as e:
         print(f"抽幀失敗：{e}", file=sys.stderr)
         return 1
     print("\n".join(str(p) for p in paths))
-    if sheet:
+    for sheet in sheets:
         print(f"拼在一起：{sheet}")
     return 0
 
