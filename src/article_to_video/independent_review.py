@@ -821,23 +821,26 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
             status = {"必修": "block", "該修": "warn"}.get(it["severity"], "info")
             return CheckItem(text, status=status, label=it["severity"], more=more, code=code)
 
-        def sections(items: list[tuple[CheckItem, bool]], title: str, note: str = "") -> list:
-            """還沒處理的攤開（第二個值是 True 的收成一行「另外 N 項可改」）；已經處理（改好、接受）的
-            收成一行「已處理 N 項」，點開才看。"""
+        def sections(items: list[tuple[CheckItem, bool]], title: str, note: str = "", *, tucked: str) -> list:
+            """還沒處理的攤開；第二個值是 True 的（還沒處理、但不用攤開）和已經處理（改好、接受）的，接在後面收成一行
+            「tucked（{n}＝幾項）；已處理 N 項（點開看）」，點開才看。"""
             done = [ci for ci, _ in items if ci.label in ("已修好", "已接受")]
             open_ = [ci for ci, tuck in items if ci.label not in ("已修好", "已接受") and not tuck]
             later = [ci for ci, tuck in items if ci.label not in ("已修好", "已接受") and tuck]
-            handled = f"已處理 {len(done)} 項（點開看）"
+            handled = f"已處理 {len(done)} 項"
             if not (open_ or later or note):
-                return [CardSection("review", title, done, summary=f"{title}：{handled}")] if done else []
-            if not later:  # 已處理的接在還沒處理的後面，收成一行
-                return [CardSection("review", title, open_, note=note, rest=done, rest_summary=handled)]
-            out = [CardSection("review", title, open_, note=note, rest=later, rest_ok=False,
-                               rest_summary=f"另外 {len(later)} 項可改，寫在各分鏡卡上（點開看）")]
-            if done:
-                out.append(CardSection("review", title, done, summary=f"{title}：{handled}"))
-            return out
+                return [CardSection("review", title, done, summary=f"{title}：{handled}（點開看）")] if done else []
+            if not later:
+                return [CardSection("review", title, open_, note=note, rest=done, rest_summary=f"{handled}（點開看）")]
+            folded = tucked.format(n=len(later)) + (f"；{handled}" if done else "")
+            return [CardSection("review", title, open_, note=note, rest=later + done, rest_ok=False,
+                                rest_summary=f"{folded}（點開看）")]
 
+        last = rounds[-1]
+        # 卡上只攤開最新一輪的「可改」（含最新一輪核過、說沒修好的）：較早幾輪的沒人重新核對，有些早就過時
+        # （示範片審了四輪，卡上累積的可改多出兩百多字，還有分鏡改成大數字卡了、卡上還掛著折線刻度的問題）
+        recent = {it["id"] for it in last.get("items") or []} | {
+            p.get("id") for p in last.get("previous") or [] if isinstance(p, dict)}
         cards: dict[str, list] = {}
         page_items = []
         for rnd in rounds:
@@ -848,8 +851,7 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
                 tuck = it["severity"] == "可改" and bool(it.get("shotId"))
                 page_items.append((dataclasses.replace(ci, text=f"{where}　{ci.text}"), tuck))
                 if it.get("shotId"):
-                    cards.setdefault(it["shotId"], []).append((ci, False))
-        last = rounds[-1]
+                    cards.setdefault(it["shotId"], []).append((ci, it["severity"] == "可改" and it["id"] not in recent))
         must = [it for r in rounds for it in r.get("items") or [] if it["severity"] == "必修"
                 and resolution(book, it["id"]) is None]
         counts = "、".join(f"{s} {sum(1 for it in last['items'] if it['severity'] == s)}" for s in SEVERITIES)
@@ -863,7 +865,8 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
         if not page_items:
             page = [CardSection("review", title, [], summary=f"{title}：沒有找到問題。{last.get('summary') or ''}".strip())]
         else:
-            page = sections(page_items, title, note)
-        return ReviewExtras(cards={sid: sections(items, "獨立審片") for sid, items in cards.items()}, page=page)
+            page = sections(page_items, title, note, tucked="另外 {n} 項可改，寫在各分鏡卡上")
+        return ReviewExtras(cards={sid: sections(items, "獨立審片", tucked="較早幾輪還有 {n} 項可改")
+                                   for sid, items in cards.items()}, page=page)
 
     return contribute
