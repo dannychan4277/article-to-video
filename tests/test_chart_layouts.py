@@ -344,6 +344,47 @@ LAYOUT_ERRORS = {
 }
 
 
+# ---------------------------------------------------------------- 兩種鏡頭推到最近：字不出畫面、不進字幕帶與平台介面區
+
+
+CAMERA_STILLS = [(cam, sid) for cam in ("slow", "snap") for sid in ("SH01", "SH02B")]
+
+
+@pytest.fixture(scope="module", params=["16x9", "9x16"])
+def pushed(request, tmp_path_factory) -> tuple[str, dict[tuple[str, str], np.ndarray]]:
+    """同一個測試專案拿掉 push 0（照預設推）：慢推（slow）和快推（snap）各建一次計畫，渲每個分鏡的最後一幀（推得最近）。
+    SH02→SH02B 那串的強調會快推一下（往被強調的甲組推）。"""
+    aspect = request.param
+    shots = json.loads(json.dumps(SHOTS))
+    for s in shots:
+        s["chart"]["data"].pop("push", None)
+    specs = {}
+    for cam in ("slow", "snap"):
+        root = write_project(tmp_path_factory.mktemp(f"鏡頭 {aspect} {cam}") / "專案", shots, {"camera": cam})
+        specs.update({(cam, c.id): (root, c.spec) for c in plan_build(root, tts="fake", fmt=FORMATS[aspect]).clips})
+
+    def work(key):
+        root, spec = specs[key]
+        p = render_stills(spec, root / "stills" / key[1], [round(spec["duration"] - 1 / FPS, 4)]).paths[0]
+        return key, np.asarray(Image.open(p).convert("RGB")).astype(int)
+
+    return aspect, dict(run_parallel(CAMERA_STILLS, work, jobs=default_jobs()))
+
+
+def test_pushed_in_as_far_as_it_goes_every_text_stays_clear_of_the_edges_and_the_subtitle_band(pushed):
+    aspect, frames = pushed
+    fmt = FORMATS[aspect]
+    for key, img in frames.items():
+        ink = np.abs(255 - img).max(axis=-1) > 40
+        bar = slice(max(0, fmt.safe_top - 24), fmt.safe_top + 24)   # 頂端色條（裝飾，本來就橫跨整個畫面；慢推會把它往上推一點）
+        ink[bar] = False
+        assert not ink[fmt.height - fmt.safe_bottom:].any(), f"{key}：有東西壓進字幕帶"
+        assert not ink[:fmt.ui_top].any(), f"{key}：有東西壓進上方的平台介面區"
+        assert not ink[:, fmt.width - max(fmt.ui_right, 6):].any(), f"{key}：有東西貼到右邊（或壓進按鈕欄）"
+        assert not ink[:, :6].any(), f"{key}：有東西貼到左邊"
+        assert ink.sum() > 2000, f"{key}：畫面幾乎是空的"
+
+
 # ---------------------------------------------------------------- 數字對帳：新版面上的每個數字都要有出處
 
 
