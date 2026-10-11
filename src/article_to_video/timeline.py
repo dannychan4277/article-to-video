@@ -273,9 +273,14 @@ def _carry_highlight(cue: Cue, data: Mapping[str, Any]) -> Cue:
     return Cue(kind="highlight", at=CONTINUATION_AT, fields=fields, where=cue.where + "（沿用）", carried=True)
 
 
+DATA_KINDS = ("bar", "line", "candle")
+"""畫資料的 cue：引擎照第一個（時間最早的）決定圖型與「沒有自己時刻的柱」什麼時候長。"""
+
+
 def effective_chart(shots: list[Shot], i: int) -> tuple[dict[str, Any], list[Cue]]:
     """第 i 個分鏡實際生效的圖表 data 與 cue（接續分鏡會沿用上一個）。沿用的 cue 排在前面、時間已改成負數。
-    上一個分鏡最後的標註也沿用（第一幀就在、淡掉的柱照樣淡著），到這個分鏡自己的 highlight cue 才換。"""
+    上一個分鏡最後的標註也沿用（第一幀就在、淡掉的柱照樣淡著），到這個分鏡自己的 highlight cue 才換。
+    接續分鏡自己的 bar cue（帶 data.index）＝那幾根柱在這一句才長（前面的分鏡不畫它們，見 _bars_later）。"""
     shot = shots[i]
     assert shot.chart is not None
     if not shot.continues or i == 0 or shots[i - 1].chart is None:
@@ -283,10 +288,36 @@ def effective_chart(shots: list[Shot], i: int) -> tuple[dict[str, Any], list[Cue
     p_data, p_cues = effective_chart(shots, i - 1)
     own_number = any(c.kind == "number" for c in shot.chart.cues)
     carried = [_carry(c) for c in p_cues if c.kind != "highlight" and not (own_number and c.kind == "number")]
+    if any(c.kind == "bar" for c in shot.chart.cues) and not any(c.kind in DATA_KINDS for c in p_cues):
+        # 前面的分鏡沒寫 bar cue（柱在版式之後自己長好）：補一個沿用的，不然引擎拿這個分鏡的 bar cue 當主生長，
+        # 沒有自己時刻的柱在切點變回 0、重長一次
+        carried.append(Cue(kind="bar", at=CONTINUATION_AT, fields={"kind": "bar"},
+                           where=f"{shots[i - 1].label} 的柱（沿用）", carried=True))
     p_labels = [c for c in p_cues if c.kind == "highlight"]
     if p_labels:
         carried.append(_carry_highlight(p_labels[-1], p_data))
     return {**p_data, **shot.chart.data}, carried + list(shot.chart.cues)
+
+
+def bar_indices(cue: Cue) -> list[int]:
+    """bar cue 的 data.index（一個或清單）→ 這個 cue 長哪幾根柱；沒寫是空的（＝沒有自己時刻的柱跟著它長）。"""
+    q = cue.fields.get("data")
+    idx = q.get("index") if isinstance(q, Mapping) else None
+    if idx is None:
+        return []
+    return [x for x in (idx if isinstance(idx, list) else [idx]) if isinstance(x, int) and not isinstance(x, bool)]
+
+
+def _bars_later(project: Project, members: list[int]) -> dict[int, list[int]]:
+    """一串分鏡裡，每個分鏡「後面的分鏡才長」的柱（bar cue 寫在後面那個分鏡、帶 data.index）：這個分鏡不畫它們。
+    整串一起算：唸到那一句之前，那根柱在每個分鏡都不在，切點不跳。只列有的分鏡（其他分鏡的 spec 不變、不重渲）。"""
+    out: dict[int, list[int]] = {}
+    later: set[int] = set()
+    for n in reversed(members):
+        if later:
+            out[n] = sorted(later)
+        later |= {i for c in project.shots[n].chart.cues if c.kind == "bar" for i in bar_indices(c)}
+    return out
 
 
 # ---------------------------------------------------------------- 時間軸
@@ -601,6 +632,7 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
         if st.shot.chart is not None:
             members.setdefault(chains[st.shot.id][2], []).append(n)
     layouts = {head: _chain_layout(project, ns) for head, ns in members.items() if len(ns) > 1}
+    later = {n: bars for ns in members.values() if len(ns) > 1 for n, bars in _bars_later(project, ns).items()}
     _check_highlight_points(project)
     snap = project.settings.camera == "snap"
     events = {head: _snap_events(project, timeline, ns) for head, ns in members.items()} if snap else {}
@@ -616,6 +648,8 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
         g0, g1, head = chains[shot.id]
         if head in layouts:
             data["chainLayout"] = layouts[head]
+        if n in later:
+            data["barsLater"] = later[n]
         total_push = head_push.get(head)
         if snap:
             data.pop("push", None)

@@ -7,6 +7,8 @@
   SH03 從 s03 開頭切入、切點就換標「乙」。乙自己寫了顏色（綠）。
 - SH04～SH06：折線一串（有大數字）。SH04 標谷底（不在 xTicks 上），SH05 換標最後一點，SH06 同一點只換字。
 - SH07：同一組折線數字，自己寫縱軸範圍 yRange [-2, 2]。
+- SH08～SH09：柱狀圖一串、一句長一根柱（計時實測的卡點）。甲、乙在 SH08 唸到時長（乙比甲低：「降到」），丙的 bar cue
+  寫在接續分鏡 SH09。SH08 唸完乙標「不到一半」（乙旁邊有高一倍多的甲：標註放在乙的正上方）。
 
 整串的第一個分鏡寫 push 0（不慢推），同一串裡不同時刻的畫面可以逐像素比；慢推的連續性另有測試（test_build.py）。
 """
@@ -34,6 +36,8 @@ NARRATION = {
     "s05": "最後一個月，回到正的。",
     "s06": "這就是轉正。",
     "s07": "換一種刻度來看。",
+    "s08": "甲組三十，乙組降到十二點五。",
+    "s09": "再看丙組，回到二十。",
 }
 # 自製的月資料（跟 test_render_clip.py 的 DIP 同一組）：先倒掛、谷底在第 9 個月、回正
 DIP = [0.80, 0.55, 0.30, 0.10, -0.15, -0.40, -0.60, -0.75, -0.85, -0.80, -0.70, -0.55,
@@ -85,6 +89,16 @@ SHOTS = [
                  "decimals": 2, "push": 0, "xTicks": [0, 12, 23], "colors": {"main": "#7B2CBF"}, "yRange": [-2, 2],
                  "series": [{"label": f"{2024 + i // 12}-{i % 12 + 1:02d}", "value": v} for i, v in enumerate(DIP)]},
         "cues": [{"at": 0, "kind": "title"}, {"at": _a("s07"), "kind": "line"}]}},
+    # 一句長一根柱：甲、乙在 SH08 唸到時長，丙的 bar cue 寫在接續分鏡 SH09（唸到「回到」才長）。乙比甲低（「降到」）
+    {"id": "SH08", "start": _a("s08"), "chart": {
+        "data": {"title": "三組數字，一句一根", "unit": "示意數據", "source": SOURCE, "chart": "bar", "decimals": 1, "push": 0,
+                 "series": [{"label": "甲", "value": 30}, {"label": "乙", "value": 12.5}, {"label": "丙", "value": 20}],
+                 "highlight": {"index": 1, "text": "不到一半"}},
+        "cues": [{"at": 0, "kind": "title"}, {"at": _a("s08", "甲組"), "kind": "bar", "data": {"index": 0}},
+                 {"at": _a("s08", "乙組"), "kind": "bar", "data": {"index": 1}},
+                 {"at": _a("s08", "十二點五", "end"), "kind": "highlight"}]}},
+    {"id": "SH09", "start": _a("s09"), "continues": True, "chart": {
+        "cues": [{"at": _a("s09", "回到"), "kind": "bar", "data": {"index": 2}}]}},
 ]
 
 LAST = -1.0
@@ -97,6 +111,8 @@ STILLS = {
     "SH05": [0.0, LAST],
     "SH06": [0.0, LAST],
     "SH07": [LAST],
+    "SH08": [LAST],
+    "SH09": [0.0, 0.7, LAST],   # 0.7 秒：還沒唸到「回到」
 }
 
 
@@ -293,3 +309,17 @@ def test_first_frame_of_the_video_already_shows_the_title(chain):
 def test_later_charts_still_animate_their_title_in(chain):
     """不是第一個、也不接續的分鏡（SH04），標題照舊在切進來之後才淡入（第 0 幀還沒有字）。"""
     assert title_ink(chain, chain.at("SH04", 0.0)) < 200
+
+
+# ---------------------------------------------------------------- 計時實測：接續分鏡裡的 bar cue
+
+
+def test_a_bar_cued_in_a_continuation_grows_there_and_not_in_the_shot_before(chain):
+    """「一句長一根柱、下一句換一個標註」要能並存（計時實測的卡點 1）：丙的 bar cue 寫在接續分鏡 SH09。
+    SH08 從頭到尾沒有丙（原本沒在第一個分鏡寫 cue 的柱一開場就長好），切點不跳，唸到「回到」丙才長出來。"""
+    cut = changed(chain.last("SH08"), chain.at("SH09", 0.0))
+    assert cut < 400, f"SH08→SH09 切點前後有 {cut} 個像素變了"
+    early = changed(chain.at("SH09", 0.0), chain.at("SH09", 0.7))
+    assert early < 50, f"還沒唸到「回到」，畫面就變了 {early} 個像素"
+    grown = changed(chain.at("SH09", 0.7), chain.last("SH09"))
+    assert grown > 5000, f"唸到「回到」之後丙沒長出來（只變了 {grown} 個像素）"
