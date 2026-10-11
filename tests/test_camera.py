@@ -243,7 +243,8 @@ def test_the_snap_zooms_toward_the_labelled_bar_which_stays_put(lab):
     (bx0, by0), (bx1, by1) = bar_top_center(before), bar_top_center(after)
     assert abs(bx1 - bx0) <= 1 and abs(by1 - by0) <= 1  # 被標註的柱（甲）頂端在畫面上不動
     t0, t1 = title_box(before), title_box(after)
-    assert t1[0] < t0[0] - 2 and t1[2] > t0[2] + 2  # 其他東西往外推開（標題變寬）
+    # 其他東西往外推開（標題變寬）。量寬度：柱寬隨根數之後三根柱擠到圖區中間，甲柱頂離標題右端很近，右端只移一兩個像素
+    assert t1[0] < t0[0] - 2 and (t1[2] - t1[0]) - (t0[2] - t0[0]) > 4
 
 
 def test_a_continued_shot_starts_exactly_where_the_previous_one_left_the_camera(lab):

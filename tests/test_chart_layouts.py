@@ -81,6 +81,8 @@ STILLS = {
     "SH01": [0.0, LAST],
     "SH02": [BEFORE_HL, LAST],
     "SH02B": [0.0, LAST],
+    "SH03": [LAST],
+    "SH04": [LAST],
 }
 
 
@@ -256,3 +258,42 @@ def test_a_continued_compare_starts_where_the_last_one_ended_and_adds_the_gap_be
 def changed(a: np.ndarray, b: np.ndarray, thresh: int = 40) -> int:
     """兩張圖有幾個像素明顯不一樣（任一色版差 > thresh）。"""
     return int((np.abs(a - b).max(axis=-1) > thresh).sum())
+
+
+# ---------------------------------------------------------------- 柱寬隨根數
+
+
+def bars(img: np.ndarray, col=(0x00, 0x6B, 0xA2), tol: int = 30) -> list[tuple[int, int]]:
+    """柱（主色）的左右緣，左到右。"""
+    m = np.abs(img - np.array(col)).max(axis=-1) < tol
+    return runs(m.any(axis=0), 2)
+
+
+def bar_area(lay: Layouts, img: np.ndarray) -> tuple[int, int]:
+    """柱可以擺的橫向範圍：格線的左端到右端（右邊 80 px 是刻度值那一欄，不擺柱）。"""
+    g = gray(img)
+    line = (g > 205) & (g < 235)
+    row = int(np.argmax(line.sum(axis=1)))
+    x0, _, x1, _ = bbox(line[row:row + 1])
+    return x0, x1 - 80
+
+
+SEVEN_BAR_WIDTH = {"16x9": 143, "9x16": 65}
+"""七根柱的柱寬（px）：改之前的引擎量到的（根數多時照原本）。"""
+
+
+def test_many_bars_keep_their_width(layouts):
+    widths = [b - a for a, b in bars(layouts.last("SH04"))]
+    assert len(widths) == 7
+    assert all(abs(w - SEVEN_BAR_WIDTH[layouts.aspect]) <= 2 for w in widths), widths
+
+
+def test_two_bars_are_wide_close_together_and_centred(layouts):
+    (a0, a1), (b0, b1) = bars(layouts.last("SH03"))
+    w = a1 - a0
+    assert abs((b1 - b0) - w) <= 2
+    assert w >= 1.4 * 150, f"兩根柱太細：{w} px（原本 150）"
+    assert w <= 0.14 * max(layouts.fmt.width, layouts.fmt.height), f"柱寬要有上限（橫式不照格子撐到 500 px）：{w} px"
+    assert 0.4 * w <= b0 - a1 <= 1.2 * w, f"兩根柱的間距要自然：間距 {b0 - a1}、柱寬 {w}"
+    x0, x1 = bar_area(layouts, layouts.last("SH03"))
+    assert abs((a0 - x0) - (x1 - b1)) <= 0.02 * layouts.fmt.width, f"兩根柱要在圖區中間：左邊空 {a0 - x0}、右邊空 {x1 - b1}"

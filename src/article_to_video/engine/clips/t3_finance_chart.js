@@ -24,6 +24,8 @@ const LEADER_MIN = 40;
 // ease-in-out 前幾幀幾乎不動，看起來像遲到的運鏡。時長由 spec 給（建置的 SNAP_DUR）。
 const SNAP_EASE = MO.bezier(0.23, 1, 0.32, 1);
 const CAM_SIDE = 12;                                                      // B 鏡頭推近後，字離畫面左右邊至少這麼多（×u）
+// [article-to-video 內嵌修改] 柱寬：一格的 BAR_FILL（原版 0.62），最寬 BAR_MAX（×u；原版 150）。見 init 的 xs
+const BAR_FILL = 0.62, BAR_MAX = 240;
 // [article-to-video 內嵌修改] 大數字卡、兩數對比的動畫時間與顏色（說明在 cardInit 上面）
 const ROLL = 0.9, ENTER = 0.45, STAGGER = 0.06, FLOAT = 18;
 const CARD_DIM = '#98A4AA';                                               // 被比下去的那個數字與說明（還要讀得到，所以比淡掉的柱 #C6D2D8 深）
@@ -66,7 +68,12 @@ return {
       ...(CL.highlights || []).map(h => ({ index: h.index != null ? h.index : S.length - 1, lines: h.text || h.sub ? [h.text, h.sub].filter(Boolean) : Array(h.lines || 0).fill('') }))];
     const band = ctx.of('number').length || CL.number ? 150 * u : 0;     // 有 number：给大数字单独留一条，不压在图区里（折线一上涨，右上角正好是线头）
     const F = { x: mL + 20 * u, y: top + 40 * u + band, w: W - mL - mR - 40 * u, h: H - top - 40 * u - band - (tall ? 260 : 190) * u - ctx.safe.bottom - (srcF.lines.length - 1) * srcF.size * 1.3 };   // safe.bottom：字幕带整条让出来，来源行落在它上面
-    const n = S.length, slot = (F.w - 80 * u) / n, xs = S.map((_, i) => F.x + slot * (i + 0.5));   // 右边留 80px 给刻度值，别压在最后一根柱上
+    // 右边留 80px 给刻度值，别压在最后一根柱上。[article-to-video 內嵌修改] 柱寬隨根數：柱寬＝一格的 BAR_FILL（原版 0.62），最寬 BAR_MAX；
+    // 根數少、柱寬碰到上限時，格子跟著縮成「柱寬 ÷ BAR_FILL」（柱與柱的間距跟根數多時同一個比例），整組柱放在圖區正中間。
+    // 原版上限 150 而格子照樣撐滿圖區：兩三根柱時柱子細、彼此離很遠、圖區空一大片
+    const n = S.length, area = F.w - 80 * u, bw = kind === 'bar' ? Math.min(BAR_MAX * u, area / n * BAR_FILL) : 0;
+    const slot = kind === 'bar' ? Math.min(area / n, bw / BAR_FILL) : area / n, x0 = F.x + (area - slot * n) / 2;
+    const xs = S.map((_, i) => x0 + slot * (i + 0.5));
     // x 轴：时间序列（折线/K 线，或 data.xAxis:'time'）按间隔抽稀；类目（柱状图默认）每根都要有名字，放不下就缩字、再放不下错成两行
     const category = (d.xAxis || (kind === 'bar' ? 'category' : 'time')) === 'category';
     const fs0 = ctx.portrait ? 1.2 : 1, xf = 30 * u * fs0;
@@ -102,7 +109,7 @@ return {
         roomFor(need); ticks.push(+(ticks[ticks.length - 1] + step).toFixed(10));
       }
     }
-    L = { subF, srcF, m: mL, mR, kind, S, zeroBased, ticks, tdec, yS: CH.lin(...dom(), F.y + F.h, F.y), F, xs, slot, t, sub, band, category, xFont: xf * xScale, stagger,
+    L = { subF, srcF, m: mL, mR, kind, S, zeroBased, ticks, tdec, yS: CH.lin(...dom(), F.y + F.h, F.y), F, xs, slot, bw, t, sub, band, category, xFont: xf * xScale, stagger,
       every: category ? 1 : Math.max(1, Math.ceil(n / (ctx.portrait ? 6 : 10))) };
     const brand = (d.colors && d.colors.brand) || RED;                    // [article-to-video 內嵌修改] 品牌色
     const main = (d.colors && d.colors.main) || (kind === 'bar' ? '#006BA2' : brand);
@@ -179,7 +186,7 @@ return {
     }
     let tops = null, pts = null;
     if (kind === 'bar') {
-      const bw = Math.min(150 * u, L.slot * 0.62);
+      const bw = L.bw;
       const opt = { dimCol: L.col.dim, fmt: v => fmtv(d, v), font: `600 ${Math.max(24 * u * fs, Math.min(34 * u * fs, L.slot * 0.3))}px ${NUM}`, labelCol: INK, label: n <= 14 };
       const own = {};                                                      // 带 data.index 的 bar cue：这几根柱子从它的 at 起单独长
       for (const q of ctx.of('bar')) if (q.data && q.data.index != null) [].concat(q.data.index).forEach(i => { own[i] = q; });
@@ -478,16 +485,23 @@ function barMode(ctx, c, h) {
   if (v < 0) return 'neg';
   if (S.some((r, j) => j !== hi && r.value > v * 1.5)) return 'above';   // 有更高的柱子挡在旁边：标注放在这根柱子正上方，别压进别的柱子
   const tops = S.map((r, i) => [xs[i], yS(r.value)]), anchor = tops[hi];   // 预演斜向标注的文字框：压到别的柱子或它的数值，就改放这根柱子正上方
-  const ax = anchor[0] - Math.min(150 * u, L.slot * 0.62) / 2, right = ax > F.x + F.w * 0.55, tx = right ? ax - 60 * u : ax + 60 * u, ty = Math.max(F.y + 60 * u, anchor[1] - 140 * u);
+  const ax = anchor[0] - L.bw / 2, right = ax > F.x + F.w * 0.55, tx = right ? ax - 60 * u : ax + 60 * u;
   c.save(); c.font = `700 ${50 * u}px ${NUM}`; let tw = c.measureText(ls[0] || '').width; c.font = `400 ${28 * u * fs}px ${CN}`; if (ls[1]) tw = Math.max(tw, c.measureText(ls[1]).width); c.restore();
-  const bx0 = right ? tx - 12 - tw : tx + 12, bx1 = bx0 + tw, by1 = ty + (ls.length > 1 ? 56 : 16) * u;
+  const drop = (ls.length > 1 ? 56 : 16) * u, bx0 = right ? tx - 12 - tw : tx + 12, bx1 = bx0 + tw;
+  let ty = Math.max(F.y + 60 * u, anchor[1] - 140 * u);
+  // [article-to-video 內嵌修改] 斜向文字也不能壓到這根柱自己的數值（柱頂正中）：柱寬隨根數變寬之後，數值會落到文字底下
+  // （標最高那根、文字被夾在圖區上緣 +60 時最明顯）。橫向疊到時，文字往上抬到數值上面（最多抬到圖區上緣 +20）
+  const lf = Math.max(24 * u * fs, Math.min(34 * u * fs, L.slot * 0.3)); c.save(); c.font = `600 ${lf}px ${NUM}`; const lw = c.measureText(fmtv(ctx.data, v)).width; c.restore();
+  if (bx0 < anchor[0] + lw / 2 + 6 * u && bx1 > anchor[0] - lw / 2 - 6 * u) ty = Math.max(F.y + 20 * u, Math.min(ty, anchor[1] - 14 - lf - drop - 4 * u));
+  h.ty = ty;
+  const by1 = ty + drop;
   return tops.some(([bx, by], j) => j !== hi && bx + L.slot * 0.45 > bx0 && bx - L.slot * 0.45 < bx1 && by - 44 * u * fs < by1) ? 'above' : 'diag';
 }
 // [article-to-video 內嵌修改] 畫一個標註（原版寫在 draw 裡、只畫第一個 highlight cue）。k：這個標註出現了幾秒；alpha：整個標註的透明度（換標註時舊的淡出）；
 // dot：'spring'＝圓點彈出（原版）、'full'＝圓點已經在（同一點換字）、'none'＝不畫圓點（同一點換字時舊的那個）。anchor：點（柱頂／柱底、折線上的點）；tops：現在的柱頂
 function drawLabel(c, ctx, h, k, alpha, dot, anchor, tops) {
   if (k <= 0 || alpha <= 0) return;
-  const { u } = ctx, { F, yS, kind } = L, fs = ctx.portrait ? 1.2 : 1, lines = h.lines, bw = Math.min(150 * u, L.slot * 0.62);
+  const { u } = ctx, { F, yS, kind } = L, fs = ctx.portrait ? 1.2 : 1, lines = h.lines, bw = L.bw;
   const s = dot === 'spring' ? MO.spring(k, { duration: 0.45, bounce: 0.25 }) : 1, lp = MO.quintOut(MO.seg(k, 0.12, 0.45)), fp = MO.quintOut(MO.seg(k, 0.3, 0.7));
   const [x, y] = anchor;
   if (kind === 'bar' && h.mode === 'neg') {
@@ -522,7 +536,7 @@ function drawLabel(c, ctx, h, k, alpha, dot, anchor, tops) {
     const a = kind === 'bar' ? [x - bw / 2, y] : [x, y];
     const right = a[0] > F.x + F.w * 0.55, co = kind === 'line' ? h.co : null;   // [article-to-video 內嵌修改] 折線：位置照 placeLineLabel 挑的（不壓線、零軸）
     const tx = co ? co.tx : right ? a[0] - 60 * u : a[0] + 60 * u;
-    const ty = co ? co.ty : Math.max(F.y + 60 * u, a[1] - 140 * u);   // [article-to-video 內嵌修改] 負數柱另外處理（上面那段），這裡只剩正數柱與折線、K 線
+    const ty = co ? co.ty : kind === 'bar' && h.ty != null ? h.ty : Math.max(F.y + 60 * u, a[1] - 140 * u);   // [article-to-video 內嵌修改] 負數柱另外處理（上面那段），這裡只剩正數柱與折線、K 線；柱的高度 barMode 算好（讓開自己的數值）
     CH.callout(c, k, 0, { x: a[0], y: a[1], tx, ty, lines, col: INK, dotCol: L.col.ink, font: `700 ${50 * u}px ${NUM}`, font2: `400 ${28 * u * fs}px ${CN}`, align: co ? co.align : right ? 'right' : 'left', r: 9 * u, halo: 10 * u, alpha, dot });
   }
 }
