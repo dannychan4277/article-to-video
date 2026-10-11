@@ -231,8 +231,8 @@ function C(...a) { return a.find(v => v != null && v !== ''); }
 // [article-to-video 內嵌修改] B 鏡頭的關鍵幀（init 算好）。cam = {dur, box: [左, 上, 右, 下]（佔畫面比例：內容推近後可以到的範圍，
 // 畫面扣掉平台介面區與字幕帶）, snaps: [{at, zoom（推到多大，1.04＝推近 4%）, index（標哪一點）}]}：整串到這個片段為止的每一下，
 // 之前分鏡的 at 是負的，所以接續分鏡從同一個鏡頭接著走。鏡頭＝畫面座標 = s × 原座標 + (tx, ty)：
-// 每一下以被標註的點為固定點（它在畫面上不動、其他東西往外推開），再把 (tx, ty) 夾到「內容框推近後還在 box 裡」；
-// 放大量也夾在「內容框放得進 box」以內。內容框＝標題上的小旗到來源行（有角標時到角標底）、左右邊距之間，再加上超出邊距的
+// 每一下以被標註的點為固定點（它在畫面上不動、其他東西往外推開）；放大量夾在「點不動、內容框推近後還在 box 裡」以內
+// （推不到要的量就少推，不平移）。內容框＝標題上的小旗到來源行（有角標時到角標底）、左右邊距之間，再加上超出邊距的
 // x 軸名字（以點為中心，點多時最左、最右的名字會超出邊距一截）；頂端色條是裝飾、不算。box 左右再各內縮 CAM_SIDE，字不貼著畫面邊。
 function cameraKeys(ctx, c, cam) {
   const { W, H, u, safe, data: d } = ctx, { S, xs, yS, kind } = L, b = cam.box || [0, 0, 1, 1];
@@ -246,8 +246,16 @@ function cameraKeys(ctx, c, cam) {
   const keys = []; let s = 1, tx = 0, ty = 0;
   for (const q of cam.snaps || []) {
     const i = q.index != null && S[q.index] ? q.index : S.length - 1, P = [xs[i], yS(kind === 'candle' ? S[i].c : S[i].value)];
-    const s1 = clamp(+q.zoom || 1, 1, Math.max(1, fit));
-    const nx = clamp(tx + (s - s1) * P[0], A[0] - s1 * C[0], A[2] - s1 * C[2]), ny = clamp(ty + (s - s1) * P[1], A[1] - s1 * C[1], A[3] - s1 * C[3]);
+    // 被標註的點現在在畫面上的位置 p0 不動：畫面座標 = p0 + s1 × (原座標 − P)。內容框不出 box 的條件換成 s1 的上限
+    // （每個方向兩邊各一個）；推不到要的量就少推（甚至不推），不平移整張圖——平移會把被標註的點往畫面邊推（方向反了）
+    const p0 = [s * P[0] + tx, s * P[1] + ty];
+    let s1 = clamp(+q.zoom || 1, s, Math.max(s, fit));
+    for (const k of [0, 1]) {
+      if (P[k] > C[k]) s1 = Math.min(s1, (p0[k] - A[k]) / (P[k] - C[k]));
+      if (C[k + 2] > P[k]) s1 = Math.min(s1, (A[k + 2] - p0[k]) / (C[k + 2] - P[k]));
+    }
+    s1 = Math.max(s, s1);
+    const nx = p0[0] - s1 * P[0], ny = p0[1] - s1 * P[1];
     keys.push({ at: +q.at || 0, dur: cam.dur || 0.3, d: [s1 - s, nx - tx, ny - ty] }); s = s1; tx = nx; ty = ny;
   }
   return keys;
