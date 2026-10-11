@@ -364,7 +364,8 @@ def test_a_must_fix_brings_back_the_whole_film_for_at_most_two_rounds(edited_pro
 
     # 整片已經審了兩輪：還有必修，改好（又改了分鏡 2）之後這輪只看改過的分鏡；已經核過的 R1-1 不再拿來核
     edit_highlight(root, "長天期比較低")
-    assert run_cli("build", str(root), "--tts", "fake").returncode == 0
+    rebuilt = run_cli("build", str(root), "--tts", "fake")  # 沒加 --no-open：給作者看了，算一版
+    assert rebuilt.returncode == 0, rebuilt.stdout + rebuilt.stderr
     prep = run_cli("review-prep", str(root), "--tts", "fake")
     assert prep.returncode == 0, prep.stdout + prep.stderr
     m = material(root)
@@ -376,9 +377,7 @@ def test_a_must_fix_brings_back_the_whole_film_for_at_most_two_rounds(edited_pro
     assert [(r["round"], r["scope"]) for r in log["rounds"]] == [(1, "full"), (2, "full"), (3, "changed")]
 
     # 只看改過分鏡的那一輪找到的必修照樣擋出片（渲染前就擋）
-    shown = run_cli("open-review", str(root), "--tts", "fake")
-    assert shown.returncode == 0
-    version = re.search(r"第 (\d+) 版", shown.stdout).group(1)
+    version = re.search(r"第 (\d+) 版", rebuilt.stdout).group(1)
     blocked = run_cli("publish", str(root), "--version", version, "--tts", "fake", "--out", str(tmp_path / "出片"))
     assert blocked.returncode == 1 and "R3-1" in blocked.stderr and "新標註被字幕蓋住" in blocked.stderr
     assert "R1-1" not in blocked.stderr and "R2-1" not in blocked.stderr

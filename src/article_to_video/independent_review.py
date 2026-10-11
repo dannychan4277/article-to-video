@@ -372,9 +372,11 @@ def next_round(plan: BuildPlan) -> NextRound:
         return NextRound(FULL, f"第 {last.get('round')} 輪的紀錄沒有記分鏡內容，比不出改了哪些，整支片審", bool(pending))
     if pending:
         ids = "、".join(it["id"] for _, it in pending)
+        if not changed:
+            return NextRound(CHANGED, f"還有必修沒改（{ids}）：改好、重建之後再審改過的分鏡", False, changed, since)
         why = (f"還有必修要核對（{ids}）；整支片已經審過 {fulls} 輪，這輪只看改過的分鏡" if fulls >= MAX_FULL_ROUNDS
                else f"還有必修要核對（{ids}），只看改過的分鏡")
-        return NextRound(CHANGED, why, bool(changed), changed, since)
+        return NextRound(CHANGED, why, True, changed, since)
     return NextRound(CHANGED, f"第 {since} 輪之後沒有必修要核對：改過的分鏡自己看靜態圖確認就好；"
                               "改得多（約三分之一以上的分鏡、或整段旁白重寫）才審一輪改過的分鏡",
                      False, changed, since)
