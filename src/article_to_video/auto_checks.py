@@ -1054,7 +1054,7 @@ def checks_contributor(plan: BuildPlan) -> ReviewExtras:
 
     bad, warn = report.blocking, [f for f in report.findings if not f.blocking]
     nums = _shot_numbers(plan)
-    note = "機器把每個片段重做一遍，看畫面有沒有卡住、閃一下、字被切掉或被字幕蓋住。"
+    note = "機器把每個片段重做一遍，看畫面有沒有卡住、閃一下、字被切掉或被字幕蓋住，標註和數字有沒有跟上旁白。"
     if never:
         sec = CardSection("checks", "自動檢查", [CheckItem(
             "還沒跑", detail="做好審片用的影片之後、給你看之前，Claude 會跑", status="info")])
