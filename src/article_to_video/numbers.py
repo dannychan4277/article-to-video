@@ -595,6 +595,9 @@ class ScreenText:
     """整段就是一個數字（數值、大數字）：畫面上顯示的就是 text 本身。"""
     public: int | None = None
     """這是公有數據圖的第幾個點（數值、類目名）；出處直接是那個點。"""
+    gap_of: tuple[str, ...] = ()
+    """兩數對比的差距：畫面上相減的那兩個數字（前一個、後一個，照畫面上的寫法）。文章裡沒有這個差距時，
+    兩個數字都有出處就算推算（程式自己算的差，不用另外宣告 derived）。"""
 
 
 ScreenTextSource = Callable[["BuildPlan", ShotTiming], list[ScreenText]]
@@ -635,6 +638,8 @@ def chart_texts(plan: BuildPlan, st: ShotTiming) -> list[ScreenText]:
         any(c.kind == "bar" and isinstance(c.fields.get("data"), dict) and "index" in c.fields["data"] for c in cues)
         or any(isinstance(r, dict) and r.get("color") for r in series)
     )
+    if kind == "compare":
+        return out + _compare_texts(data, cues, series, decimals, pre, suf)
     for n, r in enumerate(series):
         if not isinstance(r, dict):
             continue
@@ -671,6 +676,42 @@ def chart_texts(plan: BuildPlan, st: ShotTiming) -> list[ScreenText]:
         cap = c.fields.get("text") if c.fields.get("text") is not None else c.fields.get("sub")
         if isinstance(cap, str) and cap:
             out.append(ScreenText("大數字說明", cap))
+    return out
+
+
+def _shown_value(v: float, decimals: int) -> float:
+    """畫面上寫的那個數（四捨五入到 decimals，跟引擎 TY.fmt 一樣），差距照它算：觀眾自己減得出來。"""
+    return float(_fmt(v, decimals).replace(",", "").replace("−", "-"))
+
+
+def compare_gap(series: Sequence[Any], decimals: int) -> str:
+    """兩數對比的差距（不帶單位）：畫面上的後一個數減前一個數的絕對值，照 decimals 寫（引擎 compareInit 同一套算法）。"""
+    a, b = (_shown_value(r["value"], decimals) for r in series[:2])
+    return _fmt(abs(b - a), decimals)
+
+
+def _compare_texts(data: Mapping[str, Any], cues: Sequence[Any], series: list, decimals: int,
+                   pre: str, suf: str) -> list[ScreenText]:
+    """兩數對比上畫面的字：兩個數字（照 decimals、prefix、suffix）、各自的說明、差距（gap cue：動詞＋差＋單位）。"""
+    out: list[ScreenText] = []
+    shown: list[str] = []
+    for r in series:
+        if not isinstance(r, dict) or not isinstance(r.get("value"), (int, float)):
+            continue
+        label = str(r.get("label", ""))
+        shown.append(pre + _fmt(r["value"], decimals) + suf)
+        out.append(ScreenText("數字", shown[-1], of=label, whole=True))
+        if label:
+            out.append(ScreenText("說明", label))
+    if len(shown) != 2:
+        return out
+    for c in cues:
+        if c.kind != "gap":
+            continue
+        d = c.fields.get("data") if isinstance(c.fields.get("data"), Mapping) else {}
+        verb = c.fields.get("text") if isinstance(c.fields.get("text"), str) and c.fields.get("text") else "差"
+        text = f"{verb} {d.get('prefix') or ''}{compare_gap(series, decimals)}{d.get('suffix') or ''}"
+        out.append(ScreenText("差距", text, gap_of=(shown[0], shown[1])))
     return out
 
 
@@ -834,6 +875,18 @@ class _Sources:
         return None, failure
 
 
+    def gap(self, pair: Sequence[str], shown: str, shot_id: str) -> tuple[str, str]:
+        """兩數對比的差距（程式自己算的：畫面上後一個數減前一個數）：兩個數字都有出處就是推算，有一個沒有就是無出處。"""
+        a, b = pair
+        hits = {s: (self.lookup(n[0], shot_id) if (n := find_numbers(s)) else None) for s in pair}
+        missing = [s for s in pair if hits[s] is None]
+        if missing:
+            return "none", (f"差距是畫面上兩個數字相減（{b} − {a}），其中 {'、'.join(missing)} 找不到出處；"
+                            "那個數字有出處之後，差距就跟著有")
+        inputs = "；".join(f"{s}：{hits[s][1]}" for s in pair)
+        return "derived", f"推算：兩數對比的差距＝{b} − {a}，取絕對值 {shown}（程式照畫面上的兩個數字算）；{inputs}"
+
+
 def _is_unit_constant(x: FoundNumber) -> bool:
     """10、100、1000…：換算單位用的常數（例 ×100 變成百分比），算式裡用不必有出處。"""
     v = x.value
@@ -876,6 +929,8 @@ def reconcile(plan: BuildPlan, *, sources: Sequence[ScreenTextSource] | None = N
                     kind, detail, figure = "figure", fig.detail, fig.figure
                     if ok[1]:
                         notes.setdefault(shot.id, []).append(f"{shown}：{ok[1]}（文章的圖上有這個數字，以原圖為準）")
+                elif t.gap_of:
+                    kind, detail = src.gap(t.gap_of, shown, shot.id)
                 else:
                     detail = ok[1] or _why_unsourced(article, redraws, t.where)
                 items.append(NumberSource(shot.id, shot.number, t.where, t.of, t.text, shown, kind, detail, figure,

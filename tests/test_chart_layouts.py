@@ -46,7 +46,7 @@ def _a(seg: str, word: str | None = None, edge: str = "start") -> dict:
 SEVEN = [{"label": f"{2019 + i}", "value": v} for i, v in enumerate([0.2, 0.5, 1.1, -0.1, -0.6, -0.2, 0.5])]
 SHOTS = [
     {"id": "SH01", "start": _a("s01"), "chart": {
-        "data": {"title": "這一段倒掛了很久", "unit": "示意數據：利差小於 0 的天數", "source": SOURCE, "chart": "number",
+        "data": {"title": "這一段倒掛了很久", "unit": "示意數據：利差是負的天數", "source": SOURCE, "chart": "number",
                  "push": 0},
         "cues": [{"at": 0, "kind": "title"},
                  {"at": _a("s01", "三百天", "end"), "kind": "number", "text": "連續倒掛",
@@ -342,6 +342,45 @@ LAYOUT_ERRORS = {
     "差距用在柱狀圖": (lambda s, _: _cues(s, "SH03").append({"at": _a("s03"), "kind": "gap", "data": {"suffix": " 個百分點"}}),
                        ["分鏡 SH03", "chart.cues[2]", "差距", "兩數對比"]),
 }
+
+
+# ---------------------------------------------------------------- 數字對帳：新版面上的每個數字都要有出處
+
+
+ARTICLE = "這一段一共連續倒掛 300 天。甲組是 1.2%，乙組是 0.8%。\n"
+
+
+def _numbers_plan(tmp_path: Path, article: str = ARTICLE, shots: list[dict] = SHOTS[:3]):
+    root = write_project(tmp_path / "專案", shots)
+    (root / "article").mkdir()
+    (root / "article" / "text.txt").write_text(article, encoding="utf-8")
+    return plan_build(root, tts="fake")
+
+
+def test_every_number_on_a_card_or_a_comparison_is_traced_to_its_source(tmp_path):
+    from article_to_video.numbers import reconcile
+
+    rep = reconcile(_numbers_plan(tmp_path))
+    found = {sid: [(n.where, n.of, n.shown, n.label) for n in items] for sid, items in rep.shots.items()}
+    assert ("大數字", "", "300 天", "原文") in found["SH01"]
+    assert ("數字", "甲組", "1.2%", "原文") in found["SH02"]
+    assert ("數字", "乙組", "0.8%", "原文") in found["SH02"]
+    gap = [n for n in rep.shots["SH02B"] if n.where == "差距"]
+    assert [(n.shown, n.label) for n in gap] == [("0.4 個百分點", "推算")], "差距是畫面上兩個數字相減，出處＝推算"
+    assert "1.2%" in gap[0].detail and "0.8%" in gap[0].detail, gap[0].detail
+    assert rep.unsourced == []
+
+
+def test_a_compared_number_missing_from_the_article_blocks_the_final_build(tmp_path):
+    from article_to_video.numbers import check_numbers
+    from article_to_video.project import ProjectError
+
+    plan = _numbers_plan(tmp_path, article="這一段一共連續倒掛 300 天。甲組是 1.2%。\n")
+    with pytest.raises(ProjectError) as err:
+        check_numbers(plan)
+    msg = str(err.value)
+    assert "分鏡 SH02（審片頁的分鏡 2）的數字（乙組）：0.8% 找不到出處" in msg, msg
+    assert "分鏡 SH02B（審片頁的分鏡 3）的差距" in msg and "0.4" in msg, "差距的一邊沒出處，差距也沒出處"
 
 
 @pytest.mark.parametrize("case", list(LAYOUT_ERRORS))
