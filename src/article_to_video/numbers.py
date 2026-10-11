@@ -1030,7 +1030,7 @@ def number_review(plan: BuildPlan) -> ReviewExtras:
         if n_bad:
             notes.insert(0, f"有 {n_bad} 個數字找不到出處，擋下出片。")
         if not items:
-            notes.append("沿用上一張的圖，沒有新的數字。" if st.shot.continues else "畫面上沒有數字。")
+            notes.append("沿用上一張的數字" if st.shot.continues else "畫面上沒有數字")
         if n_bad or figures:
             # 有找不到出處、或有 Claude 讀圖讀的數字：只攤開這些（作者要一個一個看），其他對得到出處的收成一行
             ok = sum(1 for n in rep.shots[sid] if n.kind not in ("none", "figure"))
@@ -1039,7 +1039,7 @@ def number_review(plan: BuildPlan) -> ReviewExtras:
                                       rest_summary=f"其他 {ok} 個數字都對得到出處")]
             continue
         # 每個數字都對得到出處：安靜的一行，點開看每個數字的出處
-        summary = f"畫面上 {len(rep.shots[sid])} 個數字都對得到出處" if items else " ".join(notes)
+        summary = f"{len(rep.shots[sid])} 個數字都有出處" if items else " ".join(notes)
         cards[sid] = [CardSection("numbers", "畫面上的數字與出處", items, note=" ".join(notes), summary=summary)]
     bad = rep.unsourced
     if bad:

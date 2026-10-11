@@ -185,6 +185,8 @@ def _asset(name: str) -> str:
 
 _e = html.escape
 _SLOT_ORDER = {"numbers": 0, "checks": 1}
+CHANGED_LINKS = 8
+"""「這版改了哪些分鏡」最多列幾個連結；改得更多就只寫幾個（卡片上有標記）。"""
 
 
 def _item(it: CheckItem) -> str:
@@ -260,14 +262,15 @@ def _card(c: CardModel, has_video: bool) -> str:
         media += (f'<a class="main-still" href="{s.src}" target="_blank" title="開大圖">'
                   f'<img class="still" src="{s.src}" data-t="{s.time:.3f}" '
                   f'alt="分鏡 {c.number} 最後的畫面（{timecode(s.time)}）" loading="lazy"></a>')
-    if moments:
+    if moments:  # 時間碼放在滑鼠停上去的提示與替代文字，不佔作者要讀的字
         figs = "".join(
-            f'<figure class="moment"><a href="{s.src}" target="_blank" title="開大圖">'
+            f'<figure class="moment"><a href="{s.src}" target="_blank" title="開大圖（{timecode(s.time)}）">'
             f'<img class="still" src="{s.src}" data-t="{s.time:.3f}" alt="分鏡 {c.number} 在 {timecode(s.time)} 的畫面" loading="lazy">'
-            f'</a><figcaption>{timecode(s.time)}</figcaption></figure>'
+            f'</a></figure>'
             for s in moments
         )
-        media += f'<p class="moments-title">過程（每個新畫面出現之前）</p><div class="moments">{figs}</div>'
+        media += (f'<p class="moments-title" title="每個新畫面出現之前的樣子">過程</p>'
+                  f'<div class="moments">{figs}</div>')
 
     narr = "".join(
         f'<p>{"…" if mid_start else ""}{_e(text)}{"…" if mid_end else ""}</p>' for text, mid_start, mid_end in c.narration
@@ -293,7 +296,11 @@ def _changes(m: PageModel) -> str:
     if not changed and not m.removed:
         return ""
     parts = []
-    if changed:
+    if changed and len(changed) == len(m.cards):
+        parts.append(f"<p><strong>這版每個分鏡都改過（{len(changed)} 個）。</strong></p>")
+    elif len(changed) > CHANGED_LINKS:  # 改了一大半：列一長串連結不如看卡片上的標記
+        parts.append(f"<p><strong>這版改了 {len(changed)} 個分鏡</strong>（卡片上有「這版改過」）</p>")
+    elif changed:
         links = "、".join(f'<a href="#shot-{_e(c.id)}">分鏡 {c.number}</a>' for c in changed)
         parts.append(f"<p><strong>這版改了 {len(changed)} 個分鏡：</strong><span class=\"changed-list\">{links}</span>"
                      "（卡片上有「這版改過」）</p>")
@@ -363,9 +370,9 @@ def render_review_html(m: PageModel) -> str:
 </div></header>
 <main class="wrap">
 <section class="panel howto"><h2>怎麼用這一頁</h2><ol>
-<li>一張卡是一個分鏡：大圖是這個分鏡最後的畫面，小圖是過程，下面是那段旁白。點圖可以看大張。</li>
-<li>想改哪裡，就寫在那張卡的「想改什麼？」；不屬於某一張的，寫在最下面的「整體意見」。</li>
-<li>寫完按畫面最下方的「複製給 Claude」，回到 Claude 的對話框貼上送出。寫到一半關掉也沒關係，留言會留著。</li>
+<li>一張卡一個分鏡：大圖是最後的畫面，小圖是過程，配上那段旁白。點圖看大張。</li>
+<li>想改哪裡就寫在那張卡的「想改什麼？」，整支片的意見寫在最下面的「整體意見」。</li>
+<li>寫完按最下方的「複製給 Claude」，貼回 Claude 的對話框。寫到一半關掉，留言也會留著。</li>
 </ol></section>
 <section class="panel notice" id="carry" hidden><p id="carry-text"></p>
 <div class="actions"><button type="button" class="btn primary" id="carry-yes">放回來</button>

@@ -159,8 +159,8 @@ def output_contributor(plan: BuildPlan) -> Any:
     at = str(rec.get("at", "")).replace("T", " ")[:16]
     items = [  # 作者看 Finder 的說法；成片、字幕檔的完整路徑是給 Claude 的，收在「細節」
         CheckItem(f"在 Finder 的「影片 → {where.parent.name} → {where.name}」",
-                  detail=f"審片頁第 {rec.get('reviewVersion', '?')} 版，{at} 出片。字幕檔在同一個資料夾，"
-                         "上傳 YouTube 時可以一起給（影片裡已經燒好字幕）",
+                  detail=f"審片頁第 {rec.get('reviewVersion', '?')} 版，{at} 出片；字幕檔也在那裡",
+                  more="字幕檔上傳 YouTube 時可以一起給（影片裡已經燒好字幕）。",
                   status="ok", label="已出片", code=f"成片：{rec.get('video', '')}　字幕檔：{rec.get('srt', '')}"),
     ]
     stamp = plan.paths.final_stamp
