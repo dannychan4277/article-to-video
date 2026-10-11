@@ -1,6 +1,6 @@
 ---
 name: make-video
-description: 做成影片：把作者自己的財經文章（PDF、Word、Google 文件下載的檔，或直接貼上的文字）做成 2–4 分鐘的解說影片，Claude 寫旁白、配音、畫財經圖表（文章裡的圖照數字重畫成同一種圖表），自己檢查數字和畫面、跑一輪獨立審片，最後打開審片頁給作者看。作者說「做成影片」「把這篇做成影片」「做一支影片」「做一支直式的」，或丟文章檔、貼文章說要做片時使用。作者看過審片頁之後的修改和出片，用 edit-video。
+description: 做成影片：把財經文章（PDF、Word、Google 文件下載的檔，或直接貼上的文字）做成 2–4 分鐘的解說影片，Claude 寫旁白、配音、畫財經圖表（文章裡的圖照數字重畫成同一種圖表），自己檢查數字和畫面、跑一輪獨立審片，最後打開審片頁給作者看。作者說「做成影片」「把這篇做成影片」「做一支影片」「做一支直式的」，或丟文章檔、貼文章說要做片時使用。作者看過審片頁之後的修改和出片，用 edit-video。
 allowed-tools:
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video projects *)
   - Bash(uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video new *)
@@ -45,7 +45,7 @@ allowed-tools:
 
 ## 開始前
 
-- 這個外掛只處理**作者本人的文章**。文章裡的素材授權由他自己負責；不是他寫的文章就不要做。
+- 文章是誰寫的、有沒有授權、做好要不要公開發布，**都不要問**。有人做片是為了自己看懂一篇難讀的財經文章，影片怎麼用由他決定；拿到文章就開始做。
 - 指令照下面寫的跑（開頭都是 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video）。找不到 `uv` 就把開頭的 `uv` 換成
   `~/.local/bin/uv`；兩個都找不到＝還沒安裝，請他說「安裝」。
 - 預先核准只在叫出這個 skill 的那一回合有效。作者回覆之後要繼續跑指令時，先再叫一次這個 skill（看過審片頁之後的事叫 `edit-video`），
@@ -149,7 +149,7 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video checks "<專�
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video settings show --json --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-`independent_review` 是 true 才做獨立審片：
+`independent_review` 是 true 才做獨立審片。第一輪審整支片（review-prep 自己選範圍、印出為什麼）：
 
 ```
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-prep "<專案>" --data-dir ${CLAUDE_PLUGIN_DATA}
@@ -170,7 +170,12 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video review-record 
 uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video resolve "<專案>" R1-2 --fixed "怎麼改的" --data-dir ${CLAUDE_PLUGIN_DATA}
 ```
 
-你覺得不用改的要留給作者決定（第 8 步問他，他說不改才 `--accept "…" --by 作者`）。改得多再審一輪。
+你覺得不用改的要留給作者決定（第 8 步問他，他說不改才 `--accept "…" --by 作者`）。
+
+**再審幾輪**（細節在 checks-and-review.md「再審幾輪、審哪些」；build 最後印的「下一步」會照規則說要不要再審）：
+- 整支片審的那一輪有必修 → 改好、build、checks 之後，再跑一次上面的 review-prep → 派 agent → review-record：
+  它會整支片再審一輪核對（整支片最多 2 輪；之後還有必修就只看改過的分鏡）。
+- 沒有必修 → 不再派審片員。值得改的該修改掉，自己看改到的靜態圖、build、checks 確認，記 `--fixed`，就到第 8 步。
 
 ## 8. 打開審片頁給作者看
 
@@ -201,4 +206,4 @@ uv run --project ${CLAUDE_PLUGIN_ROOT} python -m article_to_video open-review "<
 - 配音：3 分鐘的旁白第一次十幾秒（要連網），之後只重配改到的段。
 - 預覽：第一次 20 個分鏡約 15 秒，之後只改幾個分鏡幾秒鐘。
 - 第一次建置 3 分鐘的片：幾分鐘（圖表片段一個約 5 秒）。
-- 自動檢查第一次約 1 分鐘；獨立審片素材約 10 秒，加上審片員看片的時間。
+- 自動檢查第一次約 1 分鐘；獨立審片素材約 10 秒，加上審片員看片的時間（2 分鐘的片整支約十分鐘；有必修時再整支看一輪）。

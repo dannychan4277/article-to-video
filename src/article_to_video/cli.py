@@ -22,8 +22,9 @@
   checks <專案資料夾> [--aspect …] [--tts …] [--jobs N] [--data-dir D] [--json]
                                                   自動檢查（build 之後、給作者看之前）：每個片段跑 qa、白底片段查字幕帶，彙整到分鏡，
                                                   寫 build/<比例>/checks.json、更新審片頁（見 auto_checks.py）
-  review-prep <專案資料夾> [--aspect …] [--tts …] [--data-dir D]
-                                                  獨立審片：從成片準備素材、印出派 agent 用的 prompt（見 independent_review.py）
+  review-prep <專案資料夾> [--aspect …] [--tts …] [--data-dir D] [--full | --changed]
+                                                  獨立審片：從成片準備素材、印出派 agent 用的 prompt（見 independent_review.py）；
+                                                  照規則決定這輪審整支片還是只看改過的分鏡，--full／--changed 硬指定
   review-frames <專案資料夾> [--aspect …] (--at 秒… | --from 秒 --to 秒 [--step 0.25])
                                                   （審片 agent 用）從成片抽全解析度幀
   review-record <專案資料夾> [--aspect …] [--file 檔|-] [--tts …] [--data-dir D]
@@ -175,8 +176,12 @@ def _parser() -> argparse.ArgumentParser:
     add("boxes", "（內部用，作者的流程只用財經圖表）列出 Vox 框、渲每個框的靜態圖、看哪些還沒核對", "tts", "jobs", "data_dir", "aspect")
     add("checks", "自動檢查（build 之後、給作者看之前跑）：每個片段跑 qa、白底片段查字幕帶，結果寫進審片頁",
         "tts", "jobs", "data_dir", "aspect", "json")
-    add("review-prep", "獨立審片：從成片準備審片素材（總覽圖、畫面事件圖、字幕檔），印出派 agent 的 prompt",
-        "tts", "data_dir", "aspect")
+    rp = add("review-prep", "獨立審片：從成片準備審片素材（總覽圖、畫面事件圖、字幕檔），印出派 agent 的 prompt。"
+             "審整支片還是只看改過的分鏡照規則決定（見 independent_review.py）", "tts", "data_dir", "aspect")
+    scope = rp.add_mutually_exclusive_group()
+    scope.add_argument("--full", dest="scope", action="store_const", const="full", help="這輪硬要審整支片")
+    scope.add_argument("--changed", dest="scope", action="store_const", const="changed",
+                       help="這輪硬要只看改過的分鏡（跟上一輪審的成片比）")
     rf = add("review-frames", "（審片 agent 用）從成片抽全解析度幀：--at 秒（可重複），或 --from --to --step")
     rf.add_argument("--aspect", type=_aspect, help="哪個比例的成片（預設：最近準備審片素材的那個）")
     rf.add_argument("--at", action="append", default=[], help="秒數或時間碼（例 12.4、0:12.4），可重複")
@@ -381,21 +386,28 @@ def _preview(args: argparse.Namespace) -> int:
 
 
 def _after_build_hint(plan, data_dir) -> str:
-    """build 之後的下一步（給 Claude 看）：自動檢查有沒有跑過、獨立審片審過這版沒有。"""
+    """build 之後的下一步（給 Claude 看）：自動檢查有沒有跑過、照規則要不要再審一輪獨立審片、審多少
+    （independent_review.next_round：第一輪整支片；整片那輪有必修就整支片再核一輪；其他只看改過的分鏡或不用再審）。"""
     from article_to_video.auto_checks import load_check_report
-    from article_to_video.independent_review import review_enabled, reviewed_current_video
+    from article_to_video.independent_review import SCOPES, next_round, review_enabled, reviewed_current_video
 
     root, aspect = plan.project.root, aspect_args(plan.format.name)
     steps = []
     unchecked = load_check_report(plan).unchecked
     if unchecked:
         steps.append(f"自動檢查（{len(unchecked)} 個片段還沒查）：{cli_command('checks', root, *aspect, data_dir=data_dir)}")
+    review_note = ""
     if review_enabled(data_dir) and not reviewed_current_video(plan):
-        steps.append(f"獨立審片（這版成片還沒審）：{cli_command('review-prep', root, *aspect, data_dir=data_dir)}"
-                     " → 用印出來的 prompt 派一個 agent → review-record")
+        nr = next_round(plan)
+        if nr.needed:
+            steps.append(f"獨立審片（{SCOPES[nr.scope]}：{nr.reason}）：{cli_command('review-prep', root, *aspect, data_dir=data_dir)}"
+                         " → 用印出來的 prompt 派一個 agent → review-record")
+        else:
+            review_note = f"獨立審片不用再審（{nr.reason}）。"
     if steps:
-        return "下一步：\n" + "\n".join(f"  {s}" for s in steps)
-    return (f"自動檢查、獨立審片都跑過這版了。下一步：處理完必修，{cli_command('open-review', root, *aspect, data_dir=data_dir)}"
+        return "下一步：\n" + "\n".join(f"  {s}" for s in steps) + (f"\n  {review_note}" if review_note else "")
+    done = review_note or "自動檢查、獨立審片都跑過這版了。"
+    return (f"{done}下一步：處理完必修，{cli_command('open-review', root, *aspect, data_dir=data_dir)}"
             " 打開審片頁給作者看；作者點頭之後 publish --version <他看的那一版> 才是出片。")
 
 
@@ -549,7 +561,7 @@ def _review_prep(args: argparse.Namespace) -> int:
         if not ir.review_enabled(args.data_dir):
             log("注意：使用者設定把獨立審片關掉了（"
                 f"{cli_command('settings set', '--independent-review', '開', data_dir=args.data_dir)} 可以打開）；照樣準備素材。")
-        kit = ir.prepare_review_kit(plan, log=log)
+        kit = ir.prepare_review_kit(plan, scope=args.scope, log=log)
         log(f"派審片 agent 時把這個檔的內容當 prompt：{kit.prompt}")
         log("agent 寫完 review.json 之後跑："
             + cli_command("review-record", plan.project.root, *aspect_args(plan.format.name), data_dir=args.data_dir))
@@ -573,12 +585,12 @@ def _review_frames(args: argparse.Namespace) -> int:
             times += [round(a + k * args.step, 3) for k in range(n + 1)]
         if not times:
             raise ProjectError("要給 --at 秒數，或 --from／--to", title="抽不了幀")
-        paths, sheet = ir.extract_review_frames(kit, times)
+        paths, sheets = ir.extract_review_frames(kit, times)
     except ProjectError as e:
         print(f"抽幀失敗：{e}", file=sys.stderr)
         return 1
     print("\n".join(str(p) for p in paths))
-    if sheet:
+    for sheet in sheets:
         print(f"拼在一起：{sheet}")
     return 0
 
