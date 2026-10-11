@@ -155,6 +155,47 @@ def test_recorded_findings_show_on_the_review_page(project):
     assert "R1-1" in cards["SH02"].codes and "R1-3" in page.page_codes
 
 
+# 審片員的長段說明：示範片三輪審下來，審片頁有一萬多字，大半是這種一段一段的說明與建議（作者要讀的是有什麼問題）
+LONG_DETAIL = ("旁白唸到「倒掛」的時候，畫面上還只有兩根柱子，標註要到下一句才出來，"
+               "觀眾聽到重點的那一刻看不到對應的東西，這樣的落差前後出現了好幾次。")
+LONG_FIX = "把標註提早到唸「倒掛」的那一刻，或者把這一句拆到下一個分鏡"
+WORDY = {
+    "score": 6.5,
+    "summary": "節奏大致順，標註常常比旁白晚一句。",
+    "items": [
+        {"severity": "該修", "shot": 2, "time": "0:06.0", "title": "標註比旁白晚一句",
+         "detail": LONG_DETAIL, "fix": LONG_FIX, "evidence": "實測"},
+        {"severity": "可改", "shot": 1, "time": "0:02.0", "title": "第一根柱子停太久",
+         "detail": "第一根柱子出來之後畫面三秒沒有變化，旁白一直在講同一件事。", "fix": "中間加一個標註", "evidence": "推論"},
+        {"severity": "可改", "shot": None, "title": "片尾卡的資料來源有重複",
+         "detail": "來源清單裡「作者原文」出現兩次，看起來像自動接起來沒整理。", "fix": "合併成一行", "evidence": "實測"},
+    ],
+}
+
+
+def test_the_reviewers_long_explanations_stay_folded_until_the_author_opens_them(project, browser):
+    """作者預設只看到每個問題的一句話（審片員自己寫的標題）和嚴重程度；怎麼了、建議怎麼改收在「細節」裡，點開才看。
+    整體結論（分數、總評）照樣攤開。"""
+    from conftest import shown_text
+
+    assert record(project, WORDY).returncode == 0
+    page = browser.new_page()
+    page.goto((project / "審片頁.html").as_uri())
+    seen = shown_text(page)
+    for title in ("標註比旁白晚一句", "第一根柱子停太久", "片尾卡的資料來源有重複"):
+        assert title in seen
+    assert "6.5 分" in seen and "標註常常比旁白晚一句" in seen
+    for long in (LONG_DETAIL, LONG_FIX, "第一根柱子出來之後畫面三秒沒有變化"):
+        assert long not in seen, f"預設就攤開了：{long}"
+
+    card = page.locator('article.card[data-shot-id="SH02"]')
+    card.get_by_text("細節").first.click()
+    opened = card.inner_text()
+    assert LONG_DETAIL in opened and LONG_FIX in opened
+    assert "R1-" not in opened.split("給 Claude")[0]  # 代號還是收在給 Claude 的那一行
+    page.close()
+
+
 def test_an_answer_piped_in_is_read_as_utf8_whatever_the_macs_language_setting(project):
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
     env.update(PYTHONUTF8="0", LC_ALL="en_US.ISO8859-1", LANG="en_US.ISO8859-1")

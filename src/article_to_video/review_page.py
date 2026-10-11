@@ -49,9 +49,12 @@ class CheckItem:
     """ok／warn／block／info，決定前面那個小標籤的字和顏色。"""
     label: str | None = None
     """小標籤的字；不給就用 status 的預設（沒問題／要看一下／擋下出片／說明）。"""
+    more: str = ""
+    """點開才看的補充（例：獨立審片員那一段「怎麼了、建議怎麼改」）。作者預設只看到 text（和 detail）；
+    這一行底下有一個預設收起來的「細節」，點開才看得到 more（換行照留）。"""
     code: str = ""
     """給 Claude 的代號與技術說明（例「qa:SH03:jump@1a2b3c4d　跳變：…」）。不跟作者看的字放一起：
-    收在這一區最後、預設收起來的「給 Claude 的代號」裡。"""
+    收在這一行預設收起來的「細節」最後（標「給 Claude」）。"""
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,10 @@ class CardSection:
     summary: str = ""
     """有寫就整區縮成安靜的一行（例「自動檢查沒發現問題」）：沒有 items 就只有這一行；有 items 的話收在這一行底下，
     點開才看得到。沒問題的檢查用它，作者不用一行一行讀。"""
+    rest: list[CheckItem] = field(default_factory=list)
+    """攤開的 items 後面、預設收起來的其他幾行（例：要作者對照的數字攤開，其他都對得到出處的收起來）。"""
+    rest_summary: str = ""
+    """rest 收起來時看得到的那一行（例「其他 11 個數字都對得到出處」）。"""
 
 
 @dataclass(frozen=True)
@@ -180,33 +187,43 @@ _e = html.escape
 _SLOT_ORDER = {"numbers": 0, "checks": 1}
 
 
-def _codes(items: Sequence[CheckItem]) -> str:
-    """給 Claude 的代號：一區一個、預設收起來（作者不用看；Claude 讀頁面或 checks.json 都拿得到）。"""
-    codes = [it.code for it in items if it.code]
-    if not codes:
+def _item(it: CheckItem) -> str:
+    """一行檢查結果：小標籤＋主要那行（＋補充）；more 和給 Claude 的代號收在這一行預設收起來的「細節」裡
+    （作者不用看代號；Claude 讀頁面原始碼或 checks.json、check_log.json 都拿得到）。"""
+    fold = ""
+    if it.more or it.code:
+        more = "".join(f"<p>{_e(line)}</p>" for line in it.more.splitlines() if line.strip())
+        code = f'<p class="codes">給 Claude：<code>{_e(it.code)}</code></p>' if it.code else ""
+        fold = f'<details class="fold more"><summary>細節</summary>{more}{code}</details>'
+    return (f'<li class="{_e(it.status)}"><span class="mark">{_e(it.label or STATUSES.get(it.status, it.status))}</span>'
+            f'<span class="text">{_e(it.text)}</span>'
+            + (f'<span class="detail">{_e(it.detail)}</span>' if it.detail else "")
+            + fold + "</li>")
+
+
+def _items(items: Sequence[CheckItem]) -> str:
+    return "<ul>" + "".join(_item(it) for it in items) + "</ul>" if items else ""
+
+
+def _rest(sec: CardSection) -> str:
+    """攤開的幾行後面，其他的收成一行（點開才看）。"""
+    if not sec.rest:
         return ""
-    lis = "".join(f"<li><code>{_e(c)}</code></li>" for c in codes)
-    return f'<details class="codes"><summary>給 Claude 的代號</summary><ul>{lis}</ul></details>'
+    return (f'<details class="fold rest"><summary class="quiet-line">{_e(sec.rest_summary or "其他（點開看）")}'
+            f'</summary>{_items(sec.rest)}</details>')
 
 
 def _section(sec: CardSection, heading: str = "h3") -> str:
-    items = "".join(
-        f'<li class="{_e(it.status)}"><span class="mark">{_e(it.label or STATUSES.get(it.status, it.status))}</span>'
-        f'<span class="text">{_e(it.text)}</span>'
-        + (f'<span class="detail">{_e(it.detail)}</span>' if it.detail else "")
-        + "</li>"
-        for it in sec.items
-    )
     note = f'<p class="hint">{_e(sec.note)}</p>' if sec.note else ""
     if sec.summary:  # 沒問題：安靜的一行，細節（有的話）點開才看
-        if not sec.items:
+        if not sec.items and not sec.rest:
             return (f'<section class="slot quiet" data-slot="{_e(sec.slot)}">'
                     f'<p class="quiet-line">{_e(sec.summary)}</p></section>')
         return (f'<section class="slot quiet" data-slot="{_e(sec.slot)}"><details class="fold">'
-                f'<summary class="quiet-line">{_e(sec.summary)}</summary>{note}<ul>{items}</ul></details>'
-                f'{_codes(sec.items)}</section>')
+                f'<summary class="quiet-line">{_e(sec.summary)}</summary>{note}{_items([*sec.items, *sec.rest])}'
+                f'</details></section>')
     return (f'<section class="slot" data-slot="{_e(sec.slot)}"><{heading}>{_e(sec.title)}</{heading}>{note}'
-            f'<ul>{items}</ul>{_codes(sec.items)}</section>')
+            f'{_items(sec.items)}{_rest(sec)}</section>')
 
 
 def _slots(sections: Sequence[CardSection]) -> str:

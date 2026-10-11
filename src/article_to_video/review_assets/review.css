@@ -166,12 +166,17 @@ html[data-aspect="9x16"] .film video { width: auto; max-width: 100%; height: 70v
 .quiet-line::before { content: "\2713  "; color: var(--ok); font-weight: 700; }
 details.fold > summary { cursor: pointer; }
 details.fold[open] > summary { margin-bottom: 6px; }
-/* 給 Claude 的代號：預設收起來 */
-details.codes { margin-top: 6px; font-size: 13px; color: var(--muted); }
-details.codes > summary { cursor: pointer; }
-details.codes ul { margin-top: 4px; gap: 2px; }
-details.codes li { display: block; font-size: 13px; }
-details.codes code { font-size: 12px; word-break: break-all; }
+/* 一行底下的「細節」（審片員的說明、給 Claude 的代號）：預設收起來 */
+details.more { grid-column: 2; font-size: 14px; color: var(--muted); }
+details.more > summary { cursor: pointer; font-size: 13px; width: fit-content; }
+details.more[open] > summary { margin-bottom: 2px; }
+details.more p { line-height: 1.65; word-break: break-word; }
+details.more p + p { margin-top: 2px; }
+details.more .codes { font-size: 12px; margin-top: 4px; }
+details.more code { font-size: 12px; word-break: break-all; }
+details.rest { margin-top: 6px; }
+details.rest > summary { cursor: pointer; }
+details.rest[open] > summary { margin-bottom: 6px; }
 
 label.field { font-weight: 600; font-size: 16px; }
 textarea {

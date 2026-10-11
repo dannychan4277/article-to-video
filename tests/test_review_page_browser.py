@@ -11,20 +11,12 @@ import shutil
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import Page
 
 from article_to_video.feedback import ShotComment, parse_feedback
 
 PROJECT_NAME = "殖利率曲線"
 """「複製給 Claude」標頭寫的是片名：專案資料夾「2026-10-09-殖利率曲線」去掉日期。"""
-
-
-@pytest.fixture(scope="module")
-def browser():
-    with sync_playwright() as p:
-        b = p.chromium.launch()
-        yield b
-        b.close()
 
 
 @pytest.fixture
