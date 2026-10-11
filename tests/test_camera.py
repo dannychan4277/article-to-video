@@ -283,16 +283,16 @@ LINE_CHAIN = [
                  {"at": _a("s03", "回到正的"), "kind": "highlight"}]}},
     {"id": "SL2", "start": _a("s04"), "continues": True, "chart": {
         "data": {"highlight": {"text": "最高"}},
-        "cues": [{"at": _a("s04", "六根"), "kind": "highlight", "text": "第 30 個月", "data": {"index": 30}},
+        "cues": [{"at": _a("s04", "六根"), "kind": "highlight", "text": "又往上"},
                  {"at": _a("s04", "最高"), "kind": "highlight"}]}},
 ]
 
 
 @pytest.fixture(scope="module", params=["16x9", "9x16"])
 def closest(request, tmp_path_factory):
-    """兩串都在第一個分鏡寫 push 0.2（建置允許的最大值）：柱那串兩下快推要推到 4%、8%；60 個點的折線那串三下要推到
-    4%、8%、12%（每下最多 4%），引擎照版面夾住。折線先標最後一點：往右邊推近，左邊的東西被推向畫面左緣。
-    每串渲第一個標註之前（還沒推）跟整串最後一幀。"""
+    """兩串都在第一個分鏡寫 push 0.2（建置允許的最大值）：柱那串兩下快推要推到 4%、8%；60 個點的折線那串三下都標最後一點
+    （換字），要推到 4%、8%、12%（每下最多 4%），引擎照版面夾住。往右邊的最後一點推近，左邊的 x 軸名字被推向畫面左緣。
+    每串渲第一個標註之前（還沒推）跟整串最後一幀；折線那串另外渲每一下快推的前一幀與開始後 12 幀（早就停穩）。"""
     fmt = FORMATS[request.param]
     shots = json.loads(json.dumps(SHOTS[:2] + LINE_CHAIN))
     for sh in (shots[0], shots[2]):
@@ -301,21 +301,25 @@ def closest(request, tmp_path_factory):
     specs = specs_of(root, fmt.name)
     jobs = [(a, frame_t(label_at(specs[a]), -1)) for a in ("SH01", "SL1")]
     jobs += [(b, specs[b]["duration"] - 1 / FPS) for b in ("SH02", "SL2")]
+    snap_ats = [("SL1", label_at(specs["SL1"]))] + [("SL2", at) for at in cue_at(specs["SL2"], "highlight")]
+    jobs += [(sid, frame_t(at, k)) for sid, at in snap_ats for k in (-1, 12)]
 
     def work(job):
         sid, t = job
         (path,) = render_stills(specs[sid], root / "stills" / sid, [t]).paths
         return np.asarray(Image.open(path).convert("RGB")).astype(int)
 
-    b1, b2, a1, a2 = run_parallel(jobs, work, jobs=4)
-    return fmt, [(b1, a1), (b2, a2)]
+    b1, b2, a1, a2, *snaps = run_parallel(jobs, work, jobs=4)
+    return fmt, [(b1, a1), (b2, a2)], list(zip(snaps[::2], snaps[1::2]))
 
 
 def test_even_the_closest_snap_keeps_every_word_on_screen_and_out_of_the_subtitle_band(closest):
-    fmt, chains = closest
+    fmt, chains, _ = closest
     for before, after in chains:
         w0, w1 = (title_box(im)[2] - title_box(im)[0] for im in (before, after))
-        assert 1.025 < w1 / w0 < 1.085  # 真的推近了（不是什麼都沒做）；折線那串要 12% 也被夾在版面放得下的範圍
+        # 真的推近了（不是什麼都沒做）；折線那串要 12% 也被夾在版面放得下的範圍。直式的折線最少：被標註的點靠右邊又不能動，
+        # 左邊的 x 軸名字一下就頂到邊（約 1%）
+        assert 1.005 < w1 / w0 < 1.085
         dark = after.mean(axis=-1) < 160  # 白底上看得見的字、線、柱
         h, w = dark.shape
         assert not dark[h - fmt.safe_bottom:].any()  # 字幕帶裡沒東西
@@ -326,6 +330,26 @@ def test_even_the_closest_snap_keeps_every_word_on_screen_and_out_of_the_subtitl
             assert not dark[below_bar, w - fmt.ui_right:].any()  # 直式：右側按鈕欄底下沒有字
         if fmt.ui_top:
             assert not (after[: fmt.ui_top].max(axis=-1) < 90).any()  # 直式：頂端分頁列底下沒有標題
+
+
+def line_head(img: np.ndarray, fmt: VideoFormat, color=(0xE3, 0x12, 0x0B)) -> tuple[float, float]:
+    """折線最後一點（線頭圓點）在畫面上的中心：主色（預設紅）像素的最右緣往左一個半徑；y＝最右緣那幾欄的平均。"""
+    h, w = img.shape[:2]
+    m = np.abs(img - np.array(color)).max(axis=-1) < 40
+    m[h - fmt.safe_bottom:] = False
+    m[: int(h * 0.15)] = False  # 頂端色條、小旗
+    ys, xs = np.nonzero(m)
+    right = xs.max()
+    return right - 9 * min(w, h) / 1080, float(ys[xs >= right - 2].mean())
+
+
+def test_near_the_closest_the_labelled_point_still_stays_put_instead_of_sliding_to_the_edge(closest):
+    """被標註的點靠右邊、推近會把左邊的 x 軸名字推出範圍時：寧可少推一點，被標註的點也不能被整張圖往右邊推過去
+    （示範片 1:03.1、1:26.4 兩位評審量到線頭往右緣跑了約 25 像素：原本是先推再整張平移夾回範圍裡）。"""
+    fmt, _, snaps = closest
+    for before, after in snaps:
+        (x0, y0), (x1, y1) = line_head(before, fmt), line_head(after, fmt)
+        assert abs(x1 - x0) <= 2 and abs(y1 - y0) <= 2, ((x0, y0), (x1, y1))
 
 
 # ---------------------------------------------------------------- 自動檢查
