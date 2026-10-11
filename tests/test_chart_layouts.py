@@ -297,3 +297,61 @@ def test_two_bars_are_wide_close_together_and_centred(layouts):
     assert 0.4 * w <= b0 - a1 <= 1.2 * w, f"兩根柱的間距要自然：間距 {b0 - a1}、柱寬 {w}"
     x0, x1 = bar_area(layouts, layouts.last("SH03"))
     assert abs((a0 - x0) - (x1 - b1)) <= 0.02 * layouts.fmt.width, f"兩根柱要在圖區中間：左邊空 {a0 - x0}、右邊空 {x1 - b1}"
+
+
+# ---------------------------------------------------------------- 寫錯了：建置前就擋下（繁中、點名分鏡與欄位）
+
+
+def _edit(fn):
+    shots = json.loads(json.dumps(SHOTS))
+    fn({s["id"]: s for s in shots}, shots)
+    return shots
+
+
+def _cues(s, sid):
+    return s[sid]["chart"]["cues"]
+
+
+LAYOUT_ERRORS = {
+    "大數字卡沒有數字": (lambda s, _: _cues(s, "SH01").pop(1), ["分鏡 SH01", "大數字卡", "number cue"]),
+    "大數字卡兩個數字": (lambda s, _: _cues(s, "SH01").append(dict(_cues(s, "SH01")[1])), ["分鏡 SH01", "大數字卡", "一個"]),
+    "大數字卡沒寫說明": (lambda s, _: _cues(s, "SH01")[1].pop("text"), ["分鏡 SH01", "chart.cues[1]", "說明"]),
+    "大數字卡寫了數列": (lambda s, _: s["SH01"]["chart"]["data"].update(series=[{"label": "甲", "value": 1}]),
+                         ["分鏡 SH01", "大數字卡", "series"]),
+    "大數字卡寫了標註": (lambda s, _: _cues(s, "SH01").append({"at": _a("s01", "三百天"), "kind": "highlight", "text": "很久"}),
+                         ["分鏡 SH01", "chart.cues[2]", "大數字卡"]),
+    "接續大數字卡": (lambda s, shots: shots.insert(1, {"id": "SH01B", "start": _a("s01", "連續"), "continues": True,
+                                                    "chart": {"data": {}, "cues": []}}),
+                     ["分鏡 SH01B", "接續", "大數字卡"]),
+    "兩數對比三個數字": (lambda s, _: s["SH02"]["chart"]["data"]["series"].append({"label": "丙組", "value": 0.5}),
+                         ["分鏡 SH02", "兩數對比", "series", "兩個"]),
+    "兩數對比的數字沒寫說明": (lambda s, _: s["SH02"]["chart"]["data"]["series"][1].update(label=""),
+                               ["分鏡 SH02", "series[1]", "label"]),
+    "兩數對比的 number cue 沒寫是哪一個": (lambda s, _: _cues(s, "SH02")[1].update(data={"value": 1.2}),
+                                         ["分鏡 SH02", "chart.cues[1]", "data.index", "series"]),
+    "兩數對比有一個數字不會出現": (lambda s, _: _cues(s, "SH02").pop(2), ["分鏡 SH02", "第 2 個數字", "乙組", "number cue"]),
+    "兩數對比的強調寫了字": (lambda s, _: _cues(s, "SH02")[3].update(text="比較高"), ["分鏡 SH02", "chart.cues[3]", "強調", "不寫字"]),
+    "兩數對比用柱的 cue": (lambda s, _: _cues(s, "SH02").append({"at": _a("s02", "甲組"), "kind": "bar"}),
+                           ["分鏡 SH02", "chart.cues[4]", "兩數對比", "number"]),
+    "兩數對比用公有數據": (lambda s, _: s["SH02"]["chart"]["data"].update(
+        publicData={"series": "DGS10", "from": "2024-01-01", "to": "2025-12-31", "every": "year"}),
+        ["分鏡 SH02", "兩數對比", "publicData"]),
+    "差距沒寫單位": (lambda s, _: _cues(s, "SH02B")[0].update(data={}), ["分鏡 SH02B", "chart.cues[0]", "差距", "單位"]),
+    "差距的單位寫 %": (lambda s, _: _cues(s, "SH02B")[0].update(data={"suffix": "%"}),
+                      ["分鏡 SH02B", "chart.cues[0]", "個百分點"]),
+    "差距用在柱狀圖": (lambda s, _: _cues(s, "SH03").append({"at": _a("s03"), "kind": "gap", "data": {"suffix": " 個百分點"}}),
+                       ["分鏡 SH03", "chart.cues[2]", "差距", "兩數對比"]),
+}
+
+
+@pytest.mark.parametrize("case", list(LAYOUT_ERRORS))
+def test_a_layout_written_wrong_is_blocked_before_rendering_with_a_clear_message(tmp_path, case):
+    from article_to_video.project import ProjectError
+
+    edit, needles = LAYOUT_ERRORS[case]
+    root = write_project(tmp_path / "專案", _edit(edit))
+    with pytest.raises(ProjectError) as err:
+        plan_build(root, tts="fake")
+    msg = str(err.value)
+    for needle in needles:
+        assert needle in msg, f"錯誤訊息少了「{needle}」：\n{msg}"
