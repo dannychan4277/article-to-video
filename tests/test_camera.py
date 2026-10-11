@@ -9,6 +9,7 @@
 - SH01～SH02：柱狀圖一串。SH01 先滾大數字（不推），唸到「甲最高」標甲；SH02 接續，唸到「跌最深」換標丙。
 - SH03：折線，長完之後唸到「回到正的」標最後一點，之後一直停著（停住的比例遠超過 A 的「沒在動」門檻）。
 - SH04：柱子在一幀裡全部跳出來（真的跳變），之後才標註。
+- SH07：分鏡設定寫了第二個畫面事件，引擎卻什麼都沒畫（快推片段的「動態」要抓到）。
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ NARRATION = {
     "s04": "六根柱子一起跳出來，第三根最高。",
     "s05": "這一段連續倒掛三百天。",
     "s06": "甲組一點二，乙組零點八，甲高零點四個百分點。",
+    "s07": "先看這兩根柱子長出來，停一下之後，第二次說要出現的東西其實沒畫出來。",
 }
 SOURCE = "來源：測試用自製數字"
 DIP = [0.80, 0.55, 0.30, 0.10, -0.15, -0.40, -0.60, -0.75, -0.85, -0.80, -0.70, -0.55,
@@ -92,6 +94,11 @@ SHOTS = [
                  {"at": _a("s06", "甲高"), "kind": "highlight"}]}},
     {"id": "SH06B", "start": _a("s06", "零點四"), "continues": True, "chart": {
         "data": {}, "cues": [{"at": _a("s06", "個百分點", "end"), "kind": "gap", "text": "高", "data": {"suffix": " 個百分點"}}]}},
+    # 引擎沒畫出來：第二個 bar cue 沒寫 index，引擎只照第一個 bar cue 長柱子，這一個什麼都不畫（分鏡設定說這一刻有東西）
+    {"id": "SH07", "start": _a("s07"), "chart": {
+        "data": {"title": "第二下什麼都沒畫", "unit": "示意數據，%", "source": SOURCE, "chart": "bar", "decimals": 1,
+                 "series": [{"label": "甲", "value": 2.4}, {"label": "乙", "value": 1.6}]},
+        "cues": [{"at": 0, "kind": "title"}, {"at": _a("s07"), "kind": "bar"}, {"at": _a("s07", "第二次"), "kind": "bar"}]}},
 ]
 
 
@@ -383,3 +390,14 @@ def test_a_bar_popping_in_one_frame_is_still_a_jump_with_the_snap_camera(lab):
     pop = st.start_frame / FPS + cue_at(lab.spec("SH04"), "bar")[0]
     (t0, t1), = jump[0].times
     assert t0 - 0.1 <= pop <= t1 + 0.1  # 抓到的是柱子跳出來那一刻，不是後面標註的快推
+
+
+def test_a_moment_the_engine_never_draws_fails_the_motion_check_with_the_snap_camera(lab):
+    """快推片段停住是設計，不看整段有幾成幀沒動；改看分鏡設定寫了畫面事件的那一刻：該長出東西、畫面卻幾乎沒變＝動畫沒畫出來，
+    必修。正常的快推片段（SH01～SH06B，上面）照樣全過。"""
+    motion = findings(lab.report, "SH07", "motion")
+    assert [f.status for f in motion] == ["fail"]
+    st = next(st for st in lab.build.plan.timeline.shots if st.shot.id == "SH07")
+    first, second = (st.start_frame / FPS + at for at in cue_at(lab.spec("SH07"), "bar"))
+    (t0, t1), = motion[0].times
+    assert t0 - 0.05 <= second < t1 and not t0 <= first < t1  # 指的是沒畫出來的那一下，不是正常長出來的柱子
