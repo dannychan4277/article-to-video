@@ -40,7 +40,7 @@ class Card:
     slots: dict[str, str] = field(default_factory=dict)
     """data-slot → 裡面作者看得到的文字（數字對帳、自動檢查）；收起來給 Claude 的代號不算（在 codes）。"""
     codes: str = ""
-    """收起來的「給 Claude 的代號」區（.codes）裡的文字。"""
+    """收起來的「給 Claude」代號（.codes，在每一行點開才看的 details.more 裡）的文字。"""
     folded: str = ""
     """點開才看得到的細節（details.fold）裡的文字；這些字也算在 slots 裡。"""
 
@@ -262,8 +262,9 @@ def test_the_menu_offers_only_what_the_plugin_makes_now(previewed_project):
 
 
 def test_each_card_shows_where_the_shot_sits_in_the_video(previewed_project):
+    """作者看的是幾分幾秒（播放器的說法），十分之一秒對他沒有用；精確的秒數在 data-start（跳到那一段用）。"""
     page = read_review(previewed_project.dir)
-    assert [c.timecode.strip() for c in page.cards] == ["0:00.0–0:05.7", "0:05.7–0:07.2"]
+    assert [c.timecode.strip() for c in page.cards] == ["0:00–0:06", "0:06–0:07"]
 
 
 # ---------------------------------------------------------------- 出片之後
@@ -377,6 +378,21 @@ def test_versions_count_what_the_author_sees_not_claudes_own_previews(tmp_path):
     assert read_review(root).attrs["data-version"] == "2"
     approved = cli("publish", "--version", "2")
     assert approved.returncode == 1 and "獨立審片" in approved.stderr
+
+
+def test_when_every_shot_changed_the_page_says_so_once(copy_of_built):
+    """示範片：一輪改下來 25 個分鏡全改過，頁首列 25 個連結、25 張卡各掛一個「這版改過」。全改過時頁首說一次就好。"""
+    root = copy_of_built
+    def both(d: dict) -> None:
+        for shot in d["shots"]:
+            shot["chart"]["data"]["highlight"]["text"] = "改過的標註"
+
+    edit_json(root / "shots.json", both)
+    run_cli("preview", root)
+    page = read_review(root)
+    assert changed_ids(page) == ["SH01", "SH02"]  # 卡片照樣標著（data-changed），只是不掛字
+    assert "每個分鏡都改過" in page.changes_text
+    assert 'class="badge changed"' not in (root / REVIEW_PAGE).read_text(encoding="utf-8")
 
 
 def test_narration_edits_count_as_changes_to_the_shots_that_say_them(copy_of_built):

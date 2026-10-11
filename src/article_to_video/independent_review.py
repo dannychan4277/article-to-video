@@ -33,6 +33,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import os
@@ -802,27 +803,36 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
             return ReviewExtras(page=[CardSection("review", "獨立審片", [item])])
 
         def check_item(it: dict[str, Any]) -> CheckItem:
-            """作者看到：問題、怎麼了、建議怎麼改。代號（R1-2）、證據等級（實測／推論／猜測）收在給 Claude 的那一區。"""
+            """作者預設看到：嚴重程度＋審片員自己寫的那一句（title）。怎麼了、建議怎麼改（審片員的原話，一字不改）
+            收在那一行的「細節」裡，點開才看；代號（R1-2）、證據等級（實測／推論／猜測）也在那裡，標給 Claude。"""
             res = resolution(book, it["id"])
             text = it["title"]
-            parts = (it.get("detail"), f"建議：{it['fix']}" if it.get("fix") else "")
-            detail = "；".join(x.rstrip("。；") for x in parts if x)
+            more = "\n".join(x for x in (item_where(it), it.get("detail"),
+                                         f"建議：{it['fix']}" if it.get("fix") else "") if x)
             code = it["id"] + (f"（證據：{it['evidence']}）" if it.get("evidence") else "") + f"　{it['title']}"
             if res is not None:
                 label = "已修好" if res["status"] == "fixed" else "已接受"
                 who = "" if res.get("by", "").startswith("獨立審片") else f"（{res.get('by', '')}）"
                 return CheckItem(text, detail=f"{label}{who}：{res.get('note', '')}",
-                                 status="ok" if res["status"] == "fixed" else "info", label=label, code=code)
+                                 status="ok" if res["status"] == "fixed" else "info", label=label, more=more, code=code)
             status = {"必修": "block", "該修": "warn"}.get(it["severity"], "info")
-            return CheckItem(text, detail=detail, status=status, label=it["severity"], code=code)
+            return CheckItem(text, status=status, label=it["severity"], more=more, code=code)
 
-        def sections(items: list, title: str, note: str = "") -> list:
-            """還沒處理的攤開；已經處理（改好、接受）的收成一行「已處理 N 項」，點開才看。"""
-            open_ = [ci for ci in items if ci.label not in ("已修好", "已接受")]
-            done = [ci for ci in items if ci.label in ("已修好", "已接受")]
-            out = [CardSection("review", title, open_, note=note)] if open_ or note else []
+        def sections(items: list[tuple[CheckItem, bool]], title: str, note: str = "") -> list:
+            """還沒處理的攤開（第二個值是 True 的收成一行「另外 N 項可改」）；已經處理（改好、接受）的
+            收成一行「已處理 N 項」，點開才看。"""
+            done = [ci for ci, _ in items if ci.label in ("已修好", "已接受")]
+            open_ = [ci for ci, tuck in items if ci.label not in ("已修好", "已接受") and not tuck]
+            later = [ci for ci, tuck in items if ci.label not in ("已修好", "已接受") and tuck]
+            handled = f"已處理 {len(done)} 項（點開看）"
+            if not (open_ or later or note):
+                return [CardSection("review", title, done, summary=f"{title}：{handled}")] if done else []
+            if not later:  # 已處理的接在還沒處理的後面，收成一行
+                return [CardSection("review", title, open_, note=note, rest=done, rest_summary=handled)]
+            out = [CardSection("review", title, open_, note=note, rest=later, rest_ok=False,
+                               rest_summary=f"另外 {len(later)} 項可改，寫在各分鏡卡上（點開看）")]
             if done:
-                out.append(CardSection("review", title, done, summary=f"{title}：已處理 {len(done)} 項（點開看）"))
+                out.append(CardSection("review", title, done, summary=f"{title}：{handled}"))
             return out
 
         cards: dict[str, list] = {}
@@ -830,14 +840,17 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
         for rnd in rounds:
             for it in rnd.get("items") or []:
                 ci = check_item(it)
-                page_items.append(CheckItem(f"{item_where(it)}　{ci.text}", ci.detail, ci.status, ci.label, ci.code))
+                where = f"分鏡 {it['shot']}" if it.get("shot") else "整支片"  # 時間碼在「細節」裡
+                # 頁首攤開必修、該修，和沒有卡可放的整支片問題；分鏡上的「可改」寫在卡上，頁首收成一行
+                tuck = it["severity"] == "可改" and bool(it.get("shotId"))
+                page_items.append((dataclasses.replace(ci, text=f"{where}　{ci.text}"), tuck))
                 if it.get("shotId"):
-                    cards.setdefault(it["shotId"], []).append(ci)
+                    cards.setdefault(it["shotId"], []).append((ci, False))
         last = rounds[-1]
         must = [it for r in rounds for it in r.get("items") or [] if it["severity"] == "必修"
                 and resolution(book, it["id"]) is None]
         counts = "、".join(f"{s} {sum(1 for it in last['items'] if it['severity'] == s)}" for s in SEVERITIES)
-        note = f"第 {last['round']} 輪：{counts}。" + (f"{last['summary']}" if last.get("summary") else "")
+        note = f"{counts}。" + (f"{last['summary']}" if last.get("summary") else "")
         if must:
             note += f" 還有 {len(must)} 項必修還沒處理，處理完才能出片。"
         if last.get("videoKey") and last["videoKey"] != _final_key(plan):

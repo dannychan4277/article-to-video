@@ -8,8 +8,15 @@
     .slot[data-slot="numbers"]   數字對帳（#5 填）      .slot[data-slot="checks"]  自動檢查（#11 填）
     textarea.comment[data-shot-id]
   .page-slots .slot[data-slot=…]   整片層級的檢查結果（例：獨立審片）
-  textarea#overall.overall、#menu（能加什麼）、#copy-btn／#copy-status／#copy-out（複製給 Claude）
+  textarea#overall.overall、#menu（能加什麼；內容在預設收起來的 details.menu-fold 裡）、
+  #copy-btn／#copy-status／#copy-out（複製給 Claude）
   <script id="review-data" type="application/json">  給 review.js 的資料（片名、版本、分鏡編號與 id）
+  每一區裡的一行（li）：.mark（小標籤）＋.text（主要那行）＋.detail（補充）。有 more 或代號時 .text 是
+  details.more 的 summary：點那一行才展開 more 與 .codes（「給 Claude：代號」）。
+  沒問題的整區是 .slot.quiet（一行；有細節的是 details.fold）；攤開的幾行後面收起來的其他行是 details.fold.rest。
+
+作者預設看得到的字要少（示範片從一萬三千字降到三千字以內，見 tests 的 SHOWN_LIMIT）：給 Claude 的代號、
+審片員的長段說明、對得到出處的數字、已處理的問題都收起來；Claude 要細節讀 checks.json、check_log.json。
 
 後面的票往卡片加東西：做一個 CardSection（slot、標題、幾個 CheckItem），經 review.make_review(contributors=…) 傳進來，
 這裡負責排版與跳脫（不吃 HTML，只吃文字）。
@@ -49,9 +56,12 @@ class CheckItem:
     """ok／warn／block／info，決定前面那個小標籤的字和顏色。"""
     label: str | None = None
     """小標籤的字；不給就用 status 的預設（沒問題／要看一下／擋下出片／說明）。"""
+    more: str = ""
+    """點開才看的補充（例：獨立審片員那一段「怎麼了、建議怎麼改」）。作者預設只看到 text（和 detail）；
+    這一行底下有一個預設收起來的「細節」，點開才看得到 more（換行照留）。"""
     code: str = ""
     """給 Claude 的代號與技術說明（例「qa:SH03:jump@1a2b3c4d　跳變：…」）。不跟作者看的字放一起：
-    收在這一區最後、預設收起來的「給 Claude 的代號」裡。"""
+    收在這一行預設收起來的「細節」最後（標「給 Claude」）。"""
 
 
 @dataclass(frozen=True)
@@ -67,6 +77,12 @@ class CardSection:
     summary: str = ""
     """有寫就整區縮成安靜的一行（例「自動檢查沒發現問題」）：沒有 items 就只有這一行；有 items 的話收在這一行底下，
     點開才看得到。沒問題的檢查用它，作者不用一行一行讀。"""
+    rest: list[CheckItem] = field(default_factory=list)
+    """攤開的 items 後面、預設收起來的其他幾行（例：要作者對照的數字攤開，其他都對得到出處的收起來）。"""
+    rest_summary: str = ""
+    """rest 收起來時看得到的那一行（例「其他 11 個數字都對得到出處」）。"""
+    rest_ok: bool = True
+    """收起來的是沒問題的（那一行前面打勾）；False＝收起來的還要看（例「另外 16 項可改」），不打勾。"""
 
 
 @dataclass(frozen=True)
@@ -172,41 +188,60 @@ def timecode(seconds: float) -> str:
     return f"{tenths // 600}:{tenths % 600 / 10:04.1f}"
 
 
+def clock(seconds: float) -> str:
+    """卡片上的時間：分:秒，四捨五入到整秒（例 65.5 → 1:06）。"""
+    s = int(seconds + 0.5)
+    return f"{s // 60}:{s % 60:02d}"
+
+
 def _asset(name: str) -> str:
     return (_ASSETS / name).read_text(encoding="utf-8")
 
 
 _e = html.escape
 _SLOT_ORDER = {"numbers": 0, "checks": 1}
+CHANGED_LINKS = 8
+"""「這版改了哪些分鏡」最多列幾個連結；改得更多就只寫幾個（卡片上有標記）。"""
 
 
-def _codes(items: Sequence[CheckItem]) -> str:
-    """給 Claude 的代號：一區一個、預設收起來（作者不用看；Claude 讀頁面或 checks.json 都拿得到）。"""
-    codes = [it.code for it in items if it.code]
-    if not codes:
+def _item(it: CheckItem) -> str:
+    """一行檢查結果：小標籤＋主要那行（＋補充）。有 more 或給 Claude 的代號時，主要那行本身就是可以點開的
+    <details class="more">（預設收起來）：點了才看到 more 和代號（作者不用看代號；Claude 讀頁面原始碼或
+    checks.json、check_log.json 都拿得到）。"""
+    text = f'<span class="text">{_e(it.text)}</span>'
+    if it.more or it.code:
+        more = "".join(f"<p>{_e(line)}</p>" for line in it.more.splitlines() if line.strip())
+        code = f'<p class="codes">給 Claude：<code>{_e(it.code)}</code></p>' if it.code else ""
+        text = (f'<details class="more"><summary class="text" title="點一下看細節">{_e(it.text)}</summary>'
+                f'{more}{code}</details>')
+    return (f'<li class="{_e(it.status)}"><span class="mark">{_e(it.label or STATUSES.get(it.status, it.status))}</span>'
+            + text + (f'<span class="detail">{_e(it.detail)}</span>' if it.detail else "") + "</li>")
+
+
+def _items(items: Sequence[CheckItem]) -> str:
+    return "<ul>" + "".join(_item(it) for it in items) + "</ul>" if items else ""
+
+
+def _rest(sec: CardSection) -> str:
+    """攤開的幾行後面，其他的收成一行（點開才看）。"""
+    if not sec.rest:
         return ""
-    lis = "".join(f"<li><code>{_e(c)}</code></li>" for c in codes)
-    return f'<details class="codes"><summary>給 Claude 的代號</summary><ul>{lis}</ul></details>'
+    cls = "quiet-line" if sec.rest_ok else "rest-line"
+    return (f'<details class="fold rest"><summary class="{cls}">{_e(sec.rest_summary or "其他（點開看）")}'
+            f'</summary>{_items(sec.rest)}</details>')
 
 
 def _section(sec: CardSection, heading: str = "h3") -> str:
-    items = "".join(
-        f'<li class="{_e(it.status)}"><span class="mark">{_e(it.label or STATUSES.get(it.status, it.status))}</span>'
-        f'<span class="text">{_e(it.text)}</span>'
-        + (f'<span class="detail">{_e(it.detail)}</span>' if it.detail else "")
-        + "</li>"
-        for it in sec.items
-    )
     note = f'<p class="hint">{_e(sec.note)}</p>' if sec.note else ""
     if sec.summary:  # 沒問題：安靜的一行，細節（有的話）點開才看
-        if not sec.items:
+        if not sec.items and not sec.rest:
             return (f'<section class="slot quiet" data-slot="{_e(sec.slot)}">'
                     f'<p class="quiet-line">{_e(sec.summary)}</p></section>')
         return (f'<section class="slot quiet" data-slot="{_e(sec.slot)}"><details class="fold">'
-                f'<summary class="quiet-line">{_e(sec.summary)}</summary>{note}<ul>{items}</ul></details>'
-                f'{_codes(sec.items)}</section>')
+                f'<summary class="quiet-line">{_e(sec.summary)}</summary>{note}{_items([*sec.items, *sec.rest])}'
+                f'</details></section>')
     return (f'<section class="slot" data-slot="{_e(sec.slot)}"><{heading}>{_e(sec.title)}</{heading}>{note}'
-            f'<ul>{items}</ul>{_codes(sec.items)}</section>')
+            f'{_items(sec.items)}{_rest(sec)}</section>')
 
 
 def _slots(sections: Sequence[CardSection]) -> str:
@@ -223,15 +258,17 @@ def _slots(sections: Sequence[CardSection]) -> str:
     return "".join(out)
 
 
-def _card(c: CardModel, has_video: bool) -> str:
-    span = f"{timecode(c.start)}–{timecode(c.end)}"
+def _card(c: CardModel, has_video: bool, *, badge: bool = True) -> str:
+    """一張分鏡卡。badge＝改過的卡要不要掛「這版改過」（每個分鏡都改過時頁首說一次就好，卡上不掛）。"""
+    span = f"{clock(c.start)}–{clock(c.end)}"
+    exact = f"{timecode(c.start)}–{timecode(c.end)}"  # 到十分之一秒：滑鼠停上去才看得到
     if has_video:
         tc = (f'<button type="button" class="timecode seek" data-start="{c.start:.3f}" '
-              f'title="成片跳到這一段">{span} ▶</button>')
+              f'title="{exact}：成片跳到這一段">{span} ▶</button>')
     else:
-        tc = f'<span class="timecode" data-start="{c.start:.3f}">{span}</span>'
+        tc = f'<span class="timecode" data-start="{c.start:.3f}" title="{exact}">{span}</span>'
     badges = ""
-    if c.changed:
+    if c.changed and badge:
         badges += '<span class="badge changed">這版改過</span>'
     if c.continues:
         badges += '<span class="badge tag">接續上一張</span>'
@@ -243,14 +280,14 @@ def _card(c: CardModel, has_video: bool) -> str:
         media += (f'<a class="main-still" href="{s.src}" target="_blank" title="開大圖">'
                   f'<img class="still" src="{s.src}" data-t="{s.time:.3f}" '
                   f'alt="分鏡 {c.number} 最後的畫面（{timecode(s.time)}）" loading="lazy"></a>')
-    if moments:
+    if moments:  # 時間碼放在滑鼠停上去的提示與替代文字，不佔作者要讀的字
         figs = "".join(
-            f'<figure class="moment"><a href="{s.src}" target="_blank" title="開大圖">'
+            f'<figure class="moment"><a href="{s.src}" target="_blank" title="開大圖（{timecode(s.time)}）">'
             f'<img class="still" src="{s.src}" data-t="{s.time:.3f}" alt="分鏡 {c.number} 在 {timecode(s.time)} 的畫面" loading="lazy">'
-            f'</a><figcaption>{timecode(s.time)}</figcaption></figure>'
+            f'</a></figure>'
             for s in moments
         )
-        media += f'<p class="moments-title">過程（每個新畫面出現之前）</p><div class="moments">{figs}</div>'
+        media += f'<div class="moments" title="過程：每個新畫面出現之前的樣子">{figs}</div>'
 
     narr = "".join(
         f'<p>{"…" if mid_start else ""}{_e(text)}{"…" if mid_end else ""}</p>' for text, mid_start, mid_end in c.narration
@@ -262,7 +299,7 @@ def _card(c: CardModel, has_video: bool) -> str:
         f'<div class="card-media">{media}</div>'
         f'<div class="card-body">'
         f'<header class="card-head"><h2>分鏡 {c.number}</h2>{tc}{badges}</header>'
-        f'<div class="narration"><h3>旁白</h3>{narr}</div>'
+        f'<div class="narration" role="group" aria-label="旁白">{narr}</div>'
         f'{_slots(c.sections)}'
         f'<label class="field" for="c-{sid}">想改什麼？</label>'
         f'<textarea id="c-{sid}" class="comment" data-shot-id="{sid}" rows="3" '
@@ -276,7 +313,11 @@ def _changes(m: PageModel) -> str:
     if not changed and not m.removed:
         return ""
     parts = []
-    if changed:
+    if changed and len(changed) == len(m.cards):
+        parts.append(f"<p><strong>這版每個分鏡都改過（{len(changed)} 個）。</strong></p>")
+    elif len(changed) > CHANGED_LINKS:  # 改了一大半：列一長串連結不如看卡片上的標記
+        parts.append(f"<p><strong>這版改了 {len(changed)} 個分鏡</strong>（卡片上有「這版改過」）</p>")
+    elif changed:
         links = "、".join(f'<a href="#shot-{_e(c.id)}">分鏡 {c.number}</a>' for c in changed)
         parts.append(f"<p><strong>這版改了 {len(changed)} 個分鏡：</strong><span class=\"changed-list\">{links}</span>"
                      "（卡片上有「這版改過」）</p>")
@@ -326,7 +367,7 @@ def render_review_html(m: PageModel) -> str:
         + "</ul></div>"
         for title, desc, examples in MENU
     )
-    n_comments_hint = "在卡片下方的格子寫想改的地方，寫完按「複製給 Claude」。"
+    n_comments_hint = "寫好留言，按「複製給 Claude」。"
     return f"""<!doctype html>
 <html lang="zh-Hant-TW" data-stage="{_e(m.stage)}" data-version="{m.version}" data-aspect="{_e(m.aspect)}">
 <head>
@@ -346,9 +387,8 @@ def render_review_html(m: PageModel) -> str:
 </div></header>
 <main class="wrap">
 <section class="panel howto"><h2>怎麼用這一頁</h2><ol>
-<li>一張卡是一個分鏡：大圖是這個分鏡最後的畫面，小圖是過程，下面是那段旁白。點圖可以看大張。</li>
-<li>想改哪裡，就寫在那張卡的「想改什麼？」；不屬於某一張的，寫在最下面的「整體意見」。</li>
-<li>寫完按畫面最下方的「複製給 Claude」，回到 Claude 的對話框貼上送出。寫到一半關掉也沒關係，留言會留著。</li>
+<li>一張卡一個分鏡（大圖是最後的畫面，小圖是過程）。想改哪裡就寫在那張卡的「想改什麼？」，整支片的意見寫在最下面。</li>
+<li>寫完按最下方的「複製給 Claude」，貼回 Claude 的對話框。寫到一半關掉，留言也會留著。</li>
 </ol></section>
 <section class="panel notice" id="carry" hidden><p id="carry-text"></p>
 <div class="actions"><button type="button" class="btn primary" id="carry-yes">放回來</button>
@@ -357,14 +397,15 @@ def render_review_html(m: PageModel) -> str:
 {film}
 {page_slots}
 <section class="cards" aria-label="分鏡">
-{chr(10).join(_card(c, has_video) for c in m.cards)}
+{chr(10).join(_card(c, has_video, badge=not all(x.changed for x in m.cards)) for c in m.cards)}
 </section>
 <section class="panel overall-box"><h2><label for="overall">整體意見</label></h2>
-<p class="hint">不屬於某一張的意見寫這裡，例如整支片的節奏、聲音、配樂。</p>
+<p class="hint">例如整支片的節奏、聲音、配樂。</p>
 <textarea id="overall" class="overall" rows="4" placeholder="例：整體節奏有點快／聲音想換一個"></textarea></section>
-<section class="panel menu" id="menu"><h2>能加什麼？</h2>
+<section class="panel menu" id="menu"><details class="menu-fold">
+<summary><h2>能加什麼？</h2><span class="hint">點開看範例講法</span></summary>
 <p>照下面的講法寫在留言格裡就行，不用講得很精確。點一下範例會放進「整體意見」，再改成你要的。</p>
-<div class="menu-grid">{menu}</div></section>
+<div class="menu-grid">{menu}</div></details></section>
 </main>
 <div class="dock" role="region" aria-label="複製留言給 Claude"><div class="wrap">
 <div class="dock-row"><p class="status" id="copy-status" aria-live="polite">{n_comments_hint}</p>

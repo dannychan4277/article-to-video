@@ -28,7 +28,7 @@ from article_to_video.build import BlockedBuild, BuildPlan, build_project, plan_
 from article_to_video.commands import aspect_args, cli_command
 from article_to_video.project import ProjectError
 from article_to_video.timeline import VideoFormat
-from article_to_video.videos import OUTPUT_RECORD, load_outputs, output_paths, video_folder, video_title
+from article_to_video.videos import OUTPUT_RECORD, load_outputs, output_paths, video_folder
 
 __all__ = ["PublishResult", "output_contributor", "publish_project"]
 
@@ -155,11 +155,13 @@ def output_contributor(plan: BuildPlan) -> Any:
     rec = load_outputs(plan.project.root).get(plan.format.name)
     if not rec:
         return ReviewExtras()
-    items = [
-        CheckItem(f"成片：{rec.get('video', '')}", detail=f"審片頁第 {rec.get('reviewVersion', '?')} 版，"
-                  f"{str(rec.get('at', '')).replace('T', ' ')} 出片", status="ok", label="已出片"),
-        CheckItem(f"字幕檔：{rec.get('srt', '')}", detail="上傳 YouTube 時可以一起給（影片裡已經燒好字幕）",
-                  status="info"),
+    where = video_folder(plan.project.root)
+    at = str(rec.get("at", "")).replace("T", " ")[:16]
+    items = [  # 作者看 Finder 的說法；成片、字幕檔的完整路徑是給 Claude 的，收在「細節」
+        CheckItem(f"在 Finder 的「影片 → {where.parent.name} → {where.name}」",
+                  detail=f"審片頁第 {rec.get('reviewVersion', '?')} 版，{at} 出片；字幕檔也在那裡",
+                  more="字幕檔上傳 YouTube 時可以一起給（影片裡已經燒好字幕）。",
+                  status="ok", label="已出片", code=f"成片：{rec.get('video', '')}　字幕檔：{rec.get('srt', '')}"),
     ]
     stamp = plan.paths.final_stamp
     current = stamp.read_text(encoding="utf-8") if stamp.is_file() else None
@@ -169,7 +171,4 @@ def output_contributor(plan: BuildPlan) -> Any:
     if outdated:
         items.append(CheckItem("出片之後又改過", detail="影片資料夾裡的還是上一次出的那一版；你看過這一版、點頭之後再出片一次",
                                status="warn"))
-    where = video_folder(plan.project.root)
-    return ReviewExtras(page=[CardSection("output", "上一次出片" if outdated else "已出片", items,
-                                          note=f"在 Finder：影片 → {where.parent.name} → {where.name}"
-                                               f"（{video_title(plan.project.root)}）")])
+    return ReviewExtras(page=[CardSection("output", "上一次出片" if outdated else "已出片", items)])

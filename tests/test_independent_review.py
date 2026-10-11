@@ -170,6 +170,81 @@ def test_recorded_findings_show_on_the_review_page(project):
     assert "R1-1" in cards["SH02"].codes and "R1-3" in page.page_codes
 
 
+# 審片員的長段說明：示範片三輪審下來，審片頁有一萬多字，大半是這種一段一段的說明與建議（作者要讀的是有什麼問題）
+LONG_DETAIL = ("旁白唸到「倒掛」的時候，畫面上還只有兩根柱子，標註要到下一句才出來，"
+               "觀眾聽到重點的那一刻看不到對應的東西，這樣的落差前後出現了好幾次。")
+LONG_FIX = "把標註提早到唸「倒掛」的那一刻，或者把這一句拆到下一個分鏡"
+WORDY = {
+    "score": 6.5,
+    "summary": "節奏大致順，標註常常比旁白晚一句。",
+    "items": [
+        {"severity": "該修", "shot": 2, "time": "0:06.0", "title": "標註比旁白晚一句",
+         "detail": LONG_DETAIL, "fix": LONG_FIX, "evidence": "實測"},
+        {"severity": "可改", "shot": 1, "time": "0:02.0", "title": "第一根柱子停太久",
+         "detail": "第一根柱子出來之後畫面三秒沒有變化，旁白一直在講同一件事。", "fix": "中間加一個標註", "evidence": "推論"},
+        {"severity": "可改", "shot": None, "title": "片尾卡的資料來源有重複",
+         "detail": "來源清單裡「作者原文」出現兩次，看起來像自動接起來沒整理。", "fix": "合併成一行", "evidence": "實測"},
+    ],
+}
+
+
+def test_the_reviewers_long_explanations_stay_folded_until_the_author_opens_them(project, browser):
+    """作者預設只看到每個問題的一句話（審片員自己寫的標題）和嚴重程度；怎麼了、建議怎麼改收起來，點那一句才看。
+    整體結論（分數、總評）照樣攤開。"""
+    from conftest import shown_text
+
+    assert record(project, WORDY).returncode == 0
+    page = browser.new_page()
+    page.goto((project / "審片頁.html").as_uri())
+    seen = shown_text(page)
+    for title in ("標註比旁白晚一句", "第一根柱子停太久", "片尾卡的資料來源有重複"):
+        assert title in seen
+    assert "6.5 分" in seen and "標註常常比旁白晚一句" in seen
+    for long in (LONG_DETAIL, LONG_FIX, "第一根柱子出來之後畫面三秒沒有變化"):
+        assert long not in seen, f"預設就攤開了：{long}"
+
+    card = page.locator('article.card[data-shot-id="SH02"]')
+    card.locator("summary", has_text="標註比旁白晚一句").click()  # 點那一句就展開
+    opened = card.inner_text()
+    assert LONG_DETAIL in opened and LONG_FIX in opened
+    assert "R1-" not in opened.split("給 Claude")[0]  # 代號還是收在給 Claude 的那一行
+    page.close()
+
+
+SHOWN_LIMIT = 600
+"""這個測試專案（兩張卡、三項審片問題）改之前預設攤開 2,006 字，改完約 500 字。
+示範片（25 張卡、三輪審片）改之前 13,044 字、改完不到 2,900 字（量法見 item-7 交接筆記）。"""
+
+
+def test_what_the_author_sees_before_opening_anything_stays_short(project, browser):
+    """示範片（25 個分鏡、三輪獨立審片）的審片頁原本預設攤開一萬三千字，改完是三千字以內。守住不要再長回來：
+    這個兩張卡的測試專案，作者沒點任何展開時看得到的字（去掉空白）不超過 SHOWN_LIMIT。
+    """
+    from conftest import char_count, shown_text
+
+    assert record(project, WORDY).returncode == 0
+    page = browser.new_page()
+    page.goto((project / "審片頁.html").as_uri())
+    n = char_count(shown_text(page))
+    page.close()
+    assert n <= SHOWN_LIMIT, f"審片頁預設看得到 {n} 字（上限 {SHOWN_LIMIT}）"
+
+
+def test_the_top_of_the_page_lists_what_needs_fixing_and_leaves_nice_to_haves_on_their_cards(project):
+    """示範片：頁首把三輪二十幾項全列一遍，每張卡上又列一遍。頁首只攤開必修、該修，和沒有卡可放的整支片問題；
+    分鏡上的「可改」寫在那張卡上，頁首收成一行。"""
+    from test_review_page import read_review
+
+    assert record(project, WORDY).returncode == 0
+    page = read_review(project)
+    top, folded = page.page_slots["review"], page.page_folded
+    assert "標註比旁白晚一句" in top and "標註比旁白晚一句" not in folded  # 該修
+    assert "片尾卡的資料來源有重複" in top and "片尾卡的資料來源有重複" not in folded  # 整支片
+    assert "第一根柱子停太久" in folded  # 分鏡 1 的可改：頁首收起來
+    cards = {c.id: c for c in page.cards}
+    assert "第一根柱子停太久" in cards["SH01"].slots["review"] and "第一根柱子停太久" not in cards["SH01"].folded
+
+
 def test_an_answer_piped_in_is_read_as_utf8_whatever_the_macs_language_setting(project):
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
     env.update(PYTHONUTF8="0", LC_ALL="en_US.ISO8859-1", LANG="en_US.ISO8859-1")

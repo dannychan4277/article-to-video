@@ -187,6 +187,28 @@ def previewed_project(tmp_path_factory) -> PreviewedProject:
 
 
 @pytest.fixture(scope="module")
+def browser():
+    """無頭 Chromium（專案釘的 playwright 自帶，不連網），一個測試模組共用一個。審片頁的瀏覽器測試用。
+    模組範圍、不是 session：同一個執行緒不能同時開兩個 sync_playwright（test_article、test_portrait 自己開）。"""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        b = p.chromium.launch()
+        yield b
+        b.close()
+
+
+def shown_text(page) -> str:
+    """作者沒點任何展開時看得到的字（document.body.innerText：收起來的 <details>、hidden 的都不算）。"""
+    return page.evaluate("document.body.innerText")
+
+
+def char_count(text: str) -> int:
+    """字數：去掉所有空白。"""
+    return len("".join(text.split()))
+
+
+@pytest.fixture(scope="module")
 def internal_vox():
     """打開 Vox 分鏡的內部開關（project.INTERNAL_VOX_ENV）。作者的流程只用財經圖表（docs/adr/0001-只用財經圖表風格.md），
     Vox 的程式留在外掛裡、流程碰不到；只有測它的模組用 `pytestmark = pytest.mark.usefixtures("internal_vox")` 打開。
