@@ -591,11 +591,15 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
             status = {"必修": "block", "該修": "warn"}.get(it["severity"], "info")
             return CheckItem(text, status=status, label=it["severity"], more=more, code=code)
 
-        def sections(items: list, title: str, note: str = "") -> list:
-            """還沒處理的攤開；已經處理（改好、接受）的收成一行「已處理 N 項」，點開才看。"""
-            open_ = [ci for ci in items if ci.label not in ("已修好", "已接受")]
-            done = [ci for ci in items if ci.label in ("已修好", "已接受")]
-            out = [CardSection("review", title, open_, note=note)] if open_ or note else []
+        def sections(items: list[tuple[CheckItem, bool]], title: str, note: str = "") -> list:
+            """還沒處理的攤開（第二個值是 True 的收成一行「另外 N 項可改」）；已經處理（改好、接受）的
+            收成一行「已處理 N 項」，點開才看。"""
+            done = [ci for ci, _ in items if ci.label in ("已修好", "已接受")]
+            open_ = [ci for ci, tuck in items if ci.label not in ("已修好", "已接受") and not tuck]
+            later = [ci for ci, tuck in items if ci.label not in ("已修好", "已接受") and tuck]
+            out = [CardSection("review", title, open_, note=note, rest=later,
+                               rest_summary=f"另外 {len(later)} 項可改，寫在各分鏡卡上（點開看）")
+                   ] if open_ or later or note else []
             if done:
                 out.append(CardSection("review", title, done, summary=f"{title}：已處理 {len(done)} 項（點開看）"))
             return out
@@ -606,9 +610,11 @@ def review_contributor(data_dir: str | os.PathLike | None = None) -> Callable[[B
             for it in rnd.get("items") or []:
                 ci = check_item(it)
                 where = f"分鏡 {it['shot']}" if it.get("shot") else "整支片"  # 時間碼在「細節」裡
-                page_items.append(dataclasses.replace(ci, text=f"{where}　{ci.text}"))
+                # 頁首攤開必修、該修，和沒有卡可放的整支片問題；分鏡上的「可改」寫在卡上，頁首收成一行
+                tuck = it["severity"] == "可改" and bool(it.get("shotId"))
+                page_items.append((dataclasses.replace(ci, text=f"{where}　{ci.text}"), tuck))
                 if it.get("shotId"):
-                    cards.setdefault(it["shotId"], []).append(ci)
+                    cards.setdefault(it["shotId"], []).append((ci, False))
         last = rounds[-1]
         must = [it for r in rounds for it in r.get("items") or [] if it["severity"] == "必修"
                 and resolution(book, it["id"]) is None]

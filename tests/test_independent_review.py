@@ -196,6 +196,21 @@ def test_the_reviewers_long_explanations_stay_folded_until_the_author_opens_them
     page.close()
 
 
+def test_the_top_of_the_page_lists_what_needs_fixing_and_leaves_nice_to_haves_on_their_cards(project):
+    """示範片：頁首把三輪二十幾項全列一遍，每張卡上又列一遍。頁首只攤開必修、該修，和沒有卡可放的整支片問題；
+    分鏡上的「可改」寫在那張卡上，頁首收成一行。"""
+    from test_review_page import read_review
+
+    assert record(project, WORDY).returncode == 0
+    page = read_review(project)
+    top, folded = page.page_slots["review"], page.page_folded
+    assert "標註比旁白晚一句" in top and "標註比旁白晚一句" not in folded  # 該修
+    assert "片尾卡的資料來源有重複" in top and "片尾卡的資料來源有重複" not in folded  # 整支片
+    assert "第一根柱子停太久" in folded  # 分鏡 1 的可改：頁首收起來
+    cards = {c.id: c for c in page.cards}
+    assert "第一根柱子停太久" in cards["SH01"].slots["review"] and "第一根柱子停太久" not in cards["SH01"].folded
+
+
 def test_an_answer_piped_in_is_read_as_utf8_whatever_the_macs_language_setting(project):
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
     env.update(PYTHONUTF8="0", LC_ALL="en_US.ISO8859-1", LANG="en_US.ISO8859-1")
