@@ -78,7 +78,8 @@ def write_lab(root: Path) -> Path:
     root.mkdir(parents=True)
     (root / "narration.json").write_text(json.dumps({"segments": NARRATION}, ensure_ascii=False), encoding="utf-8")
     (root / "shots.json").write_text(json.dumps({"shots": SHOTS}, ensure_ascii=False, indent=1), encoding="utf-8")
-    (root / "settings.json").write_text(json.dumps({"tts": "fake", "gap": 0.4, "tail": 1.2, "music": "none"}),
+    # 圖表鏡頭寫死慢推：這裡的「不動」「推太近」都是慢推的判法（快推的判法在 test_camera.py），預設改成快推也不受影響
+    (root / "settings.json").write_text(json.dumps({"tts": "fake", "gap": 0.4, "tail": 1.2, "music": "none", "camera": "slow"}),
                                         encoding="utf-8")
     return root
 
