@@ -284,3 +284,18 @@ def test_json_formats_in_the_skill_docs_are_valid_projects(tmp_path):
     project = load_project(tmp_path)
     assert [s.id for s in project.shots] == ["SH01", "SH02"]
     assert [(f.figure, f.number.text) for f in project.figure_numbers] == [("圖1", "4.58"), ("圖1", "3.96"), ("圖1", "2020")]
+
+
+def test_the_card_and_comparison_example_in_formats_md_is_a_valid_project(tmp_path):
+    """formats.md「大數字卡、兩數對比」的範例照抄（配上同一份旁白範例）就是能讀的專案。"""
+    from article_to_video.project import load_project
+
+    text = (ROOT / "skills" / "make-video" / "references" / "formats.md").read_text(encoding="utf-8")
+    blocks = [json.loads(b) for b in re.findall(r"```json\n(.*?)```", text, flags=re.S) if b.lstrip().startswith("{\"")]
+    narration = next(b for b in blocks if "segments" in b)
+    shots = [b for b in blocks if "shots" in b][1]
+    (tmp_path / "narration.json").write_text(json.dumps(narration, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "shots.json").write_text(json.dumps(shots, ensure_ascii=False), encoding="utf-8")
+    project = load_project(tmp_path)
+    assert [(s.id, s.continues, s.chart.data.get("chart")) for s in project.shots] == [
+        ("SH01", False, "number"), ("SH02", False, "compare"), ("SH03", True, None)]
