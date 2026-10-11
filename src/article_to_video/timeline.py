@@ -300,7 +300,7 @@ def effective_chart(shots: list[Shot], i: int) -> tuple[dict[str, Any], list[Cue
     return {**p_data, **shot.chart.data}, carried + list(shot.chart.cues)
 
 
-def bar_indices(cue: Cue) -> list[int]:
+def bar_indices(cue: Cue | CueTiming) -> list[int]:
     """bar cue 的 data.index（一個或清單）→ 這個 cue 長哪幾根柱；沒寫是空的（＝沒有自己時刻的柱跟著它長）。"""
     q = cue.fields.get("data")
     idx = q.get("index") if isinstance(q, Mapping) else None
@@ -580,6 +580,45 @@ def _chain_layout(project: Project, members: list[int]) -> dict[str, Any]:
     return out
 
 
+def _bars_no_roll(project: Project, timeline: Timeline, members: list[int]) -> dict[int, list[int]]:
+    """一串柱狀圖裡，柱上數字不從 0 往上滾的柱（給引擎 data.barsNoRoll，只寫在那根柱長出來的分鏡）：自己有時刻的柱
+    （帶 index 的 bar cue）跟左邊那根（比它早長）比，變化的方向跟「從 0 滾到自己」的方向相反——比左邊低的正數柱
+    （「降到 3.8」）、比左邊高的負數柱（「回升到 −0.2」）。往上滾會跟旁白講的「降」打架，滾動中觀眾看到的又是一串假的數字，
+    所以長出來時就寫最後的數字。一起長的柱、跟左邊同方向的照原版往上滾。"""
+    data, _ = effective_chart(project.shots, members[0])
+    series = data.get("series") if isinstance(data.get("series"), list) else []
+    if data.get("chart", "bar") != "bar" or not series:
+        return {}
+    head = timeline.shots[members[0]]
+    moment: dict[int, int] = {}
+    owner: dict[int, int] = {}
+    main: int | None = None
+    first_data: int | None = None
+    for n in members:
+        for c in sorted(timeline.shots[n].cues, key=lambda c: c.frame):
+            if c.carried or c.kind not in DATA_KINDS:
+                continue
+            first_data = c.frame if first_data is None else first_data
+            if c.kind != "bar":
+                continue
+            idx = bar_indices(c)
+            for i in idx:
+                moment.setdefault(i, c.frame)
+                owner.setdefault(i, n)
+            if not idx and main is None:
+                main = c.frame
+    default = main if main is not None else first_data if first_data is not None else head.start_frame
+    out: dict[int, list[int]] = {}
+    for i, n in owner.items():
+        j = i - 1
+        if j < 0 or i >= len(series) or moment.get(j, default) >= moment[i]:
+            continue
+        v, w = series[i].get("value"), series[j].get("value")
+        if isinstance(v, (int, float)) and isinstance(w, (int, float)) and (v - w) * v < 0:
+            out.setdefault(n, []).append(i)
+    return {n: sorted(bars) for n, bars in out.items()}
+
+
 def _check_highlight_points(project: Project) -> None:
     """每個標註標的點要在數列裡（公有數據抓到之後才知道有幾個點，所以在這裡查）。引擎遇到不存在的點會略過，不能默默少一個標註。"""
     problems: list[str] = []
@@ -663,6 +702,7 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
             members.setdefault(chains[st.shot.id][2], []).append(n)
     layouts = {head: _chain_layout(project, ns) for head, ns in members.items() if len(ns) > 1}
     later = {n: bars for ns in members.values() if len(ns) > 1 for n, bars in _bars_later(project, ns).items()}
+    no_roll = {n: bars for ns in members.values() for n, bars in _bars_no_roll(project, timeline, ns).items()}
     _check_highlight_points(project)
     snap = project.settings.camera == "snap"
     events = {head: _snap_events(project, timeline, ns) for head, ns in members.items()} if snap else {}
@@ -680,6 +720,8 @@ def plan_clips(project: Project, timeline: Timeline, fmt: VideoFormat = FORMAT_1
             data["chainLayout"] = layouts[head]
         if n in later:
             data["barsLater"] = later[n]
+        if n in no_roll:
+            data["barsNoRoll"] = no_roll[n]
         total_push = head_push.get(head)
         if snap:
             data.pop("push", None)

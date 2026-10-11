@@ -121,6 +121,8 @@ SHOTS = [
 
 LAST = -1.0
 """時刻寫 LAST＝這個分鏡的最後一幀。"""
+AFTER_BAR = {"乙剛長": (1, 0.15), "乙長完": (1, 0.9)}
+"""時刻寫這些名字＝那根柱（index）的 bar cue 之後幾秒：乙在 0.7 秒裡長完，0.15 秒時柱上的數字（照往上數）才到八成。"""
 STILLS = {
     "SH01": [0.0, LAST],
     "SH02": [0.0, 0.7, LAST],   # 0.7 秒：還沒唸到「跌最深」
@@ -129,7 +131,7 @@ STILLS = {
     "SH05": [0.0, LAST],
     "SH06": [0.0, LAST],
     "SH07": [LAST],
-    "SH08": [LAST],
+    "SH08": ["乙剛長", "乙長完", LAST],
     "SH09": [0.0, 0.7, LAST],   # 0.7 秒：還沒唸到「回到」
     "SH10": [LAST],
     "SH11": [0.0, LAST],
@@ -161,9 +163,18 @@ def chain(request, tmp_path_factory) -> Chain:
     plan = plan_build(root, tts="fake", fmt=FORMATS[aspect])
     specs = {c.id: c.spec for c in plan.clips}
 
+    def when(spec: dict, t: float | str) -> float:
+        if t == LAST:
+            return round(spec["duration"] - 1 / FPS, 4)
+        if isinstance(t, str):
+            index, dt = AFTER_BAR[t]
+            [at] = [q["at"] for q in spec["cues"] if q["kind"] == "bar" and (q.get("data") or {}).get("index") == index]
+            return round(at + dt, 4)
+        return t
+
     def work(sid: str) -> list[tuple[tuple[str, float], np.ndarray]]:
         spec = specs[sid]
-        times = [round(spec["duration"] - 1 / FPS, 4) if t == LAST else t for t in STILLS[sid]]
+        times = [when(spec, t) for t in STILLS[sid]]
         paths = render_stills(spec, root / "stills" / sid, times).paths
         return [((sid, key), np.asarray(Image.open(p).convert("RGB")).astype(int)) for key, p in zip(STILLS[sid], paths)]
 
@@ -399,3 +410,25 @@ def test_label_dot_sits_at_the_end_of_its_leader(chain, sid, way):
     rows = range(y - r - 14, y - r - 2) if way == "上" else range(y + r + 2, y + r + 14)
     leader = int(ink(img)[rows.start: rows.stop, x - 3: x + 4].sum())
     assert leader >= 8, f"{sid} 的圓點（{x}, {y}）往{way}沒有接著引線（只有 {leader} 個黑色像素）"
+
+
+# ---------------------------------------------------------------- 計時實測 R1-5：往下降的柱，柱上的數字不往上滾
+
+
+def bar_label_width(img: np.ndarray, k: int) -> int:
+    """從左數第 k 根（藍色的）柱，柱頂上那個數字有多寬（黑色字的左右範圍）。"""
+    cols = (np.abs(img - BLUE).max(axis=-1) <= 40).any(axis=0)
+    starts = np.nonzero(np.diff(cols.astype(int)) == 1)[0] + 1
+    ends = np.nonzero(np.diff(cols.astype(int)) == -1)[0] + 1
+    x0, x1 = int(starts[k]), int(ends[k])
+    top = int(np.nonzero((np.abs(img[:, x0:x1] - BLUE).max(axis=-1) <= 40).any(axis=1))[0].min())
+    xs = np.nonzero(ink(img[top - 70: top - 4, x0 - 40: x1 + 40]).any(axis=0))[0]
+    assert len(xs), "柱頂上沒有數字"
+    return int(xs.max() - xs.min())
+
+
+def test_a_bar_lower_than_the_one_before_shows_its_number_without_counting_up(chain):
+    """「乙組降到十二點五」：乙比左邊先長的甲（30）低，柱上的數字不從 0 往上數（往上數跟「降到」打架，觀眾看到的是
+    9.8、11.6…，計時實測 R1-5），長出來時就寫 12.5。量的是剛長出來時（往上數的話才到 9.8）數字的寬度。"""
+    early, settled = bar_label_width(chain.at("SH08", "乙剛長"), 1), bar_label_width(chain.at("SH08", "乙長完"), 1)
+    assert early >= settled - 3, f"乙剛長出來時柱上的數字比長完窄（{early} vs {settled} 像素）：還在往上數"
