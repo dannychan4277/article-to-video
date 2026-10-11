@@ -174,7 +174,7 @@ WORDY = {
 
 
 def test_the_reviewers_long_explanations_stay_folded_until_the_author_opens_them(project, browser):
-    """作者預設只看到每個問題的一句話（審片員自己寫的標題）和嚴重程度；怎麼了、建議怎麼改收在「細節」裡，點開才看。
+    """作者預設只看到每個問題的一句話（審片員自己寫的標題）和嚴重程度；怎麼了、建議怎麼改收起來，點那一句才看。
     整體結論（分數、總評）照樣攤開。"""
     from conftest import shown_text
 
@@ -189,11 +189,29 @@ def test_the_reviewers_long_explanations_stay_folded_until_the_author_opens_them
         assert long not in seen, f"預設就攤開了：{long}"
 
     card = page.locator('article.card[data-shot-id="SH02"]')
-    card.get_by_text("細節").first.click()
+    card.locator("summary", has_text="標註比旁白晚一句").click()  # 點那一句就展開
     opened = card.inner_text()
     assert LONG_DETAIL in opened and LONG_FIX in opened
     assert "R1-" not in opened.split("給 Claude")[0]  # 代號還是收在給 Claude 的那一行
     page.close()
+
+
+SHOWN_LIMIT = 9999
+
+
+def test_what_the_author_sees_before_opening_anything_stays_short(project, browser):
+    """示範片（25 個分鏡、三輪獨立審片）的審片頁原本預設攤開一萬三千字，改完是三千字以內。守住不要再長回來：
+    這個兩張卡的測試專案，作者沒點任何展開時看得到的字（去掉空白）不超過 SHOWN_LIMIT。
+    """
+    from conftest import char_count, shown_text
+
+    assert record(project, WORDY).returncode == 0
+    page = browser.new_page()
+    page.goto((project / "審片頁.html").as_uri())
+    n = char_count(shown_text(page))
+    page.close()
+    assert n <= SHOWN_LIMIT, f"審片頁預設看得到 {n} 字（上限 {SHOWN_LIMIT}）"
+    print("SHOWN", n)
 
 
 def test_the_top_of_the_page_lists_what_needs_fixing_and_leaves_nice_to_haves_on_their_cards(project):

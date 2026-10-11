@@ -258,15 +258,15 @@ def test_before_the_checks_run_the_page_says_so_once_not_on_every_card(built_pro
         assert not card.slots.get("checks", "").strip(), card.slots
 
 
-def test_the_review_page_shows_the_checks_on_every_card_and_on_top(checked):
+def test_the_review_page_sums_up_the_checks_on_top_and_quiet_cards_say_nothing(checked):
     from test_review_page import read_review
 
     root, _ = checked
     page = read_review(root)
     assert page.attrs["data-stage"] == "review" and page.videos  # 成片還是最新的：照樣內嵌
-    for card in page.cards:  # 全部沒問題：每張卡一行就好，不列 qa 的術語
-        assert card.slots.get("checks", "").strip() == "自動檢查沒發現問題", card.slots
-    assert "自動檢查" in page.page_slots.get("checks", "")
+    for card in page.cards:  # 全部沒問題：頁首一行就好，不在每張卡重複（示範片 25 張卡各寫一次）
+        assert not card.slots.get("checks", "").strip(), card.slots
+    assert "自動檢查" in page.page_slots.get("checks", "") and "都沒發現問題" in page.page_slots["checks"]
     assert "qa" not in page.page_slots["checks"]
 
 
@@ -285,4 +285,4 @@ def test_problems_on_the_page_are_in_plain_words_and_the_codes_are_tucked_away(l
         assert jargon not in seen, (jargon, seen)
     assert "qa:SH04:text-in-band@" in sh04.codes and "band:SH04@" in sh04.codes  # Claude 要的代號還在
     assert "band:SH04@" in page.page_codes and "band:SH04@" not in page.page_slots["checks"]
-    assert next(c for c in page.cards if c.id == "SH01").slots["checks"].strip() == "自動檢查沒發現問題"
+    assert not next(c for c in page.cards if c.id == "SH01").slots.get("checks", "").strip()  # 沒問題的卡不寫

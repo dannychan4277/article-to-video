@@ -190,17 +190,17 @@ CHANGED_LINKS = 8
 
 
 def _item(it: CheckItem) -> str:
-    """一行檢查結果：小標籤＋主要那行（＋補充）；more 和給 Claude 的代號收在這一行預設收起來的「細節」裡
-    （作者不用看代號；Claude 讀頁面原始碼或 checks.json、check_log.json 都拿得到）。"""
-    fold = ""
+    """一行檢查結果：小標籤＋主要那行（＋補充）。有 more 或給 Claude 的代號時，主要那行本身就是可以點開的
+    <details class="more">（預設收起來）：點了才看到 more 和代號（作者不用看代號；Claude 讀頁面原始碼或
+    checks.json、check_log.json 都拿得到）。"""
+    text = f'<span class="text">{_e(it.text)}</span>'
     if it.more or it.code:
         more = "".join(f"<p>{_e(line)}</p>" for line in it.more.splitlines() if line.strip())
         code = f'<p class="codes">給 Claude：<code>{_e(it.code)}</code></p>' if it.code else ""
-        fold = f'<details class="fold more"><summary>細節</summary>{more}{code}</details>'
+        text = (f'<details class="more"><summary class="text" title="點一下看細節">{_e(it.text)}</summary>'
+                f'{more}{code}</details>')
     return (f'<li class="{_e(it.status)}"><span class="mark">{_e(it.label or STATUSES.get(it.status, it.status))}</span>'
-            f'<span class="text">{_e(it.text)}</span>'
-            + (f'<span class="detail">{_e(it.detail)}</span>' if it.detail else "")
-            + fold + "</li>")
+            + text + (f'<span class="detail">{_e(it.detail)}</span>' if it.detail else "") + "</li>")
 
 
 def _items(items: Sequence[CheckItem]) -> str:

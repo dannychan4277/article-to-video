@@ -866,8 +866,9 @@ def _plain(f: Finding) -> str:
 
 
 def checks_contributor(plan: BuildPlan) -> ReviewExtras:
-    """審片頁：每張卡的「checks」欄列這個分鏡的問題（qa、字幕帶、停太久）；都沒問題就安靜的一行。
-    頁首一區自動檢查的總結。作者看到白話；代號、檢查名稱、技術說明收在「給 Claude 的代號」裡。只讀快取。"""
+    """審片頁：每張卡的「checks」欄列這個分鏡的問題（qa、字幕帶、停太久）；沒問題的卡不寫（頁首說一次），
+    改過還沒重跑的卡寫一行。頁首一區自動檢查的總結。作者看到白話；代號、檢查名稱、技術說明收在那一行點開才看的
+    細節裡（標「給 Claude」）。只讀快取。"""
     from article_to_video.review import CardSection, CheckItem, ReviewExtras  # 避免循環匯入
 
     report = load_check_report(plan)
@@ -893,7 +894,7 @@ def checks_contributor(plan: BuildPlan) -> ReviewExtras:
         if any(c.qa is None for c in clips):
             sec = CardSection("checks", "自動檢查", [CheckItem("改過之後還沒重跑自動檢查", status="info")])
         elif not fs:
-            sec = CardSection("checks", "自動檢查", [], summary="自動檢查沒發現問題")
+            continue  # 沒問題：頁首「N 個片段都沒發現問題」說一次就好，不在每張卡重複
         else:
             sec = CardSection("checks", "自動檢查", [item(f) for f in fs])
         cards[sid] = [sec]
