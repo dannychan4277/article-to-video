@@ -40,12 +40,12 @@ qa（內嵌引擎的 engine/qa.py，原樣使用）：在 Chromium 裡把片段�
   at 後 0.1 秒；其他從 at 起看 CUE_LOOK 秒。快推那幾幀整張圖在動，不拿來判（柱、線的標註看快推之後字淡入那段）。
   不判的：沿用過來的（at 是負的，第一幀就在）、跟前一個標註一模一樣的（同一點、同樣的字：引擎本來就不重畫）、
   時段裡一個幀對都沒有的（片段結束前一刻才出現）。
-  盲點：兩數對比的強調在快推那 0.3 秒裡就換完色，分不出是鏡頭還是換色在動，有快推時那一下的鏡頭算數；
+  盲點：兩數對比的強調在快推那一下（SNAP_DUR，0.45 秒）裡就換完色，分不出是鏡頭還是換色在動，有快推時那一下的鏡頭算數；
   畫面事件之間停太久不是這裡管的，由「停太久」（看畫面事件，不看像素）提醒。
 - 跳變：快推那幾幀整張圖一起放大，qa 看起來就是跳變（一幀變了好幾 %）。spec 裡寫了每一下快推的時刻與長度，
   只把「這兩幀之間鏡頭在動」的幀對拿掉，其餘幀對用 qa 同一套門檻重算（qa.json 的 ts、pair_diffs）。
   不用上游 huashu 的「0.35 秒內單調變化就算鏡頭事件」：那會把幾幀內長完的柱子也放過。
-  盲點：真的跳變剛好落在快推那 0.3 秒裡會被放過（快推只在標註出現時發生，那一刻同時跳出別的東西的機會很小）。
+  盲點：真的跳變剛好落在快推那一下（0.45 秒）裡會被放過（快推只在標註出現時發生，那一刻同時跳出別的東西的機會很小）。
 
 快取：qa 的結果放 build/<比例>/checks/qa/<片段>/（clip.json、qa.json、qa.md、qa.log、<片段>.jpg 四幀拼圖＋運動熱圖、
 stamp.json），鍵＝QA_VERSION＋片段雜湊（spec＋引擎檔＋圖片）＋取樣設定＋qa.py 本身；片段沒變就不重跑。
@@ -90,7 +90,7 @@ from article_to_video.ffmpeg import find_ffmpeg
 from article_to_video.project import ProjectError
 from article_to_video.review_page import timecode
 from article_to_video.textio import read_json_or_none
-from article_to_video.timeline import resolve_highlight
+from article_to_video.timeline import SNAP_DUR, resolve_highlight
 
 if TYPE_CHECKING:
     from article_to_video.build import BuildPlan
@@ -565,7 +565,7 @@ def _snap_windows(spec: dict[str, Any]) -> tuple[tuple[float, float], ...] | Non
     if not isinstance(cam, dict):
         return None
     frame = 1 / float(spec.get("fps", QA_FPS))
-    dur = float(cam.get("dur", 0.3))
+    dur = float(cam.get("dur", SNAP_DUR))
     out = [(float(q["at"]) - frame - SNAP_EPS, float(q["at"]) + dur - frame + SNAP_EPS) for q in cam.get("snaps") or []]
     return tuple((a, b) for a, b in out if b > 0 and a < float(spec.get("duration", 0)))
 

@@ -321,8 +321,21 @@ def test_the_snap_zooms_toward_the_labelled_bar_which_stays_put(lab):
 
 
 def test_a_continued_shot_starts_exactly_where_the_previous_one_left_the_camera(lab):
-    a, b = lab.spec("SH01"), lab.spec("SH02")
-    assert changed(lab.frame("SH01", a["duration"] - 1 / FPS), lab.frame("SH02", 0.0)) < 30
+    for prev, sid in (("SH01", "SH02"), ("SQ1", "SQ2")):   # SQ 那串中間有一個標註沒推
+        a = lab.spec(prev)
+        assert changed(lab.frame(prev, round(a["duration"] - 1 / FPS, 4)), lab.frame(sid, 0.0)) < 30, sid
+
+
+def test_a_label_left_without_a_snap_only_swaps_the_label_while_the_camera_stays_put(lab):
+    """SQ 那串推不了每一個標註（見 spec 的測試）：第三季那個標註照樣換上去，鏡頭一點都不動；推的那兩下標題往外推開。"""
+    q1 = lab.spec("SQ1")
+    first, second, third = cue_at(q1, "highlight")
+    for at in (first, second):
+        assert title_box(lab.frame("SQ1", frame_t(at, -1))) != title_box(lab.frame("SQ1", frame_t(at, 14)))
+    before, after = lab.frame("SQ1", frame_t(third, -1)), lab.frame("SQ1", frame_t(third, 14))
+    top = slice(0, int(before.shape[0] * 0.2))   # 標題、副標
+    assert changed(before[top], after[top]) == 0
+    assert changed(before, after) > 0  # 標註換過去了
 
 
 # ---------------------------------------------------------------- 推到最近：字不出畫面、不進字幕帶與平台介面區
@@ -349,7 +362,8 @@ LINE_CHAIN = [
 def closest(request, tmp_path_factory):
     """兩串都在第一個分鏡寫 push 0.2（建置允許的最大值）：柱那串兩下快推要推到 4%、8%；60 個點的折線那串三下都標最後一點
     （換字），要推到 4%、8%、12%（每下最多 4%），引擎照版面夾住。往右邊的最後一點推近，左邊的 x 軸名字被推向畫面左緣。
-    每串渲第一個標註之前（還沒推）跟整串最後一幀；折線那串另外渲每一下快推的前一幀與開始後 12 幀（早就停穩）。"""
+    每串渲第一個標註之前（還沒推）跟整串最後一幀；兩串另外渲每一下快推的前一幀與開始後 14 幀（停穩）。
+    回傳 (畫面比例, 兩串的 (推之前, 最後一幀), 折線每一下的 (前, 後), 柱每一下的 (前, 後))。"""
     fmt = FORMATS[request.param]
     shots = json.loads(json.dumps(SHOTS[:2] + LINE_CHAIN))
     for sh in (shots[0], shots[2]):
@@ -359,7 +373,8 @@ def closest(request, tmp_path_factory):
     jobs = [(a, frame_t(label_at(specs[a]), -1)) for a in ("SH01", "SL1")]
     jobs += [(b, specs[b]["duration"] - 1 / FPS) for b in ("SH02", "SL2")]
     snap_ats = [("SL1", label_at(specs["SL1"]))] + [("SL2", at) for at in cue_at(specs["SL2"], "highlight")]
-    jobs += [(sid, frame_t(at, k)) for sid, at in snap_ats for k in (-1, 12)]
+    snap_ats += [("SH01", label_at(specs["SH01"])), ("SH02", label_at(specs["SH02"]))]
+    jobs += [(sid, frame_t(at, k)) for sid, at in snap_ats for k in (-1, 14)]
 
     def work(job):
         sid, t = job
@@ -367,16 +382,17 @@ def closest(request, tmp_path_factory):
         return np.asarray(Image.open(path).convert("RGB")).astype(int)
 
     b1, b2, a1, a2, *snaps = run_parallel(jobs, work, jobs=4)
-    return fmt, [(b1, a1), (b2, a2)], list(zip(snaps[::2], snaps[1::2]))
+    pairs = list(zip(snaps[::2], snaps[1::2]))
+    return fmt, [(b1, a1), (b2, a2)], pairs[:3], pairs[3:]
 
 
 def test_even_the_closest_snap_keeps_every_word_on_screen_and_out_of_the_subtitle_band(closest):
-    fmt, chains, _ = closest
+    fmt, chains, _, _ = closest
     for before, after in chains:
         w0, w1 = (title_box(im)[2] - title_box(im)[0] for im in (before, after))
-        # 真的推近了（不是什麼都沒做）；折線那串要 12% 也被夾在版面放得下的範圍。直式的折線最少：被標註的點靠右邊又不能動，
-        # 左邊的 x 軸名字一下就頂到邊（約 1%）
-        assert 1.005 < w1 / w0 < 1.085
+        # 要嘛看得出推近了（至少 1.5%），要嘛完全不動；折線那串要 12% 也被夾在版面放得下的範圍。直式的折線：被標註的點靠右邊
+        # 又不能動，左邊的 x 軸名字一下就頂到邊，只推得了約 1%——推一點點看起來像畫面抽一下，所以那幾下都不推
+        assert w1 == w0 or 1.013 < w1 / w0 < 1.085, w1 / w0
         dark = after.mean(axis=-1) < 160  # 白底上看得見的字、線、柱
         h, w = dark.shape
         assert not dark[h - fmt.safe_bottom:].any()  # 字幕帶裡沒東西
@@ -403,10 +419,24 @@ def line_head(img: np.ndarray, fmt: VideoFormat, color=(0xE3, 0x12, 0x0B)) -> tu
 def test_near_the_closest_the_labelled_point_still_stays_put_instead_of_sliding_to_the_edge(closest):
     """被標註的點靠右邊、推近會把左邊的 x 軸名字推出範圍時：寧可少推一點，被標註的點也不能被整張圖往右邊推過去
     （示範片 1:03.1、1:26.4 兩位評審量到線頭往右緣跑了約 25 像素：原本是先推再整張平移夾回範圍裡）。"""
-    fmt, _, snaps = closest
+    fmt, _, snaps, _ = closest
     for before, after in snaps:
         (x0, y0), (x1, y1) = line_head(before, fmt), line_head(after, fmt)
         assert abs(x1 - x0) <= 2 and abs(y1 - y0) <= 2, ((x0, y0), (x1, y1))
+
+
+def test_each_snap_near_the_closest_either_visibly_pushes_in_or_does_not_move_at_all(closest):
+    """被標註的點靠畫面邊、引擎照版面只推得了一點點時（不到 1.5%：1080p 邊角移十來個像素，像畫面抽一下），那一下就不推，
+    畫面一個像素都不動。推得動的那幾下推它自己那一份（每下最多 4%）：前一下少推或沒推，下一下也不補（不會突然推一大段）。"""
+    fmt, _, line_snaps, bar_snaps = closest
+    for before, after in line_snaps + bar_snaps:
+        t0, t1 = title_box(before), title_box(after)
+        if t1 == t0:
+            top = slice(0, int(before.shape[0] * 0.2))
+            assert changed(before[top], after[top]) == 0  # 不推就是完全不動
+            continue
+        ratio = (t1[2] - t1[0]) / (t0[2] - t0[0])
+        assert 1.013 < ratio < 1.045, (fmt.name, ratio)
 
 
 # ---------------------------------------------------------------- 自動檢查

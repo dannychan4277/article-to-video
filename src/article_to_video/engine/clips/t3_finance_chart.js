@@ -30,6 +30,9 @@ const LEADER_MIN = 40;
 // 推近 4% 時 1080p 畫面邊角一幀跳 17 像素，盲評說像「頓一下」（2026-10-12 審動效）。
 const SNAP_EASE = MO.bezier(0.32, 0.72, 0, 1);
 const CAM_SIDE = 12;                                                      // 快推推近後，字離畫面左右邊至少這麼多（×u）
+// [article-to-video 內嵌修改] 快推照版面只推得了不到這麼多（1.5%）的那一下就不推：1080p 畫面邊角才移十來個像素，
+// 看起來像畫面抽一下，不像推近（盲評：1% 的小推太碎）。建置每下至少要 2%（timeline.SNAP_MIN_STEP），夾到 1.5% 以上照推
+const CAM_MIN = 0.015;
 // [article-to-video 內嵌修改] 柱寬：一格的 BAR_FILL（原版 0.62），最寬 BAR_MAX（×u；原版 150）。見 init 的 xs
 const BAR_FILL = 0.62, BAR_MAX = 240;
 // [article-to-video 內嵌修改] 大數字卡、兩數對比的動畫時間與顏色（說明在 cardInit 上面）
@@ -407,8 +410,9 @@ function drawCompare(c, t, ctx) {
 // [article-to-video 內嵌修改] 快推的關鍵幀（init 算好）。cam = {dur, box: [左, 上, 右, 下]（佔畫面比例：內容推近後可以到的範圍，
 // 畫面扣掉平台介面區與字幕帶）, snaps: [{at, zoom（推到多大，1.04＝推近 4%）, index（標哪一點）}]}：整串到這個片段為止的每一下，
 // 之前分鏡的 at 是負的，所以接續分鏡從同一個鏡頭接著走。鏡頭＝畫面座標 = s × 原座標 + (tx, ty)：
-// 每一下以被標註的點為固定點（它在畫面上不動、其他東西往外推開）；放大量夾在「點不動、內容框推近後還在 box 裡」以內
-// （推不到要的量就少推，不平移）。內容框＝標題上的小旗到來源行（有角標時到角標底）、左右邊距之間，再加上超出邊距的
+// 每一下推它自己那一份（zoom 減前一下的 zoom，從現在的鏡頭往上加；前一下少推或沒推，這一下也不補，不會突然推一大段），
+// 以被標註的點為固定點（它在畫面上不動、其他東西往外推開）；放大量夾在「點不動、內容框推近後還在 box 裡」以內
+// （推不到要的量就少推，不平移；夾完不到 CAM_MIN 就這一下不推）。內容框＝標題上的小旗到來源行（有角標時到角標底）、左右邊距之間，再加上超出邊距的
 // x 軸名字（以點為中心，點多時最左、最右的名字會超出邊距一截）；頂端色條是裝飾、不算。box 左右再各內縮 CAM_SIDE，字不貼著畫面邊。
 function cameraKeys(ctx, c, cam) {
   const { W, H, u, safe, data: d } = ctx, { S, xs, yS, kind } = L, b = cam.box || [0, 0, 1, 1];
@@ -419,18 +423,19 @@ function cameraKeys(ctx, c, cam) {
   c.restore();
   const C = [x0, safe.top + 52 * u, x1, Math.max(H - safe.bottom - 24 * u, d.badge ? H - safe.bottom - 50 * u + 24 : 0)];
   const fit = Math.min((A[2] - A[0]) / (C[2] - C[0]), (A[3] - A[1]) / (C[3] - C[1]));
-  const keys = []; let s = 1, tx = 0, ty = 0;
+  const keys = []; let s = 1, tx = 0, ty = 0, planned = 1;
   for (const q of cam.snaps || []) {
     const i = q.index != null && S[q.index] ? q.index : S.length - 1, P = L.focus ? L.focus(i) : [xs[i], yS(kind === 'candle' ? S[i].c : S[i].value)];
+    const want = Math.max(0, (+q.zoom || 1) - planned); planned = Math.max(planned, +q.zoom || 1);
     // 被標註的點現在在畫面上的位置 p0 不動：畫面座標 = p0 + s1 × (原座標 − P)。內容框不出 box 的條件換成 s1 的上限
     // （每個方向兩邊各一個）；推不到要的量就少推（甚至不推），不平移整張圖——平移會把被標註的點往畫面邊推（方向反了）
     const p0 = [s * P[0] + tx, s * P[1] + ty];
-    let s1 = clamp(+q.zoom || 1, s, Math.max(s, fit));
+    let s1 = clamp(s + want, s, Math.max(s, fit));
     for (const k of [0, 1]) {
       if (P[k] > C[k]) s1 = Math.min(s1, (p0[k] - A[k]) / (P[k] - C[k]));
       if (C[k + 2] > P[k]) s1 = Math.min(s1, (A[k + 2] - p0[k]) / (C[k + 2] - P[k]));
     }
-    s1 = Math.max(s, s1);
+    if (s1 - s < CAM_MIN) continue;   // 只推得了一點點：這一下不推
     const nx = p0[0] - s1 * P[0], ny = p0[1] - s1 * P[1];
     keys.push({ at: +q.at || 0, dur: cam.dur || 0.3, d: [s1 - s, nx - tx, ny - ty] }); s = s1; tx = nx; ty = ny;
   }
