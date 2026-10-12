@@ -447,8 +447,9 @@ def findings(report: CheckReport, shot: str, check: str | None = None) -> list:
 
 
 def test_holding_still_and_snapping_in_pass_every_check(lab):
-    for sid in ("SH01", "SH02", "SH03"):
-        assert findings(lab.report, sid) == [], sid
+    # SQ 那串：快推 0.45 秒，柱上的標註（圓點、引線、字）差不多同時畫完，快推之後畫面就不動了——不能因此判成「標註沒畫出來」
+    for sid in ("SH01", "SH02", "SH03", "SQ1", "SQ2"):
+        assert [(f.check, f.status, f.times) for f in findings(lab.report, sid)] == [], sid
     sh03 = next(c for c in lab.report.clips if c.clip_id == "SH03").qa
     assert sh03["still_pairs_pct"] >= 60  # 慢推的判法會把這麼多靜止判成「沒在動」
 
