@@ -10,6 +10,8 @@
 - SH03：折線，長完之後唸到「回到正的」標最後一點，之後一直停著（停住的比例遠超過慢推的「沒在動」門檻）。
 - SH04：柱子在一幀裡全部跳出來（真的跳變），之後才標註。
 - SH07：分鏡設定寫了第二個畫面事件，引擎卻什麼都沒畫（快推片段的「動態」要抓到）。
+- SQ1～SQ2：柱狀圖一串、四個標註（SQ1 三個、SQ2 一個）。整串預設推 6%，每下至少 2%：只推三下，
+  每個分鏡的第一個標註先保留（換分鏡＝換重點），剩下的照時間順序，用完就停——SQ1 的第三個標註不推。
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ NARRATION = {
     "s05": "這一段連續倒掛三百天。",
     "s06": "甲組一點二，乙組零點八，甲高零點四個百分點。",
     "s07": "先看這兩根柱子長出來，停一下之後，第二次說要出現的東西其實沒畫出來。",
+    "s08": "按季來看，第一季的數字小幅上漲，到了第二季明顯回落，第三季又再一次大幅上漲一大段，第四季更是創下了新高。",
 }
 SOURCE = "來源：測試用自製數字"
 DIP = [0.80, 0.55, 0.30, 0.10, -0.15, -0.40, -0.60, -0.75, -0.85, -0.80, -0.70, -0.55,
@@ -100,6 +103,17 @@ SHOTS = [
         "data": {"title": "第二下什麼都沒畫", "unit": "示意數據，%", "source": SOURCE, "chart": "bar", "decimals": 1,
                  "series": [{"label": "甲", "value": 2.4}, {"label": "乙", "value": 1.6}]},
         "cues": [{"at": 0, "kind": "title"}, {"at": _a("s07"), "kind": "bar"}, {"at": _a("s07", "第二次"), "kind": "bar"}]}},
+    # 一串四個標註：只推得了三下（6% ÷ 每下 2%）。照時間順序會推前三個；改成先保留每個分鏡的第一個（小幅、新高），
+    # 剩下一下給時間最早的（回落）——第三季那個標註只換字、鏡頭不動
+    {"id": "SQ1", "start": _a("s08"), "chart": {
+        "data": {"title": "四季的漲跌", "unit": "示意數據，%", "source": SOURCE, "chart": "bar", "decimals": 1,
+                 "series": [{"label": f"第{q}季", "value": v} for q, v in zip("一二三四", [1.2, -0.6, 2.4, 3.1])]},
+        "cues": [{"at": 0, "kind": "title"}, {"at": _a("s08"), "kind": "bar"},
+                 {"at": _a("s08", "小幅"), "kind": "highlight", "text": "小漲", "data": {"index": 0}},
+                 {"at": _a("s08", "回落"), "kind": "highlight", "text": "回落", "data": {"index": 1}},
+                 {"at": _a("s08", "大幅"), "kind": "highlight", "text": "大漲", "data": {"index": 2}}]}},
+    {"id": "SQ2", "start": _a("s08", "第四季"), "continues": True, "chart": {
+        "data": {}, "cues": [{"at": _a("s08", "新高"), "kind": "highlight", "text": "新高", "data": {"index": 3}}]}},
 ]
 
 
@@ -135,7 +149,7 @@ def test_the_camera_snaps_exactly_when_each_label_appears_and_never_drifts(snap_
     assert "push" not in sh01 and "pushFrom" not in sh01  # 沒有等速慢推
     (label_at,) = cue_at(snap_specs["SH01"], "highlight")
     assert [s["at"] for s in sh01["camera"]["snaps"]] == [label_at]  # 大數字落定不推，標註出現才推
-    assert sh01["camera"]["dur"] == pytest.approx(0.3)
+    assert sh01["camera"]["dur"] == pytest.approx(0.45)
 
 
 def test_a_continued_shot_replays_the_chain_so_far_and_its_carried_label_does_not_snap_again(snap_specs):
@@ -156,8 +170,23 @@ def test_push_on_the_first_shot_sets_the_total_and_zero_keeps_the_camera_still(t
     shots[0]["chart"]["data"]["push"] = 0.03
     shots[2]["chart"]["data"]["push"] = 0
     specs = specs_of(write_project(tmp_path / "專案", shots=shots))
-    assert [s["zoom"] for s in specs["SH02"]["data"]["camera"]["snaps"]] == pytest.approx([1.015, 1.03])
+    # 3% 分給兩個標註每下只有 1.5%，看起來像畫面抽一下：只推一下（第一個分鏡的標註），一下推完 3%
+    assert [(s["index"], s["zoom"]) for s in specs["SH02"]["data"]["camera"]["snaps"]] == [(0, pytest.approx(1.03))]
     assert specs["SH03"]["data"]["camera"]["snaps"] == []
+
+
+def test_a_chain_with_more_labels_than_visible_pushes_snaps_fewer_times_starting_with_each_shots_first_label(snap_specs):
+    """整串 6%、四個標註：平均分每下只有 1.5%（1080p 畫面邊角才移十幾個像素，盲評說像畫面抽一下）。每下至少推 2%，
+    分不到就少推幾下：先保留每個分鏡的第一個新標註（換分鏡＝換重點），剩下的照時間順序，用完就停。"""
+    q1, q2 = snap_specs["SQ1"], snap_specs["SQ2"]
+    labels = cue_at(q1, "highlight")
+    (fourth,) = cue_at(q2, "highlight")
+    snaps = q2["data"]["camera"]["snaps"]
+    assert [s["index"] for s in snaps] == [0, 1, 3]  # 第三季（index 2）那個標註不推
+    assert [s["at"] for s in snaps] == pytest.approx([labels[0] - q1["duration"], labels[1] - q1["duration"], fourth],
+                                                     abs=1e-6)
+    assert [s["zoom"] for s in snaps] == pytest.approx([1.02, 1.04, 1.06])
+    assert [s["index"] for s in q1["data"]["camera"]["snaps"]] == [0, 1]
 
 
 def test_the_slow_push_is_still_what_a_video_gets_with_camera_set_to_slow(tmp_path):
@@ -195,13 +224,16 @@ def frame_t(at: float, k: int = 0) -> float:
 
 
 def _still_times(spec: dict, sid: str) -> list[float]:
-    """每個分鏡要渲哪幾幀（都在 30 fps 的幀上）：標註前 0.3 秒、前一幀（還沒動）、出現後 2、3、9 幀與 0.8、1.2 秒；第一幀、最後一幀。"""
+    """每個分鏡要渲哪幾幀（都在 30 fps 的幀上）：標註前 0.3 秒、前一幀（還沒動）、出現那一幀起的前五幀、9、14 幀與 0.8、1.2 秒；
+    SQ 那串每個標註的前一幀與 14 幀後（早就停穩）；第一幀、最後一幀。"""
     last = spec["duration"] - 1 / FPS
     out = [0.0, last]
     if sid in ("SH01", "SH03"):
         at = label_at(spec)
-        out += [frame_t(at, k) for k in (-9, -2, -1, 2, 3, 9, 24, 36)]
-    return sorted(t for t in out if 0 <= t <= last + 1e-9)
+        out += [frame_t(at, k) for k in (-9, -2, -1, 0, 1, 2, 3, 4, 9, 14, 24, 36)]
+    if sid in ("SQ1", "SQ2"):
+        out += [frame_t(at, k) for at in cue_at(spec, "highlight") for k in (-1, 14)]
+    return sorted(set(round(t, 4) for t in out if 0 <= t <= last + 1e-9))
 
 
 @pytest.fixture(scope="module")
@@ -216,7 +248,7 @@ def lab(tmp_path_factory) -> Lab:
         paths = render_stills(specs[sid], root / "stills" / sid, times).paths
         return [((sid, round(t, 4)), np.asarray(Image.open(p).convert("RGB")).astype(int)) for t, p in zip(times, paths)]
 
-    stills = dict(pair for out in run_parallel(["SH01", "SH02", "SH03"], work, jobs=default_jobs()) for pair in out)
+    stills = dict(pair for out in run_parallel(["SH01", "SH02", "SH03", "SQ1", "SQ2"], work, jobs=default_jobs()) for pair in out)
     return Lab(root, res, report, stills)
 
 
@@ -240,13 +272,30 @@ def test_the_chart_holds_still_snaps_in_when_the_label_appears_then_holds_still_
     unzoomed = lab.frame("SH03", frame_t(at, -1))
     w0 = title_box(unzoomed)[2] - title_box(unzoomed)[0]
     w = {k: title_box(lab.frame("SH03", frame_t(at, k)))[2] - title_box(lab.frame("SH03", frame_t(at, k)))[0]
-         for k in (2, 9, 24)}
+         for k in (2, 24)}
     assert w[24] / w0 == pytest.approx(1.04, abs=0.01)  # 推近 4%（整串只有這一個標註，一下推到每下的上限）
-    assert w[2] - w0 > 0.5 * (w[24] - w0)  # 快：出現後兩幀就推了一半以上（ease-out，先快後慢）
-    assert w[9] == w[24]  # 0.3 秒內推完
+    assert w[2] - w0 > 0.5 * (w[24] - w0)  # 快：出現後兩幀就推了一半以上（先快後慢）
+    assert title_box(lab.frame("SH03", frame_t(at, 14))) == title_box(lab.frame("SH03", frame_t(at, 24)))  # 0.45 秒內推完
 
     settled, later = lab.frame("SH03", frame_t(at, 24)), lab.frame("SH03", frame_t(at, 36))
     assert changed(settled, later) == 0  # 標註畫完之後：又停住
+
+
+def test_the_snap_gets_going_over_a_few_frames_instead_of_jumping_on_the_first_one(lab):
+    """快推不能第一幀就走掉一大半（原本 0.3 秒＋強 ease-out：第一幀就走 44%，1080p 推近 4% 時畫面邊角一幀跳 17 像素，
+    兩位盲評都說像「頓一下」）。量離被標註的點（折線最後一點，在右邊）最遠的標題左緣：標註出現那一幀就開始動、
+    但只走一兩成，之後沒有哪一幀跳超過三成多，前快後慢，0.45 秒內停穩。"""
+    spec = lab.spec("SH03")
+    at = label_at(spec)
+    x = {k: title_box(lab.frame("SH03", frame_t(at, k)))[0] for k in (-1, 0, 1, 2, 3, 4, 14, 24)}
+    total = x[-1] - x[24]
+    assert total >= 15, x  # 推近 4%，標題左緣往左移二十多像素
+    done = {k: (x[-1] - v) / total for k, v in x.items()}
+    assert 0.08 <= done[0] <= 0.3, done  # 出現那一幀（第 1 幀）
+    steps = [done[k] - done[k - 1] for k in (0, 1, 2, 3, 4)]
+    assert max(steps) <= 0.35, steps  # 沒有哪一幀跳一大段
+    assert done[4] >= 0.7 and steps[-1] < max(steps), done  # 前快後慢：五幀走完七成以上，之後越走越慢
+    assert x[14] == x[24]  # 0.45 秒內停穩
 
 
 def bar_top_center(img: np.ndarray, color=(0, 107, 162)) -> tuple[float, int]:

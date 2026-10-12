@@ -17,8 +17,9 @@
   - 設定 camera = "slow"（慢推，等速）：每秒推近 min(0.4%, 6% ÷ 整串秒數)（或整串第一個分鏡 data.push 指定的總量），
     每個片段的 pushFrom 從上一個推到的地方接著推。
   - 設定 camera = "snap"（快推，停住、標註出現時推一下）：鏡頭平常不動；整串每個「新的」標註（highlight cue，不算沿用過來的、
-    跟上一個一模一樣的）出現那一刻推近一下（SNAP_DUR 秒，引擎用強 ease-out），推完停住。整串總共推近 SNAP_TOTAL
-    （或第一個分鏡 data.push），平均分給每個標註、每下最多 SNAP_STEP。大數字（number）不推。每個片段的 data.camera.snaps
+    跟上一個一模一樣的）出現那一刻推近一下（SNAP_DUR 秒，引擎用前快後慢的曲線），推完停住。整串總共推近 SNAP_TOTAL
+    （或第一個分鏡 data.push），平均分給每個標註、每下最多 SNAP_STEP；分下來每下不到 SNAP_MIN_STEP 就少推幾下
+    （先保留每個分鏡的第一個新標註，剩下的照時間順序）。大數字（number）不推。每個片段的 data.camera.snaps
     列出整串到這個分鏡為止的每一下（時刻相對這個片段，之前分鏡的是負的），引擎從頭重算，切點不跳。
     推近的固定點是被標註的那一點（它在畫面上不動，其他東西往外推開），再夾到「內容不出 camera.box」：標題、來源行、
     刻度值不會被切掉、不會推進字幕帶或平台介面區（box 見 VideoFormat.camera_box）；引擎另外照版面算最大放大量。
@@ -68,11 +69,18 @@ NUMBER_HOLD = 1.5
 """數字（number cue：大數字卡、兩數對比的數字、圖上右上角的大數字）落定之後至少要在畫面上停這麼久（秒）。
 計時實測：大數字卡的 at 寫在數字唸完、切點緊跟在後，數字落定 0.4 秒就切走，觀眾看到的是滾到一半的數（獨立審片兩項必修）。
 跟 Vox 的框推近停住後要停 vox.MIN_HOLD 同一類規則。"""
-SNAP_DUR = 0.3
-"""快推（camera = snap）每一下推多久（秒）。標註的圓點 0.45 秒彈出、字 0.3 秒後才開始淡入：鏡頭在字出來之前就停穩，
-讀字時畫面不動。0.3 秒＝30 fps 的 9 幀；曲線（強 ease-out）在引擎 t3_finance_chart.js 的 SNAP_EASE。"""
+SNAP_DUR = 0.45
+"""快推（camera = snap）每一下推多久（秒）。0.45 秒＝30 fps 的 13.5 幀；曲線在引擎 t3_finance_chart.js 的 SNAP_EASE
+（Emil 的 drawer 曲線 cubic-bezier(0.32, 0.72, 0, 1)）：第一幀走約 19%、最快的一幀約 27%，前快後慢。
+標註的字 0.3 秒後開始淡入，那時鏡頭已經走到約 97%，剩下的一點在字淡入時慢慢停穩（看不出來在動）。
+（2026-10-12 審動效：原本 0.3 秒＋強 ease-out，第一幀就走完 44%，推近 4% 時畫面邊角一幀跳 17 像素，兩位盲評都說像「頓一下」。）"""
 SNAP_STEP = 0.04
 """快推每一下最多推近多少（4%）。"""
+SNAP_MIN_STEP = 0.02
+"""快推每一下至少推近多少（2%）：1080p 畫面邊角移約 20 像素，看得出是「推近一下」。整串的總量平均分下來不到這麼多時
+（例如 6% 分給六個標註，每下 1%，邊角才移約 10 像素，盲評說像畫面抽一下），改成少推幾下、每下至少這麼多：
+先保留每個分鏡的第一個新標註（換分鏡＝換重點），剩下的照時間順序，用完就停（_snap_picks）。
+用 2% 而不是更多：預設總量 6% 還能推三下，一串三個分鏡各推一下；3% 就只剩兩下。"""
 SNAP_TOTAL = 0.06
 """快推整串總共推近多少（6%，跟慢推整串最多推的一樣；第一個分鏡寫了 data.push 就用它）。引擎另外照版面夾一個上限
 （內容框推近後不出 camera.box，左右再留一點邊）：一般約 7～9%；直式又是點很多的折線時，x 軸兩端的名字超出邊距，只剩約 3%。
@@ -783,14 +791,28 @@ def _snap_events(project: Project, timeline: Timeline, members: list[int]) -> li
     return out
 
 
+def _snap_picks(events: list[tuple[int, float, int]], total: float | None) -> tuple[list[tuple[int, float, int]], float]:
+    """整串真的要推的那幾下（照時間順序）與每下推多少。總量平均分給每個標註；每下不到 SNAP_MIN_STEP 就少推幾下：
+    推得了 floor(總量 ÷ SNAP_MIN_STEP) 下，先給每個分鏡的第一個新標註，剩下的照時間順序，用完就停。每下最多 SNAP_STEP。"""
+    total = SNAP_TOTAL if total is None else float(total)
+    if not events or total <= 0:
+        return [], 0.0
+    count = min(len(events), math.floor(total / SNAP_MIN_STEP + 1e-9))
+    if count == 0:
+        return [], 0.0
+    firsts = [k for k, e in enumerate(events) if k == 0 or events[k - 1][0] != e[0]]
+    order = firsts + [k for k in range(len(events)) if k not in firsts]
+    keep = sorted(order[:count])
+    return [events[k] for k in keep], min(SNAP_STEP, total / count)
+
+
 def _snap_camera(st: ShotTiming, events: list[tuple[int, float, int]], upto: int, total: float | None,
                  fmt: VideoFormat) -> dict[str, Any]:
     """快推給引擎的 data.camera：整串到第 upto 個分鏡為止的每一下快推（時刻相對這個片段）。"""
-    total = SNAP_TOTAL if total is None else float(total)
-    step = min(SNAP_STEP, total / len(events)) if events else 0.0
+    picks, step = _snap_picks(events, total)
     t0 = st.start_frame / fmt.fps
     snaps = [{"at": round(t - t0, 6), "zoom": round(1 + (k + 1) * step, 6), "index": index}
-             for k, (n, t, index) in enumerate(events) if n <= upto and step > 0]
+             for k, (n, t, index) in enumerate(picks) if n <= upto]
     return {"dur": SNAP_DUR, "box": fmt.camera_box(), "snaps": snaps}
 
 

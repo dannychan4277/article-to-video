@@ -23,10 +23,12 @@ const DOT_R = 9, NEG_DOT = 2 * DOT_R + 16;
 const LEADER_MIN = 40;
 // [article-to-video 內嵌修改] 品牌色：data.colors.brand 取代「當品牌用的紅」（頂端色條、小旗、角標、標註圓點、大數字、折線預設色）；
 // 沒寫就是原本的紅。K 線的漲跌紅綠是語意色，不跟品牌走。#RRGGBB／#RGB 換成 rgba（折線下方漸層、角標底色用）。
-// [article-to-video 內嵌修改] 快推（data.camera，建置給的）：曲線＝Emil Kowalski 的強 ease-out cubic-bezier(0.23, 1, 0.32, 1)。
-// 鏡頭是在回應「標註出現」這個事件：ease-out 一開始就動（觀眾眼睛正看著圓點彈出的那一刻），後段慢慢停穩；
-// ease-in-out 前幾幀幾乎不動，看起來像鏡頭遲到了。時長由 spec 給（建置的 SNAP_DUR）。
-const SNAP_EASE = MO.bezier(0.23, 1, 0.32, 1);
+// [article-to-video 內嵌修改] 快推（data.camera，建置給的）：曲線＝Emil Kowalski 的 drawer 曲線 cubic-bezier(0.32, 0.72, 0, 1)
+// （iOS 抽屜，Ionic）。鏡頭是在回應「標註出現」這個事件：一開始就要動（觀眾眼睛正看著圓點彈出的那一刻），後段慢慢停穩；
+// ease-in-out 前幾幀幾乎不動，看起來像鏡頭遲到了。時長由 spec 給（建置的 SNAP_DUR，0.45 秒）：30 fps 第一幀走約 19%、
+// 最快的一幀約 27%，前快後慢。原本用強 ease-out cubic-bezier(0.23, 1, 0.32, 1)＋0.3 秒：第一幀就走 44%，
+// 推近 4% 時 1080p 畫面邊角一幀跳 17 像素，盲評說像「頓一下」（2026-10-12 審動效）。
+const SNAP_EASE = MO.bezier(0.32, 0.72, 0, 1);
 const CAM_SIDE = 12;                                                      // 快推推近後，字離畫面左右邊至少這麼多（×u）
 // [article-to-video 內嵌修改] 柱寬：一格的 BAR_FILL（原版 0.62），最寬 BAR_MAX（×u；原版 150）。見 init 的 xs
 const BAR_FILL = 0.62, BAR_MAX = 240;
