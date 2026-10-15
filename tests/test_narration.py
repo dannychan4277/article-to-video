@@ -249,6 +249,46 @@ def test_edge_tts_without_audio_is_a_clear_error(tmp_path):
                 rate="+5%", cache_dir=tmp_path)
 
 
+class FlakyCommunicate(StubCommunicate):
+    """前 fails 次 stream() 丟 edge-tts 的 NoAudioReceived（微軟偶爾會這樣），之後照 StubCommunicate 吐 chunk。"""
+
+    fails = 0
+
+    async def stream(self):
+        from edge_tts.exceptions import NoAudioReceived
+
+        if len(StubCommunicate.made) <= FlakyCommunicate.fails:
+            raise NoAudioReceived("No audio was received.")
+            yield  # 讓這個函式是 async generator
+        async for ch in super().stream():
+            yield ch
+
+
+def test_edge_tts_retries_when_no_audio_comes_back(tmp_path):
+    audio = _mp3_bytes(tmp_path, 1.0)
+    StubCommunicate.made = []
+    StubCommunicate.chunks = [
+        {"type": "audio", "data": audio},
+        {"type": "WordBoundary", "offset": 1_000_000, "duration": 2_000_000, "text": "嗨"},
+    ]
+    FlakyCommunicate.fails = 2
+    out = narrate({"s01": "嗨。"}, engine=EdgeTTS(communicate=FlakyCommunicate, retry_delays=(0, 0)),
+                  voice="zh-TW-HsiaoChenNeural", rate="+5%", cache_dir=tmp_path / "cache")
+    assert len(StubCommunicate.made) == 3
+    assert list(out["s01"].words) == [WordTiming(0, 1, 0.1, 0.3)]
+
+
+def test_edge_tts_gives_up_after_the_retries(tmp_path):
+    from article_to_video.narration import NarrationError
+
+    StubCommunicate.made = []
+    FlakyCommunicate.fails = 99
+    with pytest.raises(NarrationError, match="NoAudioReceived.*試了 3 次"):
+        narrate({"s01": "嗨。"}, engine=EdgeTTS(communicate=FlakyCommunicate, retry_delays=(0, 0)),
+                voice="zh-TW-HsiaoChenNeural", rate="+5%", cache_dir=tmp_path)
+    assert len(StubCommunicate.made) == 3
+
+
 # ---------------------------------------------------------------- 不改程式就能換配音層
 
 
