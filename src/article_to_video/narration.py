@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import subprocess
+import time
 import unicodedata
 import wave
 from collections.abc import Callable, Mapping, Sequence
@@ -208,28 +209,43 @@ def map_word_boundaries(text: str, boundaries: Sequence[tuple[float, float, str]
 
 
 class EdgeTTS:
-    """edge-tts（edge-tts>=7,<8）。一定要 boundary="WordBoundary"，7.x 預設只給句子級時間點。
+    """edge-tts（edge-tts>=7.3.1,<8）。一定要 boundary="WordBoundary"，7.x 預設只給句子級時間點。
 
+    微軟偶爾整段不回聲音（edge-tts 丟 NoAudioReceived），等兩三秒再要一次就好：照 retry_delays 的秒數
+    等了重試（預設最多試 3 次）。其他錯誤（連不上、服務改了）重試也沒用，直接報。
     communicate：測試時可換成假的 Communicate 類別（同樣的建構參數、有 async stream()）。
     """
 
     name = "edge"
 
-    def __init__(self, communicate: Callable[..., Any] | None = None) -> None:
+    def __init__(self, communicate: Callable[..., Any] | None = None,
+                 retry_delays: Sequence[float] = (2.0, 3.0)) -> None:
         self._communicate = communicate
+        self._retry_delays = tuple(retry_delays)
 
     def synthesize(self, text: str, *, voice: str, rate: str, out_stem: Path) -> Synthesis:
+        from edge_tts.exceptions import NoAudioReceived
+
         path = out_stem.with_suffix(".mp3")
-        try:
-            words = asyncio.run(self._stream(text, voice, rate, path))
-        except NarrationError:
-            raise
-        except Exception as e:  # 網路、服務端錯誤
+        attempts = len(self._retry_delays) + 1
+        for attempt in range(attempts):
+            try:
+                words = asyncio.run(self._stream(text, voice, rate, path))
+                break
+            except NarrationError:
+                raise
+            except NoAudioReceived as e:
+                if attempt + 1 < attempts:
+                    time.sleep(self._retry_delays[attempt])
+                    continue
+                err, tried = e, f"，試了 {attempts} 次"
+            except Exception as e:  # 網路、服務端錯誤
+                err, tried = e, ""
             path.unlink(missing_ok=True)
             raise NarrationError(
-                f"edge-tts 配音失敗（{type(e).__name__}: {e}）。edge-tts 要連網，"
+                f"edge-tts 配音失敗（{type(err).__name__}: {err}{tried}）。edge-tts 要連網，"
                 "請確認網路正常再試一次；一直失敗的話可能是微軟的服務改了，回報給 Danny。"
-            ) from e
+            ) from err
         if not words:
             path.unlink(missing_ok=True)
             raise NarrationError("edge-tts 有回音檔，但沒有詞級時間點，錨點沒辦法對。")

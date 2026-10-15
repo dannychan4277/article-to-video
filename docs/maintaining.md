@@ -75,6 +75,20 @@ uv run --project <外掛> python -m article_to_video build <專案> --tts google
 - 快取：鍵是「配音層｜模型｜聲音｜語速｜文字」。換配音層整支重配一次；換回原本的直接用舊快取，不再花錢。
 - 舊的片：設定快照是付費配音出現之前做的，會照舊用 edge；要換就 `settings set --project <專案> --tts …`。
 
+## edge 語音突然配不出來（微軟擋了舊版 edge-tts）
+
+edge-tts 是非官方介面，微軟換掉驗證（`Sec-MS-GEC` token）後，舊版 edge-tts 一句都唸不出來：
+`check-env` 的「edge-tts 連線」連不上，錯誤是 `WSServerHandshakeError: 403, message='Invalid response status'`。
+修法是升 edge-tts（2026-10-15：7.2.8 被擋，升 7.3.1 就好）：
+
+1. `uvx --from edge-tts edge-tts --text 你好 --voice zh-TW-HsiaoChenNeural --write-media /tmp/x.mp3`：最新版能唸才往下做
+   （最新版也 403 就是要等 edge-tts 出新版）。
+2. `uv lock --upgrade-package edge-tts`，`pyproject.toml` 的下限跟著拉到新版（舊版已經沒用，別讓它被解析回去）。
+3. `uv run pytest`、`check-env` 看「edge-tts 連線」、真的配一段確認有詞級時間點，推到 `main`，請作者 **Update now**
+   （外掛用 `uv run --project` 執行，會照新的 `uv.lock` 自己換版本）。
+
+微軟偶爾整段不回聲音（`NoAudioReceived`），那是另一回事：`EdgeTTS` 會等兩三秒自己重試，最多 3 次。
+
 ## 節奏：語速、段間留白、頭尾空白（2026-10 調快）
 
 - 新片預設語速 +15%（之前 +5%）：edge 的 `rate`、ElevenLabs 的 `speed`（1.15，API 範圍 0.7–1.2）、Google 的 `speakingRate`（1.15）
